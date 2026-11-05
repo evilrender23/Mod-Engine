@@ -122,3 +122,19 @@ modengine functions
 ```bash
 cargo test     # lenguaje, motor (juega el ejemplo sin ventana) y editor (con ratón simulado)
 ```
+
+Disclaimer: Esto nace de un proyecto personal, para mi uso personal. Puedes usarlo pero no esperes que te de soporte.
+
+## Licencia
+
+Mod Engine se distribuye bajo la [licencia MIT](LICENSE). Puedes usarlo, modificarlo y
+redistribuirlo libremente (también en proyectos comerciales), con una única condición:
+**debes atribuirme**. Cualquier copia o parte sustancial del código debe conservar el aviso de
+copyright y el texto de la licencia:
+
+```text
+Copyright (c) 2026 evilrender23
+```
+
+Si usas Mod Engine o parte de su código en tu proyecto, incluye un crédito visible, por ejemplo:
+"Basado en Mod Engine de evilrender23 (https://github.com/evilrender23)".
