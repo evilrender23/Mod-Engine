@@ -437,8 +437,15 @@ iniciado sesión en él una vez desde un terminal; si falta, el panel dice cómo
   *cursiva*, `código`, listas, citas, enlaces que se abren en el navegador y bloques de código
   (los de ModScript, `ms`, coloreados) con **⧉ Copiar**. Al pasar el ratón por un mensaje o una
   respuesta aparece **⧉** para copiarlo.
+- **Cancelar un trabajo:** mientras el agente trabaja, junto a *Poner en cola* aparece **■ Cancelar**
+  (también **Esc** en el cuadro de mensaje, **■** arriba o `/cancelar`). Para el programa y los
+  comandos que haya lanzado: le pide que termine y, si a los 3 s sigue, lo cierra; en Windows cierra
+  todo el árbol de procesos con `taskkill /T`. Lo que llegó a cambiar sale en *Archivos cambiados* y
+  se puede deshacer con **Revertir** o `/deshacer`. Los mensajes en cola no se envían solos tras
+  cancelar: quedan en pausa hasta **▶ Seguir**. La conversación se puede continuar con el mismo
+  agente.
 - **Barra de arriba:** **🕘** abre el historial, **＋** empieza otra conversación (la actual queda
-  en el historial), **■** detiene el agente (y los comandos que haya lanzado) y **⋯** tiene
+  en el historial), **■** cancela el trabajo del agente y **⋯** tiene
   *Compactar conversación*, *Deshacer cambios del último turno*, *Exportar a Markdown*, *Copiar
   como Markdown*, *Copiar la orden para seguir en un terminal* (`claude --resume …`,
   `agy --conversation …`, `codex resume …`) y *Autocompactar*. Debajo, el estado y el medidor de
@@ -524,6 +531,7 @@ envía un mensaje que empieza por `/`.
 | `/agente claude\|codex\|agy` | Cambia de agente: sigue en una sesión nueva que recibe lo hablado |
 | `/reintentar` | Reenvía el último mensaje desde antes de su respuesta |
 | `/editar` | Pone el último mensaje en el cuadro para cambiarlo y reenviarlo |
+| `/cancelar` | Cancela el trabajo en curso del agente (también Esc o **■ Cancelar**) |
 | `/deshacer` | Devuelve los ficheros que cambió el último turno a como estaban |
 | `/exportar` | Guarda la conversación como Markdown en Descargas y la copia |
 | `/renombrar <título>` | Cambia el título |

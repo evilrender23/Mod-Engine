@@ -194,9 +194,19 @@ fn signal_group(child: &Child, sig: i32) {
 const SIGTERM: i32 = 15;
 const SIGKILL: i32 = 9;
 
+/// Windows has no process groups: `taskkill /T` ends the CLI and every command it started.
+#[cfg(windows)]
+fn kill_tree(child: &mut Child) {
+    use std::os::windows::process::CommandExt;
+    let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = child.kill();
+}
+
 fn hard_kill(child: &mut Child) {
     #[cfg(unix)]
     signal_group(child, SIGKILL);
+    #[cfg(windows)]
+    kill_tree(child);
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -1282,9 +1292,11 @@ impl AgentPanel {
         r.stop_at = Some(Instant::now());
         #[cfg(unix)]
         signal_group(&r.child, SIGTERM);
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        kill_tree(&mut r.child);
+        #[cfg(not(any(unix, windows)))]
         let _ = r.child.kill();
-        self.status = "Deteniendo…".into();
+        self.status = "Cancelando…".into();
     }
 
     /// Reads what the agent printed since the last frame. Call every frame.
@@ -1388,8 +1400,13 @@ impl AgentPanel {
         let name = r.kind.name();
         let mut ok = false;
         if r.stop_at.is_some() {
-            self.notice("Detenido.", Tone::Muted);
-            self.status = "Detenido".into();
+            self.notice("Cancelado.", Tone::Muted);
+            self.status = "Cancelado".into();
+            // Nothing queued goes out on its own after a cancel; ▶ Seguir sends it.
+            if !self.queue.is_empty() {
+                self.queue_paused = true;
+            }
+            self.compact_requested = false;
         } else if !r.got_result {
             // Bad arguments, a crash or a missing login: the reason is on stderr.
             let lines: Vec<&str> = r.stderr.trim().lines().collect();
@@ -1706,6 +1723,13 @@ impl AgentPanel {
             Slash::Undo => {
                 self.undo_last_turn();
             }
+            Slash::Cancel => {
+                if self.running() {
+                    self.stop();
+                } else {
+                    self.notice("El agente no está trabajando.", Tone::Muted);
+                }
+            }
             Slash::Export => {
                 if self.entries.is_empty() {
                     self.notice("La conversación está vacía.", Tone::Muted);
@@ -1795,7 +1819,7 @@ impl AgentPanel {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("⋯", |ui| self.more_menu(ui)).response.on_hover_text("Compactar, exportar, deshacer, autocompactar…");
-                if ui.add_enabled(running, egui::Button::new("■")).on_hover_text("Detener el agente").clicked() {
+                if ui.add_enabled(running, egui::Button::new("■")).on_hover_text("Cancelar el trabajo del agente (Esc) — /cancelar").clicked() {
                     self.stop();
                 }
                 if ui.add_enabled(self.program.is_some(), egui::Button::new("＋")).on_hover_text("Nueva conversación (la actual queda en el historial) — /nueva").clicked() {
@@ -1977,8 +2001,12 @@ impl AgentPanel {
                 ui.memory_mut(|m| m.request_focus(input_id));
             }
             let enter = picked.is_none() && picked_cmd.is_none() && focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+            // Esc in the message box cancels the agent (the suggestion popups took theirs above).
+            if running && focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.stop();
+            }
             let hint = if running {
-                "El agente está trabajando: lo que escribas se envía cuando termine".to_string()
+                "El agente está trabajando: lo que escribas se envía cuando termine (Esc cancela)".to_string()
             } else {
                 format!("Mensaje para {} (Mayús+Intro: nueva línea; @ adjunta; / comandos)", self.kind.name())
             };
@@ -1987,7 +2015,9 @@ impl AgentPanel {
                 ui.menu_button("📎 Adjuntar", |ui| self.attach_menu(ui, src))
                     .response
                     .on_hover_text("Adjunta contexto al siguiente mensaje: assets, ficheros del proyecto o de cualquier parte del disco, URLs, texto, la selección de la room o la Salida. También puedes soltar aquí assets y ficheros, pegar rutas o escribir @");
-                ui.add_enabled_ui(!running, |ui| {
+                // Model and permissions can't change mid-turn: hidden then, which leaves room for ■ Cancelar.
+                if !running {
+                ui.scope(|ui| {
                     self.model_combo(ui);
                     let mut perm = self.permission;
                     egui::ComboBox::from_id_salt("agent_perm").selected_text(perm.label()).show_ui(ui, |ui| {
@@ -1999,6 +2029,7 @@ impl AgentPanel {
                         self.set_permission(perm);
                     }
                 });
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let has_text = !self.input.trim().is_empty() || !self.attachments.is_empty();
                     let is_cmd = slash::parse(&self.input).is_some() && self.attachments.is_empty();
@@ -2012,6 +2043,14 @@ impl AgentPanel {
                     };
                     let tip = if running { "Intro: se envía cuando el agente termine" } else { "Intro: guarda todo y envía el mensaje" };
                     let b = ui.add_enabled(can || is_cmd, crate::theme::primary_button(ui, label)).on_hover_text(tip);
+                    if running {
+                        let cancelling = self.run.as_ref().is_some_and(|r| r.stop_at.is_some());
+                        let text = if cancelling { "Cancelando…" } else { "■ Cancelar" };
+                        let c = egui::Button::new(RichText::new(text).color(pal.error)).stroke(egui::Stroke::new(1.0, pal.error));
+                        if ui.add_enabled(!cancelling, c).on_hover_text("Para al agente y a los comandos que lanzó (Esc). Lo que ya cambió se puede revertir; la cola queda en pausa").clicked() {
+                            self.stop();
+                        }
+                    }
                     if b.clicked() || (enter && (can || is_cmd)) {
                         if let Some(cmd) = slash::parse(&self.input).filter(|_| self.attachments.is_empty()) {
                             send = self.command(cmd, Some(ui.ctx())).or(send.take());
@@ -2263,7 +2302,7 @@ impl AgentPanel {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("En cola ({})", self.queue.len())).small().strong());
             if self.queue_paused {
-                ui.label(RichText::new("en pausa: el último turno no terminó bien").small().color(pal.error));
+                ui.label(RichText::new("en pausa: el último turno se canceló o no terminó bien").small().color(pal.error));
                 if ui.small_button("▶ Seguir").clicked() {
                     self.queue_paused = false;
                 }
@@ -3182,7 +3221,38 @@ echo '{{"type":"result","subtype":"success","session_id":"S-fake","result":"Hay 
         p.stop();
         wait(&mut p);
         assert!(start.elapsed() < Duration::from_secs(10));
-        assert_eq!(p.entries.last(), Some(&Entry::Notice("Detenido.".into(), Tone::Muted)));
+        assert_eq!(p.entries.last(), Some(&Entry::Notice("Cancelado.".into(), Tone::Muted)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cancel_pauses_the_queue_and_keeps_changes_revertible() {
+        // The fake agent writes a file in the project, then hangs until it is cancelled.
+        let tmp = std::env::temp_dir().join(format!("modeditor_agent_cancel_{}", std::process::id()));
+        let body = format!("echo '{{\"type\":\"system\",\"session_id\":\"S3\"}}'\necho hecho > '{}/project/nuevo.ms'\nsleep 30", tmp.display());
+        let (dir, exe) = fake_cli("cancel", &body);
+        let project = empty_project(&dir);
+        let mut p = panel(&exe);
+        p.send("hola", &project, "x");
+        p.enqueue("después");
+        let ctx = egui::Context::default();
+        let start = Instant::now();
+        while !project.join("nuevo.ms").exists() && start.elapsed() < Duration::from_secs(5) {
+            p.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(p.command(Slash::Cancel, None), None);
+        wait(&mut p);
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(p.entries.contains(&Entry::Notice("Cancelado.".into(), Tone::Muted)));
+        // The queued message waits for ▶ Seguir instead of going out on its own.
+        assert!(p.queue_paused && p.next_to_send().is_none() && p.queue.len() == 1);
+        // What the agent did before the cancel can be undone.
+        assert_eq!(p.undo_last_turn(), 1);
+        assert!(!project.join("nuevo.ms").exists());
+        // Cancelling with nothing running just says so.
+        p.command(Slash::Cancel, None);
+        assert_eq!(p.entries.last(), Some(&Entry::Notice("El agente no está trabajando.".into(), Tone::Muted)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

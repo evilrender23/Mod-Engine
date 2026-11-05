@@ -20,6 +20,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec { name: "modelo", aliases: &["model"], arg: "<modelo|defecto>", help: "Cambia el modelo (opus, sonnet, haiku…; «defecto», el del programa)" },
     Spec { name: "permisos", aliases: &["permissions", "modo"], arg: "<plan|editar|auto>", help: "Qué puede hacer el agente: solo planificar, editar archivos o también ejecutar comandos" },
     Spec { name: "agente", aliases: &["agent"], arg: "<claude|codex|agy>", help: "Cambia de agente (empieza una conversación nueva)" },
+    Spec { name: "cancelar", aliases: &["cancel", "detener", "stop", "parar"], arg: "", help: "Cancela el trabajo en curso del agente (Esc); la cola queda en pausa" },
     Spec { name: "reintentar", aliases: &["retry"], arg: "", help: "Vuelve a enviar el último mensaje desde antes de su respuesta" },
     Spec { name: "editar", aliases: &["edit"], arg: "", help: "Edita el último mensaje y lo reenvía (la conversación sigue desde antes de él)" },
     Spec { name: "deshacer", aliases: &["undo", "rewind"], arg: "", help: "Devuelve los archivos que cambió el último turno a como estaban antes" },
@@ -40,6 +41,7 @@ pub enum Command {
     Model(Option<String>),
     Permission(Option<Permission>),
     Agent(Option<Kind>),
+    Cancel,
     Retry,
     Edit,
     Undo,
@@ -74,6 +76,7 @@ pub fn parse(text: &str) -> Option<Command> {
         "modelo" => Command::Model(arg_opt().map(|m| if matches!(m.to_lowercase().as_str(), "defecto" | "default" | "-") { String::new() } else { m })),
         "permisos" => Command::Permission(arg_opt().and_then(|a| permission(&a))),
         "agente" => Command::Agent(arg_opt().and_then(|a| agent(&a))),
+        "cancelar" => Command::Cancel,
         "reintentar" => Command::Retry,
         "editar" => Command::Edit,
         "deshacer" => Command::Undo,
@@ -159,6 +162,8 @@ mod tests {
         assert_eq!(parse("/autocompactar 85%"), Some(Command::AutoCompact(Some(85))));
         assert_eq!(parse("/autocompactar no"), Some(Command::AutoCompact(Some(0))));
         assert_eq!(parse("/undo"), Some(Command::Undo));
+        assert_eq!(parse("/cancelar"), Some(Command::Cancel));
+        assert_eq!(parse("/stop"), Some(Command::Cancel));
         assert_eq!(parse("/frobnicar"), Some(Command::Unknown("frobnicar".into())));
         assert!(help().contains("/compactar") && help().contains("/deshacer"));
     }
@@ -167,6 +172,7 @@ mod tests {
     fn suggests_while_typing_the_name() {
         let names = |s: &str| suggestions(s).iter().map(|c| c.name).collect::<Vec<_>>();
         assert_eq!(names("/co"), ["compactar", "coste"]);
+        assert_eq!(names("/ca"), ["cancelar"]);
         assert_eq!(names("/re"), ["historial", "reintentar", "deshacer", "renombrar"]);
         assert!(names("/modelo ").is_empty());
         assert!(names("hola").is_empty());
