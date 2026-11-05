@@ -30,6 +30,11 @@ pub type Log<'a> = &'a dyn Fn(&str);
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ZIG_VERSION: &str = "0.15.2";
+/// Mesa for Windows (software OpenGL), from https://github.com/pal1000/mesa-dist-win.
+const MESA_VERSION: &str = "26.2.6";
+/// The two files a game needs for software OpenGL: Windows loads `opengl32.dll` from the game's
+/// folder before the system one, and it loads llvmpipe from `libgallium_wgl.dll`.
+pub const MESA_DLLS: [&str; 2] = ["opengl32.dll", "libgallium_wgl.dll"];
 const CMDLINE_TOOLS: &str = "16111833";
 const NDK_VERSION: &str = "27.3.13750724";
 const SDK_PACKAGES: &[&str] = &["platforms;android-35", "build-tools;35.0.0", "platform-tools"];
@@ -87,6 +92,8 @@ pub struct ExportArgs {
     pub key_alias: Option<String>,
     /// Android: `adb install` the APK on the connected device.
     pub install: bool,
+    /// Windows: add Mesa's software OpenGL (overrides `[export] windows_software_gl`).
+    pub software_gl: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -100,6 +107,7 @@ pub const USAGE: &str = "\
 usage:
   modengine export <project> --target linux|windows|android [--out DIR] [--release]
                    [--arch arm64-v8a,armeabi-v7a,x86_64] [--keystore F --key-alias A] [--install]
+                   [--software-gl]   Windows: ship Mesa's software OpenGL (VMs without 3D)
   modengine export --setup linux|windows|android     install/check the toolchain (user space)
   modengine export --doctor [--json]                 which targets are ready
 
@@ -133,6 +141,7 @@ pub fn parse_args(raw: &[String]) -> Result<ExportCmd, String> {
             }
             "--out" | "-o" => a.out = Some(PathBuf::from(value()?)),
             "--release" => a.release = true,
+            "--software-gl" => a.software_gl = true,
             "--arch" => {
                 for x in value()?.split(',').filter(|s| !s.trim().is_empty()) {
                     let n = normalize_abi(x).ok_or_else(|| format!("unknown architecture '{x}' (arm64-v8a, armeabi-v7a, x86_64, x86)"))?;
@@ -551,6 +560,28 @@ fn download(url: &str, to: &Path, log: Log) -> Result<(), String> {
     Ok(())
 }
 
+/// Mesa's x64 software OpenGL DLLs, downloaded once into the toolchains folder.
+fn mesa_dlls(log: Log) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let dir = tools::toolchains_dir().join(format!("mesa-{MESA_VERSION}"));
+    if !MESA_DLLS.iter().all(|f| dir.join(f).is_file()) {
+        let archive = tools::toolchains_dir().join("downloads").join(format!("mesa-{MESA_VERSION}.7z"));
+        download(&format!("https://github.com/pal1000/mesa-dist-win/releases/download/{MESA_VERSION}/mesa3d-{MESA_VERSION}-release-mingw.7z"), &archive, log)?;
+        let tmp = dir.with_extension("tmp");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        // bsdtar (the `tar` of Windows 10+, macOS and most Linux) reads 7z; GNU tar does not.
+        let tar = tools::which("bsdtar").or_else(|| tools::which("tar")).ok_or("hace falta bsdtar o tar para abrir el paquete de Mesa")?;
+        let names: Vec<String> = MESA_DLLS.iter().map(|f| format!("x64/{f}")).collect();
+        run_logged(Command::new(tar).arg("-xf").arg(&archive).arg("-C").arg(&tmp).args(&names), log)
+            .map_err(|e| format!("no se pudo abrir {} ({e}); instala bsdtar (libarchive)", archive.display()))?;
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::rename(tmp.join("x64"), &dir).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_file(&archive);
+    }
+    MESA_DLLS.iter().map(|f| std::fs::read(dir.join(f)).map(|b| (f.to_string(), b)).map_err(|e| format!("{}: {e}", dir.join(f).display()))).collect()
+}
+
 fn unzip(zip: &Path, to: &Path, log: Log) -> Result<(), String> {
     std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
     match tools::which("unzip") {
@@ -830,6 +861,18 @@ pub fn export(a: &ExportArgs, log: Log) -> Result<PathBuf, String> {
             let icon_png = png_bytes(&icon);
             let mut entries: Vec<(String, Vec<u8>, u32)> = vec![(format!("{name}/{exe_name}"), game, 0o755), (format!("{name}/{readme_name}"), readme.into_bytes(), 0o644)];
             if windows {
+                // Software OpenGL next to the .exe, or none: a stale copy from an earlier export
+                // would silently keep the game on the slow path.
+                for f in MESA_DLLS {
+                    let _ = std::fs::remove_file(folder.join(f));
+                }
+                if g.export.windows_software_gl || a.software_gl {
+                    log("OpenGL por software (Mesa llvmpipe) junto al ejecutable");
+                    for (f, bytes) in mesa_dlls(log)? {
+                        write(&folder.join(&f), &bytes)?;
+                        entries.push((format!("{name}/{f}"), bytes, 0o644));
+                    }
+                }
                 let zip: Vec<archive::ZipEntry> = entries.iter().map(|(n, d, m)| archive::ZipEntry::new(n, d, true, *m)).collect();
                 let zp = out.join(format!("{name}-windows-x86_64.zip"));
                 write(&zp, &archive::write_zip(&zip))?;
@@ -892,6 +935,8 @@ mod tests {
         let ExportCmd::Export(a) = parse_args(&s(&["p", "-t", "apk", "--release", "--arch", "arm64,armv7,arm64-v8a", "--install"])).unwrap() else { panic!() };
         assert_eq!((a.target, a.release, a.install), (Some(Target::Android), true, true));
         assert_eq!(a.arches, vec!["arm64-v8a", "armeabi-v7a"]);
+        let ExportCmd::Export(a) = parse_args(&s(&["p", "-t", "windows", "--software-gl"])).unwrap() else { panic!() };
+        assert!(a.software_gl);
         assert_eq!(parse_args(&s(&["--setup", "android"])).unwrap(), ExportCmd::Setup(Target::Android));
         assert_eq!(parse_args(&s(&["--doctor", "--json"])).unwrap(), ExportCmd::Doctor { json: true });
         assert!(parse_args(&s(&["p"])).unwrap_err().contains("--target"));

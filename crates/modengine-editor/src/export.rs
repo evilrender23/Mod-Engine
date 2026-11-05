@@ -84,6 +84,7 @@ pub struct Form {
     pub exe_name: String,
     pub out_dir: String,
     pub windows_console: bool,
+    pub windows_software_gl: bool,
     pub package: String,
     pub version_code: u32,
     pub orientation: String,
@@ -103,6 +104,7 @@ impl Form {
             exe_name: g.export.exe_name.clone().unwrap_or_default(),
             out_dir: g.export.out_dir.clone().unwrap_or_default(),
             windows_console: g.export.windows_console,
+            windows_software_gl: g.export.windows_software_gl,
             package: g.android.package.clone().unwrap_or_default(),
             version_code: g.android.version_code,
             orientation: g.android.orientation.clone(),
@@ -120,6 +122,7 @@ impl Form {
         g.export.exe_name = opt(&self.exe_name);
         g.export.out_dir = opt(&self.out_dir);
         g.export.windows_console = self.windows_console;
+        g.export.windows_software_gl = self.windows_software_gl;
         g.export.target = Some(target.id().to_string());
         g.android.package = opt(&self.package);
         g.android.version_code = self.version_code.max(1);
@@ -560,6 +563,11 @@ impl ExportDialog {
                 Target::Windows => {
                     ui.add_space(4.0);
                     ui.checkbox(&mut f.windows_console, "Mostrar una consola junto al juego (para depurar)");
+                    ui.checkbox(&mut f.windows_software_gl, "Incluir OpenGL por software (Mesa, unos 80 MB)").on_hover_text(
+                        "Para equipos sin OpenGL 3: máquinas virtuales sin aceleración 3D o sin drivers de gráfica. \
+                         Con estos ficheros el juego dibuja siempre con el procesador, también en equipos con gráfica, \
+                         así que va más lento: déjalo apagado si tus jugadores tienen drivers normales. La primera vez descarga Mesa (56 MB).",
+                    );
                 }
                 Target::Linux => {}
                 Target::Android => {

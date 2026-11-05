@@ -90,6 +90,24 @@ El `.exe` es un único fichero de ~10 MB (~4 MB en el .zip), sin consola (subsis
 aparte: solo usa las de Windows 10/11 (o Windows 7/8 con el runtime UCRT). Con
 `[export] windows_console = true` abre también una consola, útil para ver `show_debug_message`.
 
+#### Equipos sin OpenGL 3 (máquinas virtuales)
+
+Mod Engine dibuja con OpenGL 3. Un Windows sin drivers de gráfica, o una máquina virtual sin
+aceleración 3D (QEMU/VirtualBox/Hyper-V con el adaptador básico de Microsoft), solo trae OpenGL 1.1:
+el juego no puede abrir su ventana y muestra «No se pudo iniciar el juego: este equipo no tiene
+OpenGL 3» (también en `%APPDATA%\<juego>\error.log`).
+
+Para esos equipos, marca **Incluir OpenGL por software** en el diálogo de exportar
+(`[export] windows_software_gl = true`, o `modengine export … --target windows --software-gl`).
+Junto al `.exe` van `opengl32.dll` y `libgallium_wgl.dll` de
+[Mesa para Windows](https://github.com/pal1000/mesa-dist-win) (llvmpipe): el juego dibuja con el
+procesador y arranca en cualquier Windows x64. La primera vez descarga Mesa (53 MB) y lo guarda en
+`modengine-toolchains/mesa-<versión>`; el `.zip` del juego pasa de ~4 MB a ~32 MB.
+
+Con esos ficheros Windows usa siempre Mesa, también en equipos con gráfica, que van más lentos: no
+lo actives si tus jugadores tienen drivers normales. Para quitarlo en un equipo concreto basta con
+borrar las dos DLL.
+
 ### Android
 
 `--setup android` instala, en `~/Android/Sdk` (o en `$ANDROID_HOME` si ya tienes un SDK):

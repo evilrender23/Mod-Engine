@@ -72,6 +72,9 @@ pub fn write_export_sections(g: &GameToml) -> String {
         if e.windows_console {
             s += "windows_console = true\n";
         }
+        if e.windows_software_gl {
+            s += "windows_software_gl = true\n";
+        }
     }
     let (a, da) = (&g.android, AndroidSection::default());
     if *a != da {

@@ -62,6 +62,9 @@ pub struct ExportSection {
     pub target: Option<String>,
     /// Windows: keep a console window (useful to see `show_debug_message` output).
     pub windows_console: bool,
+    /// Windows: ship Mesa's software OpenGL next to the .exe, so the game also starts on
+    /// machines without OpenGL 3 (VMs without 3D, missing GPU drivers). ~80 MB more.
+    pub windows_software_gl: bool,
 }
 
 /// `[android]`: APK options.
