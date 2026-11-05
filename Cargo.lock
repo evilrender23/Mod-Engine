@@ -2035,6 +2035,7 @@ dependencies = [
 name = "modengine-editor"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "crc32fast",
  "eframe",
  "egui_kittest",

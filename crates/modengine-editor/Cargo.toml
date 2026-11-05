@@ -27,6 +27,9 @@ crc32fast = "1"
 # portal through libdbus loaded at runtime (no build-time system libraries, falls back to
 # zenity); on Windows/macOS the OS dialogs. The built-in browser is always available.
 rfd = "0.17"
+# already built by egui-winit (same features): "📋 Pegar imagen" reads screenshots from the
+# clipboard on demand, also when Ctrl+V arrives as text (e.g. a file manager copying a path)
+arboard = { version = "3.6", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe"] }

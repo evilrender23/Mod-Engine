@@ -397,6 +397,13 @@ pub struct AgentPanel {
     browser: crate::agent_browser::Browser,
     /// "Texto…" attachment being written: (title, text).
     text_modal: Option<(String, String)>,
+    /// Screenshots on their way in: clipboard reads (a thread) and window captures (egui).
+    image_rx: Receiver<Result<(egui::ColorImage, &'static str), String>>,
+    image_tx: Sender<Result<(egui::ColorImage, &'static str), String>>,
+    /// Thumbnails of image attachments, by path.
+    thumbs: HashMap<PathBuf, Option<egui::TextureHandle>>,
+    /// Where pasted images go (tests use a temp folder).
+    paste_dir: Option<PathBuf>,
     slash_sel: usize,
     /// Summaries the user unfolded (entry index).
     unfolded: BTreeSet<usize>,
@@ -418,6 +425,7 @@ impl AgentPanel {
         let kind = Kind::from_id(&cfg.agent).unwrap_or(Kind::Claude);
         let permission = Permission::from_key(&cfg.permission).unwrap_or(Permission::Auto);
         let history_root = config.as_deref().and_then(Path::parent).map(|d| d.join("agent/history"));
+        let (image_tx, image_rx) = mpsc::channel();
         let mut p = AgentPanel {
             kind,
             permission,
@@ -476,6 +484,10 @@ impl AgentPanel {
             diff: None,
             browser: Default::default(),
             text_modal: None,
+            image_rx,
+            image_tx,
+            thumbs: HashMap::new(),
+            paste_dir: None,
             slash_sel: 0,
             unfolded: BTreeSet::new(),
             demo: false,
@@ -875,6 +887,55 @@ impl AgentPanel {
         self.remember_recent(&a);
         self.attachments.push(a);
         self.attach_error = None;
+    }
+
+    /// A pasted or captured image: saved as PNG outside the project and attached.
+    pub fn attach_image(&mut self, img: &egui::ColorImage, prefix: &str) -> bool {
+        let dir = self.paste_dir.clone().unwrap_or_else(crate::agent_paste::pasted_dir);
+        match crate::agent_paste::save(img, &dir, prefix) {
+            Ok(path) => {
+                let mut a = Attachment::file(&path);
+                a.label = format!("{} {}×{}", if prefix == "editor" { "Captura del editor" } else { "Captura" }, img.size[0], img.size[1]);
+                a.about = if prefix == "editor" { "a screenshot of the Mod Engine editor window as the user sees it now".into() } else { "a screenshot the user pasted".into() };
+                self.attach(a);
+                true
+            }
+            Err(e) => {
+                self.attach_error = Some(format!("No se pudo guardar la imagen: {e}"));
+                false
+            }
+        }
+    }
+
+    /// "📋 Pegar imagen": reads the clipboard on a thread (it can block on X11/Wayland).
+    pub fn paste_clipboard_image(&mut self) {
+        let tx = self.image_tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::agent_paste::clipboard_image().map(|i| (i, "captura")));
+        });
+    }
+
+    /// "📸 Captura del editor": egui renders the window next frame and hands it back.
+    pub fn capture_editor(&mut self, ctx: &egui::Context) {
+        let tx = self.image_tx.clone();
+        let repaint = ctx.clone();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
+            let _ = tx.send(Ok(((*img).clone(), "editor")));
+            repaint.request_repaint();
+        })));
+        ctx.request_repaint();
+    }
+
+    /// Images that arrived from the clipboard thread or a window capture.
+    fn receive_images(&mut self) {
+        while let Ok(r) = self.image_rx.try_recv() {
+            match r {
+                Ok((img, prefix)) => {
+                    self.attach_image(&img, prefix);
+                }
+                Err(e) => self.attach_error = Some(e),
+            }
+        }
     }
 
     /// Things from outside the project are offered again under "Recientes".
@@ -1797,6 +1858,7 @@ impl AgentPanel {
         if let Some(p) = src.project {
             self.enter_project(&p.dir, &p.game.game.name);
         }
+        self.receive_images();
         let has_project = src.project.is_some();
         let panel_rect = ui.max_rect();
         let pal = crate::theme::colors(ui.ctx());
@@ -1881,7 +1943,12 @@ impl AgentPanel {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     for (i, a) in self.attachments.iter().enumerate() {
-                        if chip(ui, a, true) {
+                        let thumb = if a.kind == AttachKind::Image {
+                            self.thumbs.entry(a.path.clone()).or_insert_with(|| crate::agent_paste::thumbnail(ui.ctx(), &a.path)).clone()
+                        } else {
+                            None
+                        };
+                        if image_chip(ui, a, thumb.as_ref()) || (thumb.is_none() && chip(ui, a, true)) {
                             remove = Some(i);
                         }
                     }
@@ -1905,6 +1972,18 @@ impl AgentPanel {
                     }
                 }
                 ui.add_space(2.0);
+            }
+            // A screenshot pasted with Ctrl+V (anywhere over the panel, or in the message box).
+            let over_panel = ui.ctx().pointer_latest_pos().is_some_and(|p| panel_rect.contains(p));
+            if focused || over_panel {
+                let images: Vec<std::sync::Arc<egui::ColorImage>> =
+                    ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PasteImage(img) = e { Some(img.clone()) } else { None }).collect());
+                for img in &images {
+                    self.attach_image(img, "captura");
+                }
+                if !images.is_empty() {
+                    ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::PasteImage(_))));
+                }
             }
             // Pasting paths or file:// URIs attaches them.
             if focused {
@@ -2010,6 +2089,18 @@ impl AgentPanel {
             } else {
                 format!("Mensaje para {} (Mayús+Intro: nueva línea; @ adjunta; / comandos)", self.kind.name())
             };
+            // Screenshots: one click (or Ctrl+V over the panel) instead of saving a file first.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let small = |t: &str| egui::Button::new(RichText::new(t).small()).frame(false);
+                if ui.add(small("📋 Pegar imagen")).on_hover_text("La imagen que tengas copiada: una captura de pantalla (Impr Pant, Spectacle, Recortes…). También Ctrl+V con el ratón sobre el panel").clicked() {
+                    self.paste_clipboard_image();
+                }
+                ui.label(RichText::new("·").weak().small());
+                if ui.add(small("📸 Captura del editor")).on_hover_text("Adjunta lo que ves ahora en la ventana del editor").clicked() {
+                    self.capture_editor(ui.ctx());
+                }
+            });
             ui.add(egui::TextEdit::multiline(&mut self.input).id(input_id).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY));
             ui.horizontal_wrapped(|ui| {
                 ui.menu_button("📎 Adjuntar", |ui| self.attach_menu(ui, src))
@@ -2657,6 +2748,14 @@ impl AgentPanel {
             self.browser.open_at(start.as_deref());
             ui.close();
         }
+        if ui.button("📋 Pegar imagen (Ctrl+V)").on_hover_text("La imagen que tengas copiada: una captura de pantalla, un recorte…").clicked() {
+            self.paste_clipboard_image();
+            ui.close();
+        }
+        if ui.button("📸 Captura del editor").on_hover_text("Lo que ves ahora en la ventana del editor").clicked() {
+            self.capture_editor(ui.ctx());
+            ui.close();
+        }
         if ui.button("📝 Texto…").on_hover_text("Un texto que escribes o pegas: va dentro del mensaje").clicked() {
             self.text_modal = Some((String::new(), String::new()));
             ui.close();
@@ -2854,6 +2953,15 @@ impl AgentPanel {
         self.status = "Hecho en 18,4 s".into();
         match what {
             "history" => self.show_history(""),
+            "paste" => {
+                // A pasted screenshot, as Ctrl+V leaves it (MODENGINE_DEMO_PASTE: a PNG to use).
+                let png = std::env::var_os("MODENGINE_DEMO_PASTE").map(PathBuf::from).unwrap_or_else(|| root.join("screenshot.png"));
+                let img = image::open(&png).ok().map(|i| i.to_rgba8());
+                let img = img.map(|i| egui::ColorImage::from_rgba_unmultiplied([i.width() as usize, i.height() as usize], i.as_raw()));
+                self.paste_dir = Some(std::env::temp_dir().join("modeditor_agent_demo_paste"));
+                self.attach_image(&img.unwrap_or_else(|| egui::ColorImage::filled([480, 270], Color32::from_rgb(70, 120, 200))), "captura");
+                self.input = "Mira la captura: el slime atraviesa el suelo al caer".into();
+            }
             "queue" => {
                 self.entries.push(Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/enemy.ms".into() }));
                 #[cfg(unix)]
@@ -3024,6 +3132,34 @@ fn attachment_tip(a: &Attachment) -> String {
         t += "\nImagen: Codex la recibe con --image; Claude Code y Antigravity, su ruta";
     }
     t
+}
+
+/// An image attachment with its thumbnail (bigger preview on hover) and a ×. Draws nothing and
+/// returns false when there is no thumbnail.
+fn image_chip(ui: &mut egui::Ui, a: &Attachment, thumb: Option<&egui::TextureHandle>) -> bool {
+    let Some(t) = thumb else { return false };
+    let mut removed = false;
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(crate::theme::RADIUS)
+        .inner_margin(egui::Margin::symmetric(4, 2))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let size = t.size_vec2();
+                let small = size * (36.0 / size.y.max(1.0)).min(64.0 / size.x.max(1.0));
+                ui.add(egui::Image::new(t).fit_to_exact_size(small).corner_radius(3.0)).on_hover_ui(|ui| {
+                    ui.add(egui::Image::new(t).max_size(egui::vec2(320.0, 320.0)));
+                    ui.label(RichText::new(attachment_tip(a)).small().weak());
+                });
+                ui.label(&a.label);
+                if ui.add(egui::Button::new("×").frame(false).small()).on_hover_text("Quitar").clicked() {
+                    removed = true;
+                }
+            });
+        });
+    removed
 }
 
 /// An attachment as a small rounded chip; with `removable`, a × that returns true when clicked.
@@ -3530,6 +3666,47 @@ echo '{"type":"turn.completed"}'"#,
         let atts = &h.state().0.attachments;
         assert_eq!(atts.len(), 2, "{atts:?}");
         assert_eq!(atts[1].label, room);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn pasted_screenshots_are_saved_attached_and_shown() {
+        use egui_kittest::{kittest::Queryable, Harness};
+        let (dir, exe) = fake_cli("paste", "true");
+        let project = crate::room::tests::temp_project("agent_paste").canonicalize().unwrap();
+        let mut p = panel(&exe);
+        p.paste_dir = Some(dir.join("pegadas"));
+        let proj = crate::project::Project::open(&project).unwrap();
+        let mut h = Harness::builder().with_size([420.0, 700.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, (p, proj): &mut (AgentPanel, crate::project::Project)| {
+                let src = Sources { project: Some(proj), ..Default::default() };
+                p.ui(ui, &src);
+            },
+            (p, proj),
+        );
+        h.run();
+        h.get_by_label("📋 Pegar imagen");
+        h.get_by_label("📸 Captura del editor");
+        // Ctrl+V of an image while the pointer is over the panel.
+        h.event(egui::Event::PointerMoved(egui::pos2(200.0, 300.0)));
+        let img = egui::ColorImage::filled([64, 32], Color32::from_rgb(10, 200, 30));
+        h.event(egui::Event::PasteImage(std::sync::Arc::new(img)));
+        h.run();
+        let a = h.state().0.attachments.last().cloned().expect("attached");
+        assert_eq!(a.kind, AttachKind::Image);
+        assert_eq!(a.label, "Captura 64×32");
+        assert!(a.path.starts_with(dir.join("pegadas")) && a.path.extension().unwrap() == "png");
+        assert_eq!(image::open(&a.path).unwrap().to_rgba8().get_pixel(1, 1).0, [10, 200, 30, 255]);
+        // Its chip has a thumbnail and the label; × removes it.
+        h.get_by_label("Captura 64×32");
+        assert!(h.state().0.thumbs.get(&a.path).is_some_and(|t| t.is_some()));
+        h.get_all_by_label("×").next().unwrap().click();
+        h.run();
+        assert!(h.state().0.attachments.is_empty());
+        // The image goes outside the project, so an agent gets read access to it.
+        let images: Vec<_> = vec![a.clone()];
+        assert!(!a.path.starts_with(&project) && images.len() == 1);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&project);
     }

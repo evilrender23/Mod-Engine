@@ -437,6 +437,13 @@ iniciado sesión en él una vez desde un terminal; si falta, el panel dice cómo
   *cursiva*, `código`, listas, citas, enlaces que se abren en el navegador y bloques de código
   (los de ModScript, `ms`, coloreados) con **⧉ Copiar**. Al pasar el ratón por un mensaje o una
   respuesta aparece **⧉** para copiarlo.
+- **Capturas de pantalla:** copia una captura (Impr Pant, Spectacle, Recortes…) y pulsa **Ctrl+V**
+  con el ratón sobre el panel, o **📋 Pegar imagen** encima del cuadro de mensaje. **📸 Captura del
+  editor** adjunta lo que ves en la ventana del editor. La imagen se guarda como PNG en
+  `~/.cache/modengine/agent/pegadas` (fuera del proyecto, así no sale en *Archivos cambiados*; se
+  borran solas a los 7 días) y aparece como una etiqueta con miniatura; al pasar el ratón se ve en
+  grande. Las de más de 2560 px se reducen. Le llegan al agente como cualquier imagen adjunta: Codex
+  con `--image` y Claude Code y Antigravity con su ruta y permiso para leerla.
 - **Cancelar un trabajo:** mientras el agente trabaja, junto a *Poner en cola* aparece **■ Cancelar**
   (también **Esc** en el cuadro de mensaje, **■** arriba o `/cancelar`). Para el programa y los
   comandos que haya lanzado: le pide que termine y, si a los 3 s sigue, lo cierra; en Windows cierra

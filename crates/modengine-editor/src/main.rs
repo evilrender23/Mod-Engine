@@ -6,6 +6,7 @@ mod agent_browser;
 mod agent_history;
 mod agent_markdown;
 mod agent_panel;
+mod agent_paste;
 mod agent_slash;
 mod agent_snapshot;
 mod app;
