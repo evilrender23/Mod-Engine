@@ -95,6 +95,8 @@ pub enum WsAction {
     Close(u64),
     /// A workspace tab's close button: close all its windows, then the tab.
     CloseWorkspace(usize),
+    /// An asset from the browser was dropped on the empty canvas at this canvas position.
+    DropAsset(Open, Pos2),
 }
 
 pub struct Workspaces {
@@ -104,12 +106,28 @@ pub struct Workspaces {
     renaming: Option<(usize, String)>,
     /// Window to scroll into view and raise on the next frame.
     reveal: Option<u64>,
+    /// Window to raise (without scrolling) on the next frame.
+    raise: Option<u64>,
     canvas: Rect,
+    /// Screen rectangles of the workspace tabs (last frame), to drop windows on them.
+    tab_rects: Vec<Rect>,
+    /// A window title is being dragged (last frame): tabs highlight as drop targets.
+    title_drag: bool,
 }
 
 impl Default for Workspaces {
     fn default() -> Self {
-        Workspaces { list: vec![Workspace::new("Workspace 1")], active: 0, next_id: 1, renaming: None, reveal: None, canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0)) }
+        Workspaces {
+            list: vec![Workspace::new("Workspace 1")],
+            active: 0,
+            next_id: 1,
+            renaming: None,
+            reveal: None,
+            raise: None,
+            canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0)),
+            tab_rects: vec![],
+            title_drag: false,
+        }
     }
 }
 
@@ -211,6 +229,48 @@ impl Workspaces {
         None
     }
 
+    /// Moves a window (from any workspace) to `pos` in the visible workspace, focused and on top.
+    pub fn place_at(&mut self, id: u64, pos: Pos2) {
+        if !self.cur().wins.iter().any(|w| w.id == id) {
+            let active = self.active;
+            self.move_to_workspace(id, active);
+        }
+        if let Some(w) = self.cur_mut().wins.iter_mut().find(|w| w.id == id) {
+            w.pos = pos;
+            w.maximized = false;
+            self.cur_mut().focus = Some(id);
+            self.raise = Some(id);
+            self.reveal = None; // it is where the user dropped it: don't scroll
+        }
+    }
+
+    /// Moves a window to another workspace tab (unchained, at a free spot of its view) and
+    /// shows that workspace.
+    pub fn move_to_workspace(&mut self, id: u64, to: usize) -> bool {
+        if to >= self.list.len() || self.list[to].wins.iter().any(|w| w.id == id) {
+            return false;
+        }
+        let Some(mut w) = self.remove(id) else { return false };
+        let canvas = self.canvas;
+        let ws = &mut self.list[to];
+        let view = ws.to_global(canvas).inverse() * canvas;
+        w.parent = None;
+        w.pos = ws.place(None, w.size, view);
+        ws.wins.push(w);
+        self.active = to;
+        self.focus(id);
+        true
+    }
+
+    /// Reorders the workspace tabs (`to` is an insertion index), keeping the visible one.
+    pub fn move_workspace(&mut self, from: usize, to: usize) {
+        let mut idx: Vec<usize> = (0..self.list.len()).collect();
+        crate::dnd::move_item(&mut idx, from, to);
+        crate::dnd::move_item(&mut self.list, from, to);
+        self.active = idx.iter().position(|i| *i == self.active).unwrap_or(0);
+        self.renaming = None;
+    }
+
     pub fn add_workspace(&mut self) {
         let mut n = self.list.len() + 1;
         while self.list.iter().any(|w| w.name == format!("Workspace {n}")) {
@@ -258,6 +318,9 @@ impl Workspaces {
     pub fn tab_bar(&mut self, ui: &mut Ui, dirty: &HashSet<u64>) -> Vec<WsAction> {
         let mut out = vec![];
         let mut add = false;
+        let list_id = Id::unique("modeditor_ws_tabs");
+        let mut rects = vec![];
+        let pointer = ui.ctx().pointer_latest_pos();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for i in 0..self.list.len() {
@@ -278,9 +341,16 @@ impl Workspaces {
                 let ws = &self.list[i];
                 let unsaved = ws.wins.iter().any(|w| dirty.contains(&w.id));
                 let label = format!("{}{}", ws.name, if unsaved { " ●" } else { "" });
-                let r = ui.add(egui::Button::selectable(i == self.active, label).min_size(Vec2::new(90.0, 22.0)));
+                let dragged = crate::dnd::dragging_from(ui.ctx(), list_id) == Some(i);
+                let r = ui.add(egui::Button::selectable(i == self.active || dragged, label.clone()).min_size(Vec2::new(90.0, 22.0)).sense(Sense::click_and_drag()));
+                crate::dnd::source(&r, || crate::dnd::ListDrag { list: list_id, from: i, label: format!("▤ {label}") });
+                rects.push(r.rect);
                 if r.clicked() {
                     self.active = i;
+                }
+                // a window title dragged over another tab: drop it there
+                if self.title_drag && i != self.active && pointer.is_some_and(|p| r.rect.contains(p)) {
+                    crate::dnd::drop_hint(ui, r.rect, "");
                 }
                 if r.double_clicked() {
                     self.renaming = Some((i, self.list[i].name.clone()));
@@ -303,7 +373,11 @@ impl Workspaces {
             if ui.small_button("+").on_hover_text("nuevo workspace").clicked() {
                 add = true;
             }
+            if let Some((from, to)) = crate::dnd::reorder(ui, list_id, &rects, false) {
+                self.move_workspace(from, to);
+            }
         });
+        self.tab_rects = rects;
         if add {
             self.add_workspace();
         }
@@ -342,6 +416,14 @@ impl Workspaces {
             }
             if bg.double_clicked() {
                 ws.focus = None;
+            }
+        }
+        // ---- an asset from the browser dropped on the empty canvas opens there
+        let drop_hover = bg.dnd_hover_payload::<Open>();
+        if let Some(what) = bg.dnd_release_payload::<Open>() {
+            if let Some(p) = ctx.pointer_latest_pos() {
+                let at = self.cur().to_global(canvas).inverse() * p;
+                out.push(WsAction::DropAsset((*what).clone(), at - Vec2::new(60.0, TITLE_H / 2.0)));
             }
         }
         bg.context_menu(|ui| {
@@ -384,6 +466,12 @@ impl Workspaces {
             }
             ctx.move_to_top(LayerId::new(Order::Middle, win_id(id)));
         }
+        if let Some(id) = self.raise.take() {
+            ctx.move_to_top(LayerId::new(Order::Middle, win_id(id)));
+        }
+        let tab_rects = std::mem::take(&mut self.tab_rects);
+        let mut to_tab: Vec<(u64, usize)> = vec![];
+        let mut title_drag = false;
 
         let ws = &mut self.list[self.active];
         let t = ws.to_global(canvas);
@@ -408,7 +496,7 @@ impl Workspaces {
             painter.text(
                 canvas.center(),
                 Align2::CENTER_CENTER,
-                "Haz doble clic en un asset del navegador para abrirlo aquí\narrastra el fondo para moverte · Ctrl + rueda para el zoom",
+                "Haz doble clic en un asset del navegador, o arrástralo aquí, para abrirlo\narrastra el fondo para moverte · Ctrl + rueda para el zoom",
                 FontId::proportional(14.0),
                 colors.weak,
             );
@@ -448,6 +536,10 @@ impl Workspaces {
             colors.weak,
         );
 
+        if let Some(what) = &drop_hover {
+            crate::dnd::drop_hint(ui, canvas.shrink(4.0), &format!("Suelta para abrir {} aquí", crate::dnd::asset_label(what)));
+        }
+
         // ---- windows
         let clip = t.inverse() * canvas;
         let mut focus = None;
@@ -467,9 +559,20 @@ impl Workspaces {
             if r.close {
                 out.push(WsAction::Close(w.id));
             }
+            title_drag |= r.title_drag;
+            if let Some(p) = r.title_drop {
+                if let Some(i) = tab_rects.iter().position(|t| t.contains(p)) {
+                    to_tab.push((w.id, i));
+                }
+            }
         }
         if let Some(f) = focus {
             ws.focus = Some(f);
+        }
+        self.title_drag = title_drag;
+        self.tab_rects = tab_rects;
+        for (id, i) in to_tab {
+            self.move_to_workspace(id, i);
         }
         out
     }
@@ -483,6 +586,10 @@ pub fn win_id(id: u64) -> Id {
 struct WinOut {
     focus: bool,
     close: bool,
+    /// The title bar is being dragged.
+    title_drag: bool,
+    /// The title bar drag ended here (screen coordinates).
+    title_drop: Option<Pos2>,
 }
 
 fn window_ui(ui: &mut Ui, w: &mut Win, dirty: bool, focused: bool, max_rect: Option<Rect>, accent: Color32, content: &mut impl FnMut(&mut Ui, &mut Win)) -> WinOut {
@@ -509,12 +616,17 @@ fn window_ui(ui: &mut Ui, w: &mut Win, dirty: bool, focused: bool, max_rect: Opt
     let drag = ui.interact(title_rect, ui.scope_id().with("title"), Sense::click_and_drag());
     if max_rect.is_none() && drag.dragged() {
         w.pos += drag.drag_delta();
+        out.title_drag = true;
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+    }
+    if max_rect.is_none() && drag.drag_stopped() {
+        out.title_drop = ui.ctx().pointer_latest_pos();
     }
     if drag.double_clicked() {
         w.maximized = !w.maximized;
         w.collapsed = false;
     }
-    if drag.hovered() && max_rect.is_none() {
+    if drag.hovered() && max_rect.is_none() && !drag.dragged() {
         ui.ctx().set_cursor_icon(CursorIcon::Grab);
     }
 
@@ -593,6 +705,9 @@ pub struct LayoutFile {
     pub agent: bool,
     #[serde(default, rename = "workspace")]
     pub workspaces: Vec<WsFile>,
+    /// Custom order of the asset browser sections (absent in older layouts).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub order: crate::dnd::AssetOrder,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -649,6 +764,7 @@ impl Workspaces {
                         .collect(),
                 })
                 .collect(),
+            order: Default::default(),
         }
     }
 
@@ -762,6 +878,44 @@ mod tests {
         assert_eq!(r.list[0].zoom, 0.75);
         assert!(r.list[1].wins.is_empty());
         assert_eq!(r.active, 1);
+    }
+
+    #[test]
+    fn drag_tabs_to_reorder_and_windows_onto_tabs() {
+        use egui_kittest::{kittest::Queryable, Harness};
+        let mut ws = Workspaces::default();
+        let a = ws.add(tab("a.ms"), None);
+        ws.add_workspace();
+        ws.add_workspace();
+        ws.active = 0;
+        let mut h = Harness::builder().with_size([1200.0, 700.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, ws: &mut Workspaces| {
+                ws.tab_bar(ui, &HashSet::new());
+                ws.canvas(ui, &HashSet::new(), |_, _| {});
+            },
+            ws,
+        );
+        h.run_steps(3);
+        let names = |h: &Harness<Workspaces>| h.state().list.iter().map(|w| w.name.clone()).collect::<Vec<_>>();
+        // drag "Workspace 1" (visible) after "Workspace 3"
+        let from = h.get_by_label("Workspace 1").rect().center();
+        let last = h.get_by_label("Workspace 3").rect();
+        crate::room::tests::drag(&mut h, from, last.right_center() + Vec2::new(8.0, 0.0));
+        assert_eq!(names(&h), ["Workspace 2", "Workspace 3", "Workspace 1"]);
+        assert_eq!(h.state().active, 2, "the visible workspace stays visible");
+        // drag the window's title bar onto the "Workspace 2" tab: it moves there
+        let title = {
+            let s = h.state();
+            let w = &s.cur().wins[0];
+            s.cur().to_global(s.canvas) * (w.pos + Vec2::new(120.0, TITLE_H / 2.0))
+        };
+        let target = h.get_by_label("Workspace 2").rect().center();
+        crate::room::tests::drag(&mut h, title, target);
+        let s = h.state();
+        assert_eq!(s.list[0].name, "Workspace 2");
+        assert_eq!(s.list[0].wins.iter().map(|w| w.id).collect::<Vec<_>>(), [a]);
+        assert!(s.list[2].wins.is_empty());
+        assert_eq!(s.active, 0);
     }
 
     #[test]

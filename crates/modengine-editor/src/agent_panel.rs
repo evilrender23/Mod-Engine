@@ -5,8 +5,10 @@
 //! The app saves everything before each message and, when [`AgentPanel::poll`] says so,
 //! reloads the project from disk and checks it.
 
-use crate::agent::{self, Event, Kind, Model, Parser, Permission, Run, ToolLine};
-use eframe::egui::{self, Color32, Key, Modifiers, RichText};
+use crate::agent::{self, AttachKind, Attachment, Event, Kind, Model, Parser, Permission, Run, ToolLine};
+use crate::agent_attach::{self as attach, Sources};
+use crate::app::Open;
+use eframe::egui::{self, Color32, DragAndDrop, Key, Modifiers, RichText};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -130,6 +132,8 @@ pub enum Tone {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
     User(String),
+    /// What went with the user message before it.
+    Attached(Vec<Attachment>),
     Text(String),
     Tool(ToolLine),
     Notice(String, Tone),
@@ -198,6 +202,18 @@ pub struct AgentPanel {
     /// Lists from this session; failed lookups are not retried until the menu opens again.
     listed: HashMap<Kind, Vec<Model>>,
     list_tried: bool,
+    /// Sent with the next message, then cleared.
+    pub attachments: Vec<Attachment>,
+    /// "Otra ruta" field of the attach menu, its filter of project files, and the last error.
+    attach_path: String,
+    attach_filter: String,
+    attach_error: Option<String>,
+    /// Project files for the menu and `@` mentions, listed at most every few seconds.
+    files: Vec<String>,
+    files_of: Option<(PathBuf, Instant)>,
+    /// Highlighted `@` suggestion, and the input the user closed the suggestions for (Esc).
+    mention_sel: usize,
+    mention_closed: Option<String>,
 }
 
 impl Default for AgentPanel {
@@ -231,6 +247,14 @@ impl AgentPanel {
             lister: None,
             listed: HashMap::new(),
             list_tried: false,
+            attachments: vec![],
+            attach_path: String::new(),
+            attach_filter: String::new(),
+            attach_error: None,
+            files: vec![],
+            files_of: None,
+            mention_sel: 0,
+            mention_closed: None,
         };
         p.locate();
         p
@@ -367,10 +391,90 @@ impl AgentPanel {
 
     // ------------------------------------------------------------ running
 
-    /// Starts the agent on `prompt` in `root`. The app saves everything first.
+    // ------------------------------------------------------------ attachments
+
+    /// Adds `a` to the next message (again: replaces the old one, which may be out of date).
+    pub fn attach(&mut self, a: Attachment) {
+        self.attachments.retain(|x| !x.same(&a));
+        self.attachments.push(a);
+        self.attach_error = None;
+    }
+
+    /// A file or folder the user picked; says why when it does not exist.
+    pub fn attach_path(&mut self, path: &Path) -> bool {
+        if !path.exists() {
+            self.attach_error = Some(format!("No existe: {}", path.display()));
+            return false;
+        }
+        self.attach(Attachment::file(path));
+        true
+    }
+
+    /// What `--agent --select` shows in screenshots: the focused asset, the room selection, Salida.
+    pub fn attach_defaults(&mut self, src: &Sources) {
+        let asset = src.focused.as_ref().or(src.selected.as_ref()).and_then(|o| src.asset(o));
+        for a in [asset, src.room_selection(), src.output()].into_iter().flatten() {
+            self.attach(a);
+        }
+    }
+
+    fn project_files(&mut self, dir: &Path) -> Vec<String> {
+        let fresh = self.files_of.as_ref().is_some_and(|(d, t)| d == dir && t.elapsed() < Duration::from_secs(5));
+        if !fresh {
+            self.files = attach::project_files(dir, 5000);
+            self.files_of = Some((dir.to_path_buf(), Instant::now()));
+        }
+        self.files.clone()
+    }
+
+    /// Suggestions for the `@word` at the end of the message: assets first, then files.
+    pub fn mention_candidates(&mut self, src: &Sources) -> Vec<(String, Attachment)> {
+        let Some((_, q)) = attach::mention_at_end(&self.input) else { return vec![] };
+        if self.mention_closed.as_deref() == Some(self.input.as_str()) {
+            return vec![];
+        }
+        let Some(p) = src.project else { return vec![] };
+        let q = q.to_string();
+        let mut out: Vec<(String, Attachment)> = vec![];
+        for o in attach::all_assets(p) {
+            let label = attach::asset_label(&o);
+            if attach::matches(&label, &q) {
+                if let Some(a) = attach::asset(p, &o) {
+                    out.push((label, a));
+                }
+            }
+            if out.len() >= 8 {
+                return out;
+            }
+        }
+        for f in self.project_files(&p.dir) {
+            if out.len() >= 8 {
+                break;
+            }
+            if attach::matches(&f, &q) {
+                let a = Attachment::file(&p.dir.join(&f));
+                if !out.iter().any(|(_, x)| x.path == a.path) {
+                    out.push((format!("📄 {f}"), a));
+                }
+            }
+        }
+        out
+    }
+
+    /// Replaces the `@word` being typed by `@name ` and attaches what it names.
+    pub fn pick_mention(&mut self, a: Attachment) {
+        if let Some((start, _)) = attach::mention_at_end(&self.input) {
+            self.input.truncate(start);
+            self.input += &format!("@{} ", a.label);
+        }
+        self.mention_sel = 0;
+        self.attach(a);
+    }
+
+    /// Starts the agent on `prompt` (and the attachments) in `root`. The app saves everything first.
     pub fn send(&mut self, prompt: &str, root: &Path, name: &str) {
         let text = prompt.trim();
-        if text.is_empty() || self.running() {
+        if (text.is_empty() && self.attachments.is_empty()) || self.running() {
             return;
         }
         let Some(program) = self.program.clone() else { return };
@@ -396,12 +500,20 @@ impl AgentPanel {
             context_file: context_file.clone(),
             docs,
             name: name.to_string(),
+            attachments: self.attachments.clone(),
         };
-        self.entries.push(Entry::User(text.to_string()));
+        if !text.is_empty() {
+            self.entries.push(Entry::User(text.to_string()));
+        }
+        if !self.attachments.is_empty() {
+            self.entries.push(Entry::Attached(self.attachments.clone()));
+        }
         self.open_text = None;
         match self.spawn(&program, &run) {
             Ok((child, rx)) => {
                 self.input.clear();
+                self.attachments.clear();
+                self.mention_closed = None;
                 self.session_root = Some(root.clone());
                 self.status = "Trabajando…".into();
                 self.run = Some(Running {
@@ -649,7 +761,10 @@ impl AgentPanel {
     // ------------------------------------------------------------ ui
 
     /// Draws the dock. Returns a message to send: the app saves everything, then calls [`AgentPanel::send`].
-    pub fn ui(&mut self, ui: &mut egui::Ui, has_project: bool) -> Option<String> {
+    /// `src` is what can be attached from the rest of the editor.
+    pub fn ui(&mut self, ui: &mut egui::Ui, src: &Sources) -> Option<String> {
+        let has_project = src.project.is_some();
+        let panel_rect = ui.max_rect();
         let pal = crate::theme::colors(ui.ctx());
         let running = self.running();
         let mut send = None;
@@ -699,15 +814,85 @@ impl AgentPanel {
         // Message box and its footer (model, permissions, send) at the bottom.
         let input_id = ui.make_persistent_id("agent_input");
         egui::Panel::bottom("agent_input_area").frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 6))).show(ui, |ui| {
-            let enter = ui.memory(|m| m.has_focus(input_id)) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+            let focused = ui.memory(|m| m.has_focus(input_id));
+            // Attachments of the next message, each with its ×.
+            if !self.attachments.is_empty() {
+                let mut remove = None;
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                    for (i, a) in self.attachments.iter().enumerate() {
+                        if chip(ui, a, true) {
+                            remove = Some(i);
+                        }
+                    }
+                });
+                if let Some(i) = remove {
+                    self.attachments.remove(i);
+                }
+                ui.add_space(2.0);
+            }
+            // `@` suggestions for the word being typed; arrows move, Tab or Intro pick, Esc closes.
+            let cands = self.mention_candidates(src);
+            let mut picked = None;
+            if !cands.is_empty() {
+                self.mention_sel = self.mention_sel.min(cands.len() - 1);
+                if focused {
+                    let (down, up, pick, esc) = ui.input_mut(|i| {
+                        (
+                            i.consume_key(Modifiers::NONE, Key::ArrowDown),
+                            i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                            i.consume_key(Modifiers::NONE, Key::Tab) || i.consume_key(Modifiers::NONE, Key::Enter),
+                            i.consume_key(Modifiers::NONE, Key::Escape),
+                        )
+                    });
+                    if down {
+                        self.mention_sel = (self.mention_sel + 1) % cands.len();
+                    }
+                    if up {
+                        self.mention_sel = (self.mention_sel + cands.len() - 1) % cands.len();
+                    }
+                    if pick {
+                        picked = Some(self.mention_sel);
+                    }
+                    if esc {
+                        self.mention_closed = Some(self.input.clone());
+                    }
+                }
+                egui::Frame::new()
+                    .fill(ui.visuals().window_fill)
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .corner_radius(crate::theme::RADIUS)
+                    .inner_margin(4)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new("Adjuntar (Tab o Intro; Esc cierra)").weak().small());
+                        for (i, (label, a)) in cands.iter().enumerate() {
+                            let tip = a.path.display().to_string();
+                            if ui.selectable_label(i == self.mention_sel, label).on_hover_text(tip).clicked() {
+                                picked = Some(i);
+                            }
+                        }
+                    });
+            }
+            if let Some(i) = picked {
+                if let Some((_, a)) = cands.into_iter().nth(i) {
+                    self.pick_mention(a);
+                    move_cursor_to_end(ui.ctx(), input_id, &self.input);
+                    ui.memory_mut(|m| m.request_focus(input_id));
+                }
+            }
+            let enter = picked.is_none() && focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
             ui.add(
                 egui::TextEdit::multiline(&mut self.input)
                     .id(input_id)
-                    .hint_text(format!("Mensaje para {} (Mayús+Intro: nueva línea)", self.kind.name()))
+                        .hint_text(format!("Mensaje para {} (Mayús+Intro: nueva línea; @ adjunta)", self.kind.name()))
                     .desired_rows(3)
                     .desired_width(f32::INFINITY),
             );
             ui.horizontal_wrapped(|ui| {
+                ui.menu_button("📎 Adjuntar", |ui| self.attach_menu(ui, src))
+                    .response
+                    .on_hover_text("Adjunta contexto al siguiente mensaje: assets, ficheros, la selección de la room, la Salida o imágenes. También puedes soltar aquí assets y ficheros, o escribir @");
                 ui.add_enabled_ui(!running, |ui| {
                     self.model_combo(ui);
                     let mut perm = self.permission;
@@ -721,7 +906,7 @@ impl AgentPanel {
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let can = !running && has_project && !self.input.trim().is_empty();
+                    let can = !running && has_project && (!self.input.trim().is_empty() || !self.attachments.is_empty());
                     let b = ui.add_enabled(can, crate::theme::primary_button(ui, "Enviar")).on_hover_text("Intro: guarda todo y envía el mensaje");
                     if b.clicked() || (enter && can) {
                         send = Some(self.input.clone());
@@ -740,6 +925,15 @@ impl AgentPanel {
             }
             for e in &self.entries {
                 match e {
+                    Entry::Attached(list) => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                            ui.label(RichText::new("📎").weak());
+                            for a in list {
+                                chip(ui, a, false);
+                            }
+                        });
+                    }
                     Entry::User(t) => {
                         ui.add_space(8.0);
                         egui::Frame::new()
@@ -780,7 +974,125 @@ impl AgentPanel {
         if !self.list_tried && self.lister.is_none() {
             self.list_models();
         }
+        self.drop_zone(ui, panel_rect, src);
         send
+    }
+
+    /// Assets dragged from the browser and files dropped from the file manager onto the dock
+    /// are attached.
+    fn drop_zone(&mut self, ui: &egui::Ui, rect: egui::Rect, src: &Sources) {
+        let ctx = ui.ctx().clone();
+        let over = ctx.pointer_latest_pos().is_some_and(|p| rect.contains(p));
+        if !over {
+            return;
+        }
+        let asset = DragAndDrop::payload::<Open>(&ctx);
+        let files = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        if asset.is_some() || files {
+            let c = ui.visuals().selection.stroke.color;
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("agent_drop_hint")));
+            painter.rect_filled(rect.shrink(2.0), 6.0, c.gamma_multiply(0.08));
+            painter.rect_stroke(rect.shrink(3.0), 6.0, egui::Stroke::new(2.0, c), egui::StrokeKind::Inside);
+            let what = asset.as_deref().map(attach::asset_label).unwrap_or_else(|| "los ficheros".into());
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, format!("Suelta para adjuntar {what}"), egui::FontId::proportional(14.0), c);
+        }
+        if asset.is_some() && ctx.input(|i| i.pointer.any_released()) {
+            if let Some(o) = DragAndDrop::take_payload::<Open>(&ctx) {
+                if let Some(a) = src.asset(&o) {
+                    self.attach(a);
+                }
+            }
+        }
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+        for p in dropped {
+            self.attach_path(&p);
+        }
+    }
+
+    fn attach_menu(&mut self, ui: &mut egui::Ui, src: &Sources) {
+        ui.set_min_width(280.0);
+        let add = |ui: &mut egui::Ui, title: &str, item: Option<(String, Attachment)>, missing: &str| -> Option<Attachment> {
+            match item {
+                Some((what, a)) => ui.button(format!("{title}: {what}")).on_hover_text(attachment_tip(&a)).clicked().then_some(a),
+                None => {
+                    ui.add_enabled(false, egui::Button::new(title)).on_disabled_hover_text(missing);
+                    None
+                }
+            }
+        };
+        let asset = |o: &Option<Open>| o.as_ref().and_then(|o| src.asset(o).map(|a| (attach::asset_label(o), a)));
+        let mut chosen = vec![];
+        chosen.extend(add(ui, "Asset seleccionado", asset(&src.selected), "Selecciona un asset en el navegador"));
+        chosen.extend(add(ui, "Ventana enfocada", asset(&src.focused), "No hay ninguna ventana de editor enfocada"));
+        chosen.extend(add(
+            ui,
+            "Selección de la room",
+            src.room_selection().map(|a| (a.label.trim_start_matches("Selección en ").to_string(), a)),
+            "Selecciona una instancia con ⬚ Mover en la room enfocada",
+        ));
+        chosen.extend(add(ui, "Salida", src.output().map(|a| (format!("últimas {} líneas", attach::OUTPUT_LINES), a)), "La Salida está vacía"));
+        ui.separator();
+        if let Some(p) = src.project {
+            ui.menu_button("📄 Fichero del proyecto", |ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.attach_filter).hint_text("Filtrar…").desired_width(240.0));
+                let files = self.project_files(&p.dir);
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    let mut shown = 0;
+                    for f in files.iter().filter(|f| attach::matches(f, &self.attach_filter)) {
+                        shown += 1;
+                        if shown > 300 {
+                            ui.label(RichText::new("… escribe para filtrar").weak());
+                            break;
+                        }
+                        if ui.button(f).clicked() {
+                            chosen.push(Attachment::file(&p.dir.join(f)));
+                        }
+                    }
+                });
+            });
+            ui.menu_button("🖼 Imagen de un sprite", |ui| {
+                let pngs: Vec<_> = p.sprites.iter().filter(|s| s.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"))).collect();
+                if pngs.is_empty() {
+                    ui.label(RichText::new("No hay sprites PNG").weak());
+                }
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for s in pngs {
+                        if ui.button(format!("▣ {}", s.name)).clicked() {
+                            chosen.extend(attach::asset(p, &Open::Sprite(s.name.clone())));
+                        }
+                    }
+                });
+            });
+        }
+        ui.separator();
+        ui.label("Otra ruta (fichero, carpeta o imagen):");
+        let mut go = false;
+        ui.horizontal(|ui| {
+            let r = ui.add(egui::TextEdit::singleline(&mut self.attach_path).hint_text("~/captura.png o rooms/level1.toml").desired_width(200.0));
+            go = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            go |= ui.add_enabled(!self.attach_path.trim().is_empty(), egui::Button::new("Adjuntar")).clicked();
+        });
+        if go && !self.attach_path.trim().is_empty() {
+            let path = attach::resolve_path(src.project.map(|p| p.dir.as_path()), &self.attach_path);
+            if self.attach_path(&path) {
+                self.attach_path.clear();
+                ui.close();
+            }
+        }
+        if let Some(e) = &self.attach_error {
+            ui.label(RichText::new(e).color(crate::theme::colors(ui.ctx()).error));
+        }
+        ui.label(
+            RichText::new("Las imágenes llegan a Codex con --image; Claude Code y Antigravity reciben su ruta. También puedes arrastrar assets o ficheros al panel, o escribir @ en el mensaje.")
+                .weak()
+                .small(),
+        );
+        if !chosen.is_empty() {
+            for a in chosen {
+                self.attach(a);
+            }
+            ui.close();
+        }
     }
 
     fn model_combo(&mut self, ui: &mut egui::Ui) {
@@ -852,6 +1164,48 @@ impl AgentPanel {
                 self.locate();
             }
         });
+    }
+}
+
+/// What a chip shows on hover: the path, or the start of the text.
+fn attachment_tip(a: &Attachment) -> String {
+    let mut t = match a.kind {
+        AttachKind::Text => agent::clip(&a.text, 600),
+        _ => a.path.display().to_string(),
+    };
+    if a.kind == AttachKind::Image {
+        t += "\nImagen: Codex la recibe con --image; Claude Code y Antigravity, su ruta";
+    }
+    t
+}
+
+/// An attachment as a small rounded chip; with `removable`, a × that returns true when clicked.
+fn chip(ui: &mut egui::Ui, a: &Attachment, removable: bool) -> bool {
+    let mut removed = false;
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(crate::theme::RADIUS)
+        .inner_margin(egui::Margin::symmetric(6, 2))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(RichText::new(a.icon).weak());
+                ui.label(&a.label).on_hover_text(attachment_tip(a));
+                if removable && ui.add(egui::Button::new("×").frame(false).small()).on_hover_text("Quitar").clicked() {
+                    removed = true;
+                }
+            });
+        });
+    removed
+}
+
+/// Puts the text cursor of the message box after its last character.
+fn move_cursor_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
+    if let Some(mut st) = egui::TextEdit::load_state(ctx, id) {
+        let end = egui::text::CCursor::new(text.chars().count());
+        st.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+        st.store(ctx, id);
     }
 }
 
@@ -1094,7 +1448,20 @@ echo '{"type":"turn.completed"}'"#,
         p.set_permission(Permission::Plan);
         p.set_model(&std::env::var("MODENGINE_AGENT_MODEL").unwrap_or_default());
         assert!(p.program.is_some(), "{} not installed", kind.name());
-        p.send("List the object names defined in this project, one per line. Do not edit anything.", &project, "Coin Climber");
+        // Attachments from outside the project: a note (inline) and a picture (read by path, or --image).
+        let outside = std::env::temp_dir().join(format!("modeditor_smoke_att_{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("note.txt"), "The codeword is PELICAN-42.\n").unwrap();
+        // A plain red square.
+        image::RgbaImage::from_pixel(32, 32, image::Rgba([220, 20, 20, 255])).save(outside.join("picture.png")).unwrap();
+        p.attach_path(&outside.join("picture.png"));
+        p.attach_path(&outside.join("note.txt"));
+        p.send(
+            "List the object names defined in this project, one per line. Then say the codeword from the attached note, \
+             and describe the attached picture in a few words. Do not edit anything.",
+            &project,
+            "Coin Climber",
+        );
         let ctx = egui::Context::default();
         let start = Instant::now();
         while p.running() && start.elapsed() < Duration::from_secs(240) {
@@ -1107,6 +1474,105 @@ echo '{"type":"turn.completed"}'"#,
         println!("session={} status={}", p.session, p.status);
         // The reply itself is up to the model (Antigravity may end its turn on a permission block).
         assert!(!p.running() && !p.session.is_empty() && p.status.starts_with("Hecho"), "{}", p.status);
+        assert!(p.entries.iter().any(|e| matches!(e, Entry::Text(t) if t.contains("PELICAN-42"))), "the agent did not see the attached note");
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn sends_attachments_to_fake_claude() {
+        let project = crate::room::tests::temp_project("agent_att").canonicalize().unwrap();
+        let outside = std::env::temp_dir().join(format!("modeditor_agent_outside_{}.md", std::process::id()));
+        std::fs::write(&outside, "nota de fuera").unwrap();
+        let (dir, exe) = fake_cli("att", r#"echo '{"type":"result","subtype":"success","session_id":"S3"}'"#);
+        let mut p = panel(&exe);
+        let proj = crate::project::Project::open(&project).unwrap();
+        let log = vec![crate::app::LogLine { kind: crate::app::LogKind::Error, text: "rooms/x.toml: falta el objeto Foo".into() }];
+        let src = Sources { project: Some(&proj), selected: Some(Open::Object(proj.objects[0].name.clone())), log: &log, ..Default::default() };
+        p.attach_defaults(&src);
+        assert!(p.attach_path(&outside));
+        assert!(!p.attach_path(Path::new("/no/such/file")) && p.attach_error.is_some());
+        // Attaching the same thing twice keeps one.
+        p.attach(Attachment::file(&outside));
+        assert_eq!(p.attachments.len(), 3, "{:?}", p.attachments);
+        // An empty message with attachments is sent.
+        p.send("", &project, "Coin Climber");
+        wait(&mut p);
+        let stdin = std::fs::read_to_string(dir.join("stdin.txt")).unwrap();
+        let rel = proj.scripts[proj.objects[0].script].rel.clone();
+        assert!(stdin.contains(&format!("- The project file `{rel}` (defines the object `{}`).", proj.objects[0].name)), "{stdin}");
+        assert!(stdin.contains("- Salida (the editor's output log") && stdin.contains("[error] rooms/x.toml: falta el objeto Foo"), "{stdin}");
+        assert!(stdin.contains("from outside the project:\n```md\nnota de fuera\n```"), "{stdin}");
+        let args = lines(&dir.join("args.txt"));
+        let outside_rule = format!("Read(/{})", outside.canonicalize().unwrap().display());
+        assert!(args.contains(&outside_rule), "{args:?}");
+        // The transcript notes what went, and the next message starts without attachments.
+        assert!(matches!(&p.entries[0], Entry::Attached(a) if a.len() == 3), "{:?}", p.entries);
+        assert!(p.attachments.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn mentions_attach_assets_and_files() {
+        let project = crate::room::tests::temp_project("agent_at").canonicalize().unwrap();
+        let proj = crate::project::Project::open(&project).unwrap();
+        let src = Sources { project: Some(&proj), ..Default::default() };
+        let mut p = AgentPanel::with_config(None);
+        let room = proj.rooms[0].name.clone();
+        p.input = format!("cambia @{}", &room[..room.len().min(3)]);
+        let c = p.mention_candidates(&src);
+        assert!(c.iter().any(|(l, _)| *l == format!("▦ {room}")), "{c:?}");
+        let (_, a) = c.into_iter().find(|(l, _)| *l == format!("▦ {room}")).unwrap();
+        p.pick_mention(a);
+        assert_eq!(p.input, format!("cambia @{room} "));
+        assert_eq!(p.attachments[0].path, project.join(format!("rooms/{room}.toml")));
+        assert!(p.mention_candidates(&src).is_empty());
+        // Project files show up too.
+        p.input = "@game.to".into();
+        assert!(p.mention_candidates(&src).iter().any(|(l, _)| l == "📄 game.toml"));
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn chips_render_remove_and_accept_dropped_assets() {
+        use egui_kittest::{kittest::Queryable, Harness};
+        let (dir, exe) = fake_cli("chips", "true");
+        let project = crate::room::tests::temp_project("agent_chips").canonicalize().unwrap();
+        let mut p = panel(&exe);
+        p.attachments = vec![Attachment::file(&project.join("game.toml")), Attachment::text("☰", "Salida", "ok")];
+        p.entries = vec![Entry::User("mira".into()), Entry::Attached(vec![Attachment::text("⬚", "Selección en level1", "{ x = 1 }")])];
+        let proj = crate::project::Project::open(&project).unwrap();
+        let room = proj.rooms[0].name.clone();
+        let mut h = Harness::builder().with_size([420.0, 700.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, (p, proj): &mut (AgentPanel, crate::project::Project)| {
+                let src = Sources { project: Some(proj), ..Default::default() };
+                p.ui(ui, &src);
+            },
+            (p, proj),
+        );
+        h.run();
+        h.get_by_label("game.toml");
+        h.get_by_label("Salida");
+        h.get_by_label("Selección en level1");
+        h.get_by_label("📎 Adjuntar");
+        // × removes the first chip.
+        h.get_all_by_label("×").next().unwrap().click();
+        h.run();
+        assert_eq!(h.state().0.attachments.len(), 1);
+        assert!(h.query_by_label("game.toml").is_none());
+        // An asset dragged from the browser and released over the dock is attached.
+        let at = egui::pos2(200.0, 300.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run();
+        DragAndDrop::set_payload(&h.ctx, Open::Room(room.clone()));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run();
+        let atts = &h.state().0.attachments;
+        assert_eq!(atts.len(), 2, "{atts:?}");
+        assert_eq!(atts[1].label, room);
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&project);
     }
 
@@ -1142,7 +1608,7 @@ echo '{"type":"turn.completed"}'"#,
         ];
         let mut h = Harness::builder().with_size([420.0, 700.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
             |ui, p: &mut AgentPanel| {
-                p.ui(ui, true);
+                p.ui(ui, &Sources::default());
             },
             p,
         );

@@ -91,6 +91,160 @@ pub struct Run {
     pub docs: Option<PathBuf>,
     /// Project name, for the context.
     pub name: String,
+    /// What the user attached to this message.
+    pub attachments: Vec<Attachment>,
+}
+
+/// How an attachment reaches the agent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AttachKind {
+    /// A file or folder: the agent opens project files itself; text from outside the project
+    /// goes inside the message.
+    File,
+    /// A picture: handed to the CLIs that take images (Codex `--image`), named for the others.
+    Image,
+    /// Written into the message (the room selection, Salida lines).
+    Text,
+}
+
+/// Something the user attached to the next message (modelled on Maker's `Attachment`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attachment {
+    pub kind: AttachKind,
+    pub icon: &'static str,
+    /// Shown in the panel and the transcript; names a Text attachment for the agent.
+    pub label: String,
+    /// Absolute path (File, Image).
+    pub path: PathBuf,
+    /// What it is, for the agent ("the object `Player`"); may be empty.
+    pub about: String,
+    /// The content of a Text attachment.
+    pub text: String,
+}
+
+/// File names the agent is told to look at as pictures.
+pub const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+/// Most text one attachment puts in the message; the rest is cut with a note.
+pub const INLINE_MAX: usize = 20 * 1024;
+
+impl Attachment {
+    /// A file or folder; pictures by their extension.
+    pub fn file(path: &Path) -> Attachment {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let image = IMAGE_EXTS.contains(&ext.as_str());
+        let icon = if path.is_dir() {
+            "📁"
+        } else if image {
+            "🖼"
+        } else {
+            "📄"
+        };
+        Attachment {
+            kind: if image { AttachKind::Image } else { AttachKind::File },
+            icon,
+            label: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string()),
+            path,
+            about: String::new(),
+            text: String::new(),
+        }
+    }
+
+    /// Text written into the message under `label`.
+    pub fn text(icon: &'static str, label: impl Into<String>, text: impl Into<String>) -> Attachment {
+        Attachment { kind: AttachKind::Text, icon, label: label.into(), path: PathBuf::new(), about: String::new(), text: text.into() }
+    }
+
+    /// Same thing (attaching it again replaces it).
+    pub fn same(&self, other: &Attachment) -> bool {
+        self.kind == other.kind && if self.kind == AttachKind::Text { self.label == other.label } else { self.path == other.path }
+    }
+}
+
+/// `text` cut to `max` bytes (on a character boundary) with a note saying how much was left out.
+pub fn clip(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut cut = max;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}\n[… truncated by the editor: {} more bytes not shown]", &text[..cut], text.len() - cut)
+}
+
+/// A text file small enough to read, clipped to [`INLINE_MAX`]; `None` for folders and binaries.
+fn inline_text(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let total = path.metadata().ok().filter(|m| m.is_file())?.len() as usize;
+    let mut bytes = vec![];
+    std::fs::File::open(path).ok()?.take(INLINE_MAX as u64 + 4).read_to_end(&mut bytes).ok()?;
+    if bytes.contains(&0) {
+        return None; // binary
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    if total <= INLINE_MAX {
+        return Some(text.into_owned());
+    }
+    let mut cut = INLINE_MAX.min(text.len());
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    Some(format!("{}\n[… truncated by the editor: {} more bytes not shown]", &text[..cut], total.saturating_sub(cut)))
+}
+
+/// A Markdown code block that survives backticks inside `text`.
+fn fence(text: &str, lang: &str) -> String {
+    let mut marks = "```".to_string();
+    while text.contains(&marks) {
+        marks.push('`');
+    }
+    format!("{marks}{lang}\n{text}{}{marks}\n", if text.ends_with('\n') { "" } else { "\n" })
+}
+
+/// The message with a block listing what the user attached (paths relative to the project
+/// when inside it, text inline).
+pub fn prompt_with_attachments(run: &Run) -> String {
+    if run.attachments.is_empty() {
+        return run.prompt.clone();
+    }
+    let mut t = format!("{}\n\n<attached-by-the-user>\nWith this message the user attached:\n", run.prompt);
+    for a in &run.attachments {
+        let inside = inside(&run.root, &a.path);
+        let shown = if inside { a.path.strip_prefix(&run.root).unwrap_or(&a.path).display().to_string() } else { a.path.display().to_string() };
+        let about = if a.about.is_empty() { String::new() } else { format!(" ({})", a.about) };
+        match a.kind {
+            AttachKind::Image => t += &format!("- The image `{shown}`{about}. Look at it.\n"),
+            AttachKind::File if a.path.is_dir() => {
+                t += &if inside { format!("- The project folder `{shown}`.\n") } else { format!("- The folder `{shown}`, outside the project.\n") }
+            }
+            AttachKind::File if inside => t += &format!("- The project file `{shown}`{about}.\n"),
+            AttachKind::File => match inline_text(&a.path) {
+                Some(content) => {
+                    let lang = a.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    t += &format!("- The file `{shown}`, from outside the project:\n");
+                    t += &fence(&content, &lang);
+                }
+                None => t += &format!("- The file `{shown}`, from outside the project.\n"),
+            },
+            AttachKind::Text => {
+                t += &format!("- {}{about}:\n", a.label);
+                t += &fence(&clip(&a.text, INLINE_MAX), "");
+            }
+        }
+    }
+    t + "</attached-by-the-user>"
+}
+
+/// Attached files and folders outside the project: the agent is allowed to read just those.
+pub fn attached_outside(run: &Run) -> Vec<&Path> {
+    run.attachments.iter().filter(|a| a.kind != AttachKind::Text && !inside(&run.root, &a.path)).map(|a| a.path.as_path()).collect()
+}
+
+/// Attached pictures, for the CLIs that take images.
+pub fn attached_images(run: &Run) -> Vec<&Path> {
+    run.attachments.iter().filter(|a| a.kind == AttachKind::Image).map(|a| a.path.as_path()).collect()
 }
 
 /// A transcript line for something the agent did.
@@ -267,9 +421,18 @@ impl Kind {
                 if !run.session.is_empty() {
                     a.extend(["--resume".into(), run.session.clone()]);
                 }
-                // The engine docs live outside the project: allow reading them, not editing them.
+                // The engine docs and attachments from elsewhere live outside the project: allow
+                // reading them, not editing them.
+                let mut readable = vec![];
                 if let Some(docs) = &run.docs {
-                    a.extend(["--allowedTools".into(), format!("Read({}/**)", claude_rule_path(docs))]);
+                    readable.push(format!("Read({}/**)", claude_rule_path(docs)));
+                }
+                for p in attached_outside(run) {
+                    readable.push(if p.is_dir() { format!("Read({}/**)", claude_rule_path(p)) } else { format!("Read({})", claude_rule_path(p)) });
+                }
+                if !readable.is_empty() {
+                    a.push("--allowedTools".into());
+                    a.extend(readable);
                 }
             }
             // `agy --output-format stream-json --print=<prompt>`, `--conversation <id>` to continue.
@@ -279,6 +442,9 @@ impl Kind {
                 let mut allow = vec![format!("write_file({})", agy_rule_path(&run.root))];
                 if let Some(docs) = &run.docs {
                     allow.push(format!("read_file({})", agy_rule_path(docs)));
+                }
+                for p in attached_outside(run) {
+                    allow.push(format!("read_file({})", agy_rule_path(p)));
                 }
                 let settings = json!({ "permissions": { "ask": ["write_file(/)"], "allow": allow } });
                 let mode = match run.permission {
@@ -315,7 +481,11 @@ impl Kind {
                     a.extend(["--model".into(), run.model.clone()]);
                 }
                 if !run.session.is_empty() {
-                    a.extend(["resume".into(), run.session.clone()]);
+                    a.extend(["resume".into(), run.session.clone()]); // which takes its own --image
+                }
+                // One image per option: the option takes several values and would swallow the "-".
+                for p in attached_images(run) {
+                    a.push(format!("--image={}", p.display()));
                 }
                 a.push("-".into()); // prompt on stdin
             }
@@ -326,7 +496,7 @@ impl Kind {
     /// Written to stdin, which is then closed.
     pub fn input(self, run: &Run) -> String {
         match self {
-            Kind::Claude => run.prompt.clone(),
+            Kind::Claude => prompt_with_attachments(run),
             Kind::Antigravity => String::new(),
             Kind::Codex => prompt_with_context(run),
         }
@@ -378,9 +548,9 @@ pub fn engine_context(name: &str, docs: Option<&Path>) -> String {
 /// system prompt option.
 pub fn prompt_with_context(run: &Run) -> String {
     if !run.session.is_empty() {
-        return run.prompt.clone();
+        return prompt_with_attachments(run);
     }
-    format!("<modengine-editor-context>\n{}</modengine-editor-context>\n\n{}", engine_context(&run.name, run.docs.as_deref()), run.prompt)
+    format!("<modengine-editor-context>\n{}</modengine-editor-context>\n\n{}", engine_context(&run.name, run.docs.as_deref()), prompt_with_attachments(run))
 }
 
 /// Claude permission rules write absolute paths as "//path".
@@ -874,6 +1044,7 @@ mod tests {
             context_file: "/tmp/ctx.md".into(),
             docs: Some("/opt/me/docs".into()),
             name: "Juego".into(),
+            attachments: vec![],
         }
     }
 
@@ -1051,6 +1222,110 @@ mod tests {
                 Event::Finished,
             ]
         );
+    }
+
+    /// A project folder and a folder outside it, with a few files.
+    fn attach_dirs(tag: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("modeditor_attach_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, other) = (base.join("game"), base.join("other"));
+        std::fs::create_dir_all(game.join("objects")).unwrap();
+        std::fs::create_dir_all(game.join("sprites")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(game.join("objects/player.ms"), "object Player {}\n").unwrap();
+        std::fs::write(game.join("sprites/hero.png"), [0x89u8, b'P', b'N', b'G', 0, 1]).unwrap();
+        std::fs::write(other.join("notes.md"), "# Ideas\nuse ```code```\n").unwrap();
+        std::fs::write(other.join("big.txt"), "é".repeat(INLINE_MAX)).unwrap(); // 2 bytes each
+        std::fs::write(other.join("blob.bin"), [1u8, 0, 2]).unwrap();
+        std::fs::write(other.join("shot.png"), [0x89u8, b'P', b'N', b'G', 0]).unwrap();
+        (game.canonicalize().unwrap(), other.canonicalize().unwrap())
+    }
+
+    fn run_with(root: &Path, attachments: Vec<Attachment>) -> Run {
+        Run { root: root.to_path_buf(), attachments, ..run(Permission::Edit, "", "") }
+    }
+
+    #[test]
+    fn prompt_lists_attachments() {
+        let (game, other) = attach_dirs("prompt");
+        let mut player = Attachment::file(&game.join("objects/player.ms"));
+        player.about = "the object `Player`".into();
+        let r = run_with(
+            &game,
+            vec![
+                player,
+                Attachment::file(&game.join("sprites/hero.png")),
+                Attachment::file(&other.join("notes.md")),
+                Attachment::file(&other.join("big.txt")),
+                Attachment::file(&other.join("blob.bin")),
+                Attachment::file(&other),
+                Attachment::text("☰", "Salida", "error: x\n".repeat(5000)),
+            ],
+        );
+        let p = prompt_with_attachments(&r);
+        assert!(p.starts_with("haz algo\n\n<attached-by-the-user>\n") && p.ends_with("</attached-by-the-user>"), "{p}");
+        // Project files by their relative path; the agent opens them itself.
+        assert!(p.contains("- The project file `objects/player.ms` (the object `Player`).\n"), "{p}");
+        assert!(!p.contains("object Player {}"));
+        assert!(p.contains("- The image `sprites/hero.png`. Look at it.\n"));
+        // Text from outside the project goes inline, in a fence longer than its own backticks.
+        let o = other.display();
+        assert!(p.contains(&format!("- The file `{o}/notes.md`, from outside the project:\n````md\n# Ideas\nuse ```code```\n````\n")), "{p}");
+        // Big text is clipped with a note; binaries and folders are only named.
+        assert!(p.contains(&format!("[… truncated by the editor: {} more bytes not shown]", INLINE_MAX)), "{p}");
+        assert!(p.contains(&format!("- The file `{o}/blob.bin`, from outside the project.\n")));
+        assert!(p.contains(&format!("- The folder `{o}`, outside the project.\n")));
+        assert!(p.contains("- Salida:\n```\nerror: x\n"));
+        assert!(p.len() < 3 * INLINE_MAX + 2000, "{}", p.len());
+        // Nothing attached: the message as typed.
+        assert_eq!(prompt_with_attachments(&run_with(&game, vec![])), "haz algo");
+        let _ = std::fs::remove_dir_all(game.parent().unwrap());
+    }
+
+    #[test]
+    fn clip_respects_char_boundaries() {
+        assert_eq!(clip("hola", 10), "hola");
+        assert_eq!(clip("ééé", 3), "é\n[… truncated by the editor: 4 more bytes not shown]");
+    }
+
+    #[test]
+    fn attachments_reach_each_cli() {
+        let (game, other) = attach_dirs("argv");
+        let atts = vec![
+            Attachment::file(&game.join("sprites/hero.png")),
+            Attachment::file(&other.join("shot.png")),
+            Attachment::file(&other.join("notes.md")),
+            Attachment::file(&other),
+            Attachment::text("⬚", "Selección", "x = 1"),
+        ];
+        let r = run_with(&game, atts);
+        let o = other.display().to_string();
+        // Claude: on stdin, and permission to read only those files outside the project.
+        let a = Kind::Claude.args(&r);
+        let at = a.iter().position(|x| x == "--allowedTools").unwrap();
+        assert_eq!(
+            a[at + 1..],
+            ["Read(//opt/me/docs/**)".to_string(), format!("Read(/{o}/shot.png)"), format!("Read(/{o}/notes.md)"), format!("Read(/{o}/**)")]
+        );
+        let input = Kind::Claude.input(&r);
+        assert!(input.contains("<attached-by-the-user>") && input.contains("- Selección:\n```\nx = 1\n```"));
+        // Codex: every image with --image=, before the "-" that reads stdin, also when resuming.
+        let a = Kind::Codex.args(&r);
+        assert_eq!(a[a.len() - 3..], [format!("--image={}/sprites/hero.png", game.display()), format!("--image={o}/shot.png"), "-".to_string()]);
+        let a = Kind::Codex.args(&Run { session: "T9".into(), ..run_with(&game, r.attachments.clone()) });
+        assert_eq!(a[a.len() - 5..a.len() - 2], ["resume".to_string(), "T9".into(), format!("--image={}/sprites/hero.png", game.display())]);
+        assert!(Kind::Codex.input(&r).contains("Look at it."));
+        // Antigravity: read rules for what is outside the project, the list in --print.
+        let a = Kind::Antigravity.args(&r);
+        let s: Value = serde_json::from_str(&a[5]).unwrap();
+        assert_eq!(
+            s["permissions"]["allow"],
+            json!([format!("write_file({})", game.display()), "read_file(/opt/me/docs)", format!("read_file({o}/shot.png)"), format!("read_file({o}/notes.md)"), format!("read_file({o})")])
+        );
+        assert!(a.last().unwrap().contains("<attached-by-the-user>"));
+        // Without attachments nothing changes.
+        assert!(!Kind::Codex.args(&run_with(&game, vec![])).iter().any(|x| x.starts_with("--image")));
+        let _ = std::fs::remove_dir_all(game.parent().unwrap());
     }
 
     #[test]

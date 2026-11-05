@@ -81,6 +81,13 @@ pub struct Auto {
     pub fit: bool,
     /// Show the Agente dock.
     pub agent: bool,
+    /// Open the import dialog with these files or folders.
+    pub import: Vec<PathBuf>,
+    /// Then press its Importar button (end-to-end runs).
+    pub import_run: bool,
+    /// Pretend this asset is being dragged and held at this screen point (screenshots of
+    /// drag-and-drop feedback; the drop never happens).
+    pub drag: Option<(Open, egui::Pos2)>,
     frames: u32,
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -290,6 +297,36 @@ pub struct EditorApp {
     upd: crate::update::Actualizador,
     /// The user closed the "update found/ready" bar for this session.
     upd_oculta: bool,
+    /// Custom order of the asset browser sections (saved with the layout).
+    order: crate::dnd::AssetOrder,
+    /// The asset browser was the last thing clicked: Delete / Escape act on it.
+    browser_focus: bool,
+    /// Screen rectangle of the asset browser dock in the last frame.
+    browser_rect: egui::Rect,
+    /// Ctrl+F: focus the asset filter on the next frame.
+    focus_filter: bool,
+    /// The Importar assets dialog, when open.
+    import: Option<crate::import::ImportDialog>,
+}
+
+/// Browser section of an asset (key of its custom order).
+fn section_key(o: &Open) -> Option<&'static str> {
+    Some(match o {
+        Open::Sprite(_) => "sprites",
+        Open::Object(_) => "objects",
+        Open::Room(_) => "rooms",
+        Open::Sound(_) => "sounds",
+        Open::Script(_) => "scripts",
+        Open::Settings => return None,
+    })
+}
+
+/// One row of the asset browser.
+struct Row {
+    name: String,
+    label: String,
+    sprite: Option<String>,
+    what: Open,
 }
 
 fn recent_file() -> Option<PathBuf> {
@@ -339,6 +376,11 @@ impl EditorApp {
             theme,
             upd: crate::update::Actualizador::default(),
             upd_oculta: false,
+            order: Default::default(),
+            browser_focus: false,
+            browser_rect: egui::Rect::NOTHING,
+            focus_filter: false,
+            import: None,
         };
         if app.auto.screenshot.is_none() {
             app.upd.vigilar(&cc.egui_ctx);
@@ -361,6 +403,8 @@ impl EditorApp {
                 self.agent.close_project();
                 self.ws = Workspaces::default();
                 self.selected = None;
+                self.order.clear();
+                self.filter.clear();
                 self.tex = TexCache::default();
                 self.log.clear();
                 self.info(LogKind::Ok, format!("proyecto abierto: {}", path.display()));
@@ -426,6 +470,7 @@ impl EditorApp {
             return;
         };
         self.ws = Workspaces::from_file(&f, |o| make_tab(p, o).ok());
+        self.order = f.order.clone();
         self.docks = [f.docks[0], f.docks[1], f.docks[2], f.agent || self.auto.agent];
     }
 
@@ -435,7 +480,8 @@ impl EditorApp {
             return;
         }
         let Some(path) = crate::workspace::layout_path(&p.dir) else { return };
-        let f = self.ws.to_file(&p.dir.to_string_lossy(), self.docks);
+        let mut f = self.ws.to_file(&p.dir.to_string_lossy(), self.docks);
+        f.order = self.order.clone();
         if let (Some(d), Ok(text)) = (path.parent(), toml::to_string(&f)) {
             let _ = std::fs::create_dir_all(d);
             let _ = std::fs::write(path, text);
@@ -579,6 +625,16 @@ impl EditorApp {
             }
         }
         self.log.extend(lines);
+    }
+
+    /// What the Agente panel can attach this frame.
+    fn attach_sources<'a>(project: &'a Option<Project>, ws: &Workspaces, selected: &Option<Open>, log: &'a [LogLine]) -> crate::agent_attach::Sources<'a> {
+        let focused = ws.focused();
+        let room_selection = focused.and_then(|w| match &w.tab {
+            Tab::Room(r) => r.selection_toml().map(|t| (r.name.clone(), t)),
+            _ => None,
+        });
+        crate::agent_attach::Sources { project: project.as_ref(), selected: selected.clone(), focused: focused.map(|w| w.tab.open_key()), room_selection, log }
     }
 
     /// Sends a message to the agent, after saving everything so it sees what the user sees.
@@ -734,6 +790,10 @@ impl EditorApp {
                     self.save_all();
                     ui.close();
                 }
+                if ui.button("Importar assets…").on_hover_text("PNG, WAV, OGG, TTF u OTF de cualquier carpeta").clicked() {
+                    self.open_import(&[], None);
+                    ui.close();
+                }
                 if ui.button("Cerrar proyecto").clicked() {
                     if self.dirty_any() {
                         self.save_all();
@@ -884,13 +944,31 @@ impl EditorApp {
         let mut new_open = open;
         ui.horizontal(|ui| {
             let arrow = if open { "▾" } else { "▸" };
-            if ui.add(egui::Label::new(RichText::new(format!("{arrow} {title}")).strong()).sense(Sense::click())).clicked() {
+            let head = ui.add(egui::Label::new(RichText::new(format!("{arrow} {title}")).strong()).sense(Sense::click()));
+            if head.clicked() {
                 new_open = !open;
             }
-            if let Some(kind) = add {
+            // sprites, sounds and fonts can come from files elsewhere on disk
+            let import = crate::import::section_kind(key);
+            if let Some(k) = import {
+                head.context_menu(|ui| {
+                    if ui.button(crate::import::menu_label(k)).clicked() {
+                        self.open_import(&[], Some(k));
+                        ui.close();
+                    }
+                });
+            }
+            if add.is_some() || import.is_some() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("+").on_hover_text("crear").clicked() {
-                        self.dialog = Some(Dialog::New { kind, name: String::new(), extra: String::new(), error: None });
+                    if let Some(kind) = add {
+                        if ui.small_button("+").on_hover_text("crear").clicked() {
+                            self.dialog = Some(Dialog::New { kind, name: String::new(), extra: String::new(), error: None });
+                        }
+                    }
+                    if let Some(k) = import {
+                        if ui.small_button("⬇").on_hover_text(crate::import::menu_label(k)).clicked() {
+                            self.open_import(&[], Some(k));
+                        }
                     }
                 });
             }
@@ -899,90 +977,134 @@ impl EditorApp {
         open
     }
 
-    fn asset_row(&mut self, ui: &mut egui::Ui, label: &str, sprite: Option<String>, what: Open, deletable: bool) {
+    /// Draws one asset of the browser. Returns its row rectangle (None when filtered out).
+    fn asset_row(&mut self, ui: &mut egui::Ui, row: &Row, deletable: bool) -> Option<egui::Rect> {
         let f = self.filter.to_lowercase();
-        if !f.is_empty() && !label.to_lowercase().contains(&f) {
-            return;
+        if !f.is_empty() && !row.label.to_lowercase().contains(&f) {
+            return None;
         }
-        let active = self.selected.as_ref() == Some(&what) || self.ws.focused().is_some_and(|w| w.tab.open_key() == what);
-        let resp = ui
-            .horizontal(|ui| {
-                ui.add_space(10.0);
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
-                if let (Some(s), Some(p)) = (&sprite, &self.project) {
-                    if let Some(t) = self.tex.get(ui.ctx(), p, s) {
-                        t.draw_fit(ui.painter(), 0, rect);
-                    }
+        let what = &row.what;
+        let dragged = egui::DragAndDrop::payload::<Open>(ui.ctx()).is_some_and(|p| *p == *what);
+        let active = dragged || self.selected.as_ref() == Some(what) || self.ws.focused().is_some_and(|w| w.tab.open_key() == *what);
+        let ir = ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+            if let (Some(s), Some(p)) = (&row.sprite, &self.project) {
+                if let Some(t) = self.tex.get(ui.ctx(), p, s) {
+                    t.draw_fit(ui.painter(), 0, rect);
                 }
-                ui.add(egui::Button::selectable(active, label).frame(false))
-            })
-            .inner;
-        if resp.clicked() {
+            }
+            // click: select · double click: open · drag: reorder or drop somewhere else
+            ui.add(egui::Button::selectable(active, &row.label).frame(false).sense(Sense::click_and_drag()))
+        });
+        let resp = ir.inner;
+        crate::dnd::source(&resp, || what.clone());
+        if resp.clicked() || resp.drag_started() {
             self.selected = Some(what.clone());
+            self.browser_focus = true;
         }
         if resp.double_clicked() {
             self.open(what.clone());
         }
-        resp.on_hover_text("clic: inspector · doble clic: abrir en el workspace").context_menu(|ui| {
+        resp.on_hover_text("clic: inspector · doble clic: abrir · arrastrar: reordenar o soltar en el workspace, una room o un objeto").context_menu(|ui| {
             if ui.button("Abrir").clicked() {
                 self.open(what.clone());
                 ui.close();
             }
-            if deletable && ui.button("Eliminar…").clicked() {
+            if deletable && ui.button("Eliminar…    Supr").clicked() {
                 self.dialog = Some(Dialog::Delete { what: what.clone() });
                 ui.close();
             }
         });
+        Some(ir.response.rect)
+    }
+
+    /// A browser section's rows, in the user's order, reorderable by dragging.
+    fn asset_list(&mut self, ui: &mut egui::Ui, key: &'static str, rows: Vec<Row>) {
+        let mut rects = vec![];
+        for r in &rows {
+            if let Some(rect) = self.asset_row(ui, r, true) {
+                rects.push(rect);
+            }
+        }
+        // reordering only makes sense with every row visible
+        if !self.filter.is_empty() || rects.len() != rows.len() {
+            return;
+        }
+        let Some(dragged) = egui::DragAndDrop::payload::<Open>(ui.ctx()) else { return };
+        if section_key(&dragged) != Some(key) {
+            return;
+        }
+        let Some(from) = rows.iter().position(|r| r.what == *dragged) else { return };
+        let area = crate::dnd::list_area(ui, &rects, true);
+        if let Some((from, to)) = crate::dnd::reorder_in(ui, area, &rects, true, from) {
+            egui::DragAndDrop::clear_payload(ui.ctx());
+            let mut names: Vec<String> = rows.into_iter().map(|r| r.name).collect();
+            crate::dnd::move_item(&mut names, from, to);
+            self.order.insert(key.to_string(), names);
+            self.save_layout();
+        }
+    }
+
+    fn sorted(&self, key: &str, names: Vec<String>) -> Vec<String> {
+        match self.order.get(key) {
+            Some(o) => crate::dnd::apply_order(names, o),
+            None => names,
+        }
     }
 
     fn asset_browser(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("🔍");
-            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filtrar").desired_width(f32::INFINITY));
+            let r = ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filtrar  (Ctrl+F)").desired_width(f32::INFINITY));
+            if std::mem::take(&mut self.focus_filter) {
+                r.request_focus();
+            }
+            if (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(Key::Escape)) {
+                self.filter.clear();
+                r.surrender_focus();
+            }
         });
         ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             let Some(p) = &self.project else { return };
-            let sprites: Vec<String> = p.sprite_names();
-            let sounds: Vec<String> = p.sounds.iter().map(|s| s.name.clone()).collect();
-            let objects: Vec<(String, Option<String>, Option<String>)> =
-                p.objects.iter().map(|o| (o.name.clone(), p.object_sprite(&o.name), o.parent.clone())).collect();
-            let rooms: Vec<String> = p.room_names();
-            let start = p.game.game.start_room.clone();
-            let scripts: Vec<String> = p.scripts.iter().map(|s| s.rel.clone()).collect();
-            let fonts: Vec<String> = p.fonts.iter().map(|s| s.name.clone()).collect();
-
-            if self.section(ui, "sprites", "Sprites", Some(NewKind::PixelSprite)) {
-                for s in sprites {
-                    self.asset_row(ui, &s, Some(s.clone()), Open::Sprite(s.clone()), true);
-                }
-            }
-            if self.section(ui, "objects", "Objetos", Some(NewKind::Object)) {
-                for (o, spr, parent) in objects {
-                    let label = match parent {
+            let sprites = self.sorted("sprites", p.sprite_names());
+            let sprites: Vec<Row> = sprites.into_iter().map(|s| Row { label: s.clone(), sprite: Some(s.clone()), what: Open::Sprite(s.clone()), name: s }).collect();
+            let objects = self.sorted("objects", p.object_names());
+            let objects: Vec<Row> = objects
+                .into_iter()
+                .map(|o| {
+                    let label = match p.object(&o).and_then(|e| e.parent.clone()) {
                         Some(pa) => format!("{o}  ‹ {pa}"),
                         None => o.clone(),
                     };
-                    self.asset_row(ui, &label, spr, Open::Object(o.clone()), true);
+                    Row { label, sprite: p.object_sprite(&o), what: Open::Object(o.clone()), name: o }
+                })
+                .collect();
+            let start = p.game.game.start_room.clone();
+            let rooms = self.sorted("rooms", p.room_names());
+            let rooms: Vec<Row> = rooms
+                .into_iter()
+                .map(|r| Row { label: if start.as_deref() == Some(r.as_str()) { format!("{r}  ★") } else { r.clone() }, sprite: None, what: Open::Room(r.clone()), name: r })
+                .collect();
+            let sounds = self.sorted("sounds", p.sounds.iter().map(|s| s.name.clone()).collect());
+            let sounds: Vec<Row> = sounds.into_iter().map(|s| Row { label: s.clone(), sprite: None, what: Open::Sound(s.clone()), name: s }).collect();
+            let scripts = self.sorted("scripts", p.scripts.iter().map(|s| s.rel.clone()).collect());
+            let scripts: Vec<Row> = scripts.into_iter().map(|s| Row { label: s.clone(), sprite: None, what: Open::Script(s.clone()), name: s }).collect();
+            let fonts: Vec<String> = p.fonts.iter().map(|s| s.name.clone()).collect();
+
+            for (key, title, kind, rows) in [
+                ("sprites", "Sprites", NewKind::PixelSprite, sprites),
+                ("objects", "Objetos", NewKind::Object, objects),
+                ("rooms", "Rooms", NewKind::Room, rooms),
+                ("sounds", "Sonidos", NewKind::Sound, sounds),
+                ("scripts", "Scripts", NewKind::Script, scripts),
+            ] {
+                if self.section(ui, key, title, Some(kind)) {
+                    self.asset_list(ui, key, rows);
                 }
             }
-            if self.section(ui, "rooms", "Rooms", Some(NewKind::Room)) {
-                for r in rooms {
-                    let label = if start.as_deref() == Some(r.as_str()) { format!("{r}  ★") } else { r.clone() };
-                    self.asset_row(ui, &label, None, Open::Room(r.clone()), true);
-                }
-            }
-            if self.section(ui, "sounds", "Sonidos", Some(NewKind::Sound)) {
-                for s in sounds {
-                    self.asset_row(ui, &s, None, Open::Sound(s.clone()), true);
-                }
-            }
-            if self.section(ui, "scripts", "Scripts", Some(NewKind::Script)) {
-                for s in scripts {
-                    self.asset_row(ui, &s, None, Open::Script(s.clone()), true);
-                }
-            }
-            if !fonts.is_empty() && self.section(ui, "fonts", "Fuentes", None) {
+            if self.section(ui, "fonts", "Fuentes", None) {
                 for f in fonts {
                     ui.horizontal(|ui| {
                         ui.add_space(30.0);
@@ -997,6 +1119,24 @@ impl EditorApp {
         });
     }
 
+    /// An asset dropped on the empty workspace canvas: open it there (or move it there).
+    fn drop_on_canvas(&mut self, what: Open, pos: egui::Pos2) {
+        self.selected = Some(what.clone());
+        if self.ws.find(&what).is_none() {
+            let Some(p) = &self.project else { return };
+            match make_tab(p, &what) {
+                Ok(tab) => {
+                    self.ws.add(tab, None);
+                }
+                Err(Some(e)) => return self.info(LogKind::Error, e),
+                Err(None) => return,
+            }
+        }
+        if let Some(id) = self.ws.find(&what) {
+            self.ws.place_at(id, pos);
+        }
+    }
+
     /// Workspace tabs plus the canvas with the open editors.
     fn workspace(&mut self, ui: &mut egui::Ui) {
         let dirty: HashSet<u64> = match &self.project {
@@ -1009,7 +1149,8 @@ impl EditorApp {
             actions.extend(self.ws.tab_bar(ui, &dirty));
         });
         let mut opens: Vec<(Open, u64)> = vec![];
-        let focused = self.ws.cur().focus;
+        // while the asset browser has the keyboard, Delete belongs to it
+        let focused = self.ws.cur().focus.filter(|_| !self.browser_focus);
         let (project, tex, log) = (&mut self.project, &mut self.tex, &mut self.log);
         let Some(project) = project.as_mut() else { return };
         actions.extend(self.ws.canvas(ui, &dirty, |ui, w| {
@@ -1024,6 +1165,7 @@ impl EditorApp {
         for a in actions {
             match a {
                 WsAction::Close(id) => self.request_close(id),
+                WsAction::DropAsset(what, pos) => self.drop_on_canvas(what, pos),
                 WsAction::CloseWorkspace(i) => {
                     let ids: Vec<u64> = self.ws.list.get(i).map(|w| w.wins.iter().map(|x| x.id).collect()).unwrap_or_default();
                     for id in ids {
@@ -1547,8 +1689,25 @@ impl EditorApp {
                 }
             }
         }
+        // `--agent --select`: show sample attachments in the Agente dock.
+        if self.auto.agent && self.auto.select && self.auto.frames == 20 {
+            let src = Self::attach_sources(&self.project, &self.ws, &self.selected, &self.log);
+            self.agent.attach_defaults(&src);
+        }
+        if self.auto.frames == 2 && !self.auto.import.is_empty() {
+            let paths = std::mem::take(&mut self.auto.import);
+            self.open_import(&paths, None);
+        }
+        if self.auto.import_run && self.auto.frames == 10 {
+            self.run_import();
+        }
         if self.auto.fit && self.auto.frames == 4 {
             self.ws.fit_all();
+        }
+        if let Some((what, _)) = &self.auto.drag {
+            if self.auto.frames >= 6 {
+                egui::DragAndDrop::set_payload(ctx, what.clone());
+            }
         }
         let Some(path) = self.auto.screenshot.clone() else { return };
         ctx.request_repaint();
@@ -1570,6 +1729,26 @@ impl EditorApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        let (find, escape, delete) = ctx.input_mut(|i| (i.consume_key(Modifiers::COMMAND, Key::F), i.key_pressed(Key::Escape), i.key_pressed(Key::Delete)));
+        // a click anywhere outside the asset browser takes the keyboard away from it
+        if ctx.input(|i| i.pointer.any_pressed()) && !ctx.pointer_interact_pos().is_some_and(|p| self.browser_rect.contains(p)) {
+            self.browser_focus = false;
+        }
+        if find {
+            self.docks[1] = true;
+            self.focus_filter = true;
+        }
+        let typing = ctx.memory(|m| m.focused().is_some());
+        if self.browser_focus && !typing && self.dialog.is_none() {
+            if escape && !self.filter.is_empty() && !egui::DragAndDrop::has_any_payload(&ctx) {
+                self.filter.clear();
+            }
+            if delete {
+                if let Some(what) = self.selected.clone().filter(|w| *w != Open::Settings) {
+                    self.dialog = Some(Dialog::Delete { what });
+                }
+            }
+        }
         let (save, run, check, undo, redo, close, fit) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::COMMAND, Key::S),
@@ -1594,7 +1773,6 @@ impl EditorApp {
             self.check(true);
         }
         // text fields handle their own undo; only forward when nothing has keyboard focus
-        let typing = ctx.memory(|m| m.focused().is_some());
         if !typing {
             if undo {
                 if let Some(w) = self.ws.focused_mut() {
@@ -1616,6 +1794,15 @@ impl EditorApp {
 }
 
 impl eframe::App for EditorApp {
+    /// `--drag`: keep the pointer where the fake drag is held.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some((_, pos)) = &self.auto.drag {
+            if self.auto.frames >= 5 {
+                raw_input.events.push(egui::Event::PointerMoved(*pos));
+            }
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll(&ctx);
@@ -1643,20 +1830,23 @@ impl eframe::App for EditorApp {
             egui::Panel::bottom("output").frame(side).resizable(true).default_size(170.0).show(ui, |ui| self.output(ui));
         }
         if self.docks[3] {
-            let has_project = self.project.is_some();
-            let send = egui::Panel::right("agent").frame(side).resizable(true).default_size(360.0).min_size(260.0).show(ui, |ui| self.agent.ui(ui, has_project)).inner;
+            let src = Self::attach_sources(&self.project, &self.ws, &self.selected, &self.log);
+            let agent = &mut self.agent;
+            let send = egui::Panel::right("agent").frame(side).resizable(true).default_size(360.0).min_size(260.0).show(ui, |ui| agent.ui(ui, &src)).inner;
             if let Some(prompt) = send {
                 self.send_to_agent(prompt);
             }
         }
         if self.docks[1] {
-            egui::Panel::right("assets").frame(side).resizable(true).default_size(260.0).show(ui, |ui| self.asset_browser(ui));
+            self.browser_rect = egui::Panel::right("assets").frame(side).resizable(true).default_size(260.0).show(ui, |ui| self.asset_browser(ui)).response.rect;
         }
         if self.docks[0] {
             egui::Panel::left("inspector").frame(side).resizable(true).default_size(280.0).show(ui, |ui| self.inspector(ui));
         }
         egui::CentralPanel::default().frame(crate::theme::editor_frame(&ctx).inner_margin(0)).show(ui, |ui| self.workspace(ui));
         self.dialogs(&ctx);
+        self.import_frame(ui);
+        crate::dnd::ghost(&ctx);
     }
 }
 
@@ -1719,6 +1909,91 @@ impl EditorApp {
                 _ => {}
             });
         });
+    }
+}
+
+// ------------------------------------------------------------------ importing external files
+
+impl EditorApp {
+    /// Opens the Importar assets dialog (or adds to the open one) with these files or folders.
+    fn open_import(&mut self, paths: &[PathBuf], filter: Option<crate::import::Kind>) {
+        let Some(p) = &self.project else { return };
+        let owners = crate::import::owners(p);
+        let d = self.import.get_or_insert_with(|| crate::import::ImportDialog::new(crate::import::last_dir_file()));
+        if filter.is_some() {
+            d.filter = filter;
+        }
+        for path in paths {
+            d.add(path, &owners);
+        }
+    }
+
+    /// The import dialog and files dropped from the OS (after the Agente panel had its turn).
+    fn import_frame(&mut self, ui: &egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let (hovered, dropped, pointer) = ctx.input(|i| (i.raw.hovered_files.len(), i.raw.dropped_files.clone(), i.pointer.latest_pos()));
+        if hovered > 0 || !dropped.is_empty() {
+            let agent = if self.docks[3] { crate::import::panel_rect(ui, "agent") } else { None };
+            if crate::import::route_drop(pointer, agent, self.project.is_some()) == crate::import::DropTarget::Import {
+                if hovered > 0 {
+                    crate::import::paint_drop_hint(&ctx, hovered);
+                }
+                let paths: Vec<PathBuf> = dropped.iter().map(|f| f.path().to_path_buf()).collect();
+                if !paths.is_empty() {
+                    self.open_import(&paths, None);
+                }
+            }
+        }
+        let (Some(d), Some(p)) = (&mut self.import, &self.project) else { return };
+        let owners = crate::import::owners(p);
+        match d.show(&ctx, &owners) {
+            crate::import::Outcome::Open => {}
+            crate::import::Outcome::Cancel => self.import = None,
+            crate::import::Outcome::Import => self.run_import(),
+        }
+    }
+
+    /// The dialog's Importar button.
+    fn run_import(&mut self) {
+        let (Some(d), Some(p)) = (&mut self.import, &self.project) else { return };
+        let done = d.run(&p.dir);
+        if d.items.is_empty() {
+            self.import = None;
+        }
+        self.finish_import(done);
+    }
+
+    /// After importing: reload the lists, refresh editors of replaced assets, select the last
+    /// one, log it and check the project with the engine.
+    fn finish_import(&mut self, done: Vec<crate::import::Imported>) {
+        if done.is_empty() {
+            return;
+        }
+        let Some(p) = &mut self.project else { return };
+        p.reload_lists();
+        let mut lines = vec![];
+        for imp in &done {
+            lines.push(LogLine { kind: LogKind::Ok, text: format!("Importado: {} '{}' → {}", imp.kind.label(), imp.name, imp.files.join(", ")) });
+            if let Some(Err(e)) = p.sprite_entry(&imp.name).map(|s| &s.data).filter(|_| imp.kind == crate::import::Kind::Sprite) {
+                lines.push(LogLine { kind: LogKind::Error, text: e.clone() });
+            }
+            let Some(what) = imp.open().filter(|_| imp.replaced) else { continue };
+            for w in self.ws.wins_mut() {
+                if w.tab.open_key() == what && !w.tab.dirty(p) {
+                    if let Ok(tab) = make_tab(p, &what) {
+                        w.tab = tab;
+                    }
+                }
+            }
+        }
+        if let Some(what) = done.iter().rev().find_map(|i| i.open()) {
+            if let Some(k) = section_key(&what) {
+                self.folded.insert(k, true);
+            }
+            self.selected = Some(what);
+        }
+        self.log.extend(lines);
+        self.check(false);
     }
 }
 

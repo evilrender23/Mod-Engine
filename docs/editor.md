@@ -50,6 +50,31 @@ Funcionan como los de GameMaker:
 | Ctrl+Z / Ctrl+Y | deshacer / rehacer (rooms y sprites; los campos de texto tienen su propio deshacer) |
 | Ctrl+W | cerrar la ventana con foco |
 | Ctrl+0 | ver todas las ventanas del workspace |
+| Ctrl+F | buscar en el navegador de assets (Esc borra el filtro) |
+| Supr | con un asset elegido en el navegador: eliminarlo (pide confirmación) |
+
+### Arrastrar y soltar
+
+Casi todo lo que está en una lista se puede arrastrar (el cursor cambia a una mano; un clic
+sigue siendo un clic, el arrastre empieza al mover unos píxeles; Esc lo cancela):
+
+| Arrastras… | …y lo sueltas en | Resultado |
+|---|---|---|
+| un asset del navegador | otra posición de su sección | cambia el orden de la lista (sólo en el editor) |
+| un asset del navegador | el fondo vacío del workspace | se abre ahí (si ya estaba abierto, la ventana se mueve ahí) |
+| un objeto (navegador o paleta de la room) | el lienzo de una room | coloca una instancia en esa celda (o libre, sin «ajustar a rejilla»); un solo paso de deshacer |
+| un sprite | la zona de sprite de un objeto | pasa a ser el sprite del objeto |
+| un objeto | el campo *Padre* de otro objeto | pasa a ser su padre (no deja crear ciclos) |
+| una capa de la room | otra posición de la lista de capas | reordena las capas (deshacer con Ctrl+Z) |
+| un evento o método | otra posición de su lista | cambia su orden en el fichero `.ms` |
+| un fotograma del sprite | otra posición de la tira | reordena los fotogramas (Ctrl+Z) |
+| una pestaña de workspace | otra posición de la barra | reordena los workspaces |
+| el título de una ventana | la pestaña de otro workspace | mueve la ventana a ese workspace |
+
+El orden personalizado del navegador se guarda con la disposición del proyecto
+(`~/.config/modengine/layouts/`, tabla `[order]`), no dentro del proyecto: no cambia el juego
+(el orden de las rooms del juego sigue siendo el de `game.toml`). Los assets nuevos aparecen al
+final de su sección.
 
 Al guardar, el editor vuelve a cargar el proyecto con el motor y avisa en la salida si algo no
 compila. Lo que se elimina no se borra: se mueve a la carpeta `.trash/` del proyecto.
@@ -126,6 +151,46 @@ Para sprites PNG: tira o rejilla de fotogramas, fps, origen y máscara.
 - **Ajustes del juego**: nombre, room inicial, orden de las rooms, resolución, escala, pasos por
   segundo y la paleta compartida de pixel art.
 
+## Importar assets
+
+Trae imágenes, sonidos y fuentes de cualquier carpeta del disco al proyecto:
+
+| Fichero | Va a | Es |
+|---|---|---|
+| `.png` | `sprites/` | un sprite |
+| `.wav`, `.ogg` | `sounds/` | un sonido |
+| `.ttf`, `.otf` | `fonts/` | una fuente (tamaño 16) |
+
+Se abre con **Archivo → Importar assets…**, con el botón **⬇** (o el clic derecho) en la cabecera
+de **Sprites**, **Sonidos** o **Fuentes** del navegador, o **arrastrando ficheros desde el gestor
+de archivos** a la ventana del editor (salvo encima del panel Agente, que los adjunta a la
+conversación). El diálogo tiene:
+
+- un campo para pegar una ruta (`~/…` y las rutas `file://` que pegan los gestores de archivos
+  valen); un fichero va a la lista y una carpeta se abre en el explorador;
+- un explorador de carpetas que solo enseña lo importable: clic para seleccionar varios y
+  **Añadir seleccionados**, doble clic para añadir uno, **Añadir todos**. Recuerda la última
+  carpeta en `~/.config/modengine/import.txt`;
+- por cada fichero: el **nombre** del asset (sale del nombre del fichero, limpio —`Moneda dorada
+  (2).png` → `moneda_dorada_2`— y sin repetir: `coin` pasa a `coin_2` si ya existe) y, para las
+  imágenes, una vista previa con la rejilla de frames y el origen, el tamaño, **tira horizontal**
+  con su número de frames o **rejilla** con el tamaño del frame, **origen** y **fps**. Un fichero
+  `algo_strip4.png` llega ya como tira de 4 frames (convención de GameMaker).
+
+Al importar, el fichero se copia como `<nombre>.<ext>` en su carpeta. Solo si un sprite tiene
+opciones distintas de las de un PNG suelto (un frame, origen arriba a la izquierda, 10 fps) se
+escribe también su `<nombre>.toml` (`image`, `frames` o `frame_size`, `origin`, `fps`; ver
+[proyecto.md](proyecto.md)). Luego se recargan las listas, se selecciona el asset nuevo, la
+**Salida** dice `Importado: sprite 'hero' → sprites/hero.png, sprites/hero.toml` y se comprueba
+que el proyecto carga.
+
+Los problemas se ven en el diálogo, en rojo, y bloquean el botón **Importar** hasta corregirlos:
+formato no soportado (JPG, MP3…), imagen que no se puede leer, `.wav`/`.ogg`/`.ttf` cuyo contenido
+no es lo que dice la extensión, nombre no válido o repetido. Si el nombre es de otro asset del
+mismo tipo aparece **Sobrescribir**: el antiguo va a `.trash/`. Los ficheros de más de 20 MB solo
+avisan. No se pueden juntar varios PNG en un sprite: el motor lee una imagen por sprite (una tira
+o una rejilla).
+
 ## Agente
 
 El panel **Agente** (a la derecha; **✦ Agente** en la barra de arriba o **Ver → Agente**) conversa
@@ -163,13 +228,43 @@ iniciado sesión en él una vez desde un terminal; si falta, el panel dice cómo
 - Agente, modelo de cada agente, permisos y la última lista de modelos de cada programa se
   recuerdan en `~/.config/modengine/agent.toml`. Cerrar el proyecto o el editor detiene el agente.
 
+### Adjuntar contexto
+
+**📎 Adjuntar** (junto al modelo) añade contexto al siguiente mensaje:
+
+- **Asset seleccionado** en el navegador y **Ventana enfocada**: el fichero del asset (un objeto
+  es el `.ms` que lo define; Ajustes, `game.toml`; un sprite PNG va como imagen).
+- **Selección de la room**: la instancia libre seleccionada en la room enfocada (⬚ Mover), tal
+  como la escribe el fichero de la room, con los cambios sin guardar.
+- **Salida**: sus últimas 50 líneas (por ejemplo, los errores de *Comprobar*).
+- **Fichero del proyecto** (lista con filtro), **Imagen de un sprite** (los PNG) y **Otra ruta**:
+  cualquier fichero, carpeta o imagen, absoluta, con `~/` o relativa al proyecto.
+- **Arrastrar y soltar:** un asset del navegador o ficheros del gestor de archivos soltados sobre el
+  panel se adjuntan.
+- **@ en el mensaje:** sugiere assets y ficheros del proyecto que coinciden con lo escrito;
+  flechas para elegir, Tab o Intro para adjuntar (deja `@nombre` en el texto), Esc cierra.
+
+Los adjuntos aparecen sobre el cuadro de mensaje, cada uno con su **×**. Se envían con el mensaje
+(que puede ir vacío), quedan anotados bajo él en la conversación y se quitan. Al agente le llegan
+en un bloque `<attached-by-the-user>` al final del mensaje:
+
+- **Ficheros del proyecto:** su ruta relativa al proyecto (y qué asset es); el agente los abre él
+  mismo. Como el editor guarda todo antes de enviar, ve lo mismo que tú.
+- **Texto de fuera del proyecto, selección de la room y Salida:** dentro del mensaje, hasta 20 KB
+  por adjunto (lo que pase se corta con una nota). Los binarios y carpetas de fuera, solo la ruta.
+- **Imágenes:** Codex las recibe con `--image=<ruta>` (una por opción); Claude Code y Antigravity
+  reciben su ruta y la miran con su herramienta de leer.
+- **Permisos:** lo adjuntado de fuera del proyecto se puede leer (solo eso): Claude Code con
+  `--allowedTools "Read(//ruta)"` (`/**` si es carpeta), Antigravity con `read_file(ruta)` en sus
+  `--settings`. Codex lee fuera del proyecto en cualquier modo.
+
 Cómo se lanza cada programa (en la carpeta del proyecto, sin ventana):
 
 | Agente | Orden |
 |---|---|
-| Claude Code | `claude --print --output-format stream-json --verbose --include-partial-messages --permission-mode plan\|acceptEdits\|auto --append-system-prompt-file <contexto> [--model M] [--resume ID] --allowedTools "Read(//<docs>/**)"`, mensaje por stdin |
+| Claude Code | `claude --print --output-format stream-json --verbose --include-partial-messages --permission-mode plan\|acceptEdits\|auto --append-system-prompt-file <contexto> [--model M] [--resume ID] --allowedTools "Read(//<docs>/**)" ["Read(//<adjunto>)"…]`, mensaje y adjuntos por stdin |
 | Antigravity | `agy --output-format stream-json --mode plan\|accept-edits\|auto --settings <permisos JSON> [--model M] [--conversation ID] --print=<contexto + mensaje>` |
-| Codex | `codex exec --json --skip-git-repo-check --sandbox read-only\|workspace-write [--model M] [resume ID] -`, contexto + mensaje por stdin |
+| Codex | `codex exec --json --skip-git-repo-check --sandbox read-only\|workspace-write [--model M] [resume ID] [--image=<imagen>…] -`, contexto + mensaje + adjuntos por stdin |
 
 ## Tema
 
@@ -201,3 +296,5 @@ uno real: `MODENGINE_AGENT_SMOKE=claude cargo test -p modengine-editor -- --igno
 
 Para capturas automáticas: `modeditor <proyecto> --open room:level1 --screenshot captura.png`
 (`--open` acepta `room:`, `object:`, `sprite:`, `sound:`, `script:` y `settings`; `--agent` muestra el panel Agente).
+`--import <fichero o carpeta>` (repetible) abre el diálogo de importar con ellos y
+`--import-run` además pulsa **Importar**.

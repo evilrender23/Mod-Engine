@@ -506,8 +506,13 @@ impl SpriteEditor {
         });
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
+                // drag a frame to another place in the strip (one undo step)
+                let list_id = ui.scope_id().with("sprite_frames");
+                let mut rects = vec![];
                 for f in 0..self.m.pix.len() {
-                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(52.0), Sense::click());
+                    let (r, resp) = ui.allocate_exact_size(Vec2::splat(52.0), Sense::click_and_drag());
+                    crate::dnd::source(&resp, || crate::dnd::ListDrag { list: list_id, from: f, label: format!("▣ fotograma {f}") });
+                    rects.push(r);
                     checkerboard(ui.painter(), r, 6.0);
                     if let Some(t) = &self.tex {
                         let k = (48.0 / self.m.w as f32).min(48.0 / self.m.h as f32);
@@ -516,10 +521,15 @@ impl SpriteEditor {
                     let stroke = if f == self.frame { Stroke::new(2.0, crate::theme::colors(ui.ctx()).selection) } else { Stroke::new(1.0, crate::theme::colors(ui.ctx()).frame_border) };
                     ui.painter().rect_stroke(r, 2.0, stroke, StrokeKind::Inside);
                     ui.painter().text(r.left_top() + Vec2::new(3.0, 1.0), egui::Align2::LEFT_TOP, f.to_string(), egui::FontId::proportional(10.0), Color32::WHITE);
-                    if resp.clicked() {
+                    if resp.clicked() || resp.drag_started() {
                         self.frame = f;
                         self.play = false;
                     }
+                }
+                if let Some((from, to)) = crate::dnd::reorder(ui, list_id, &rects, false) {
+                    self.snapshot();
+                    self.frame = crate::dnd::move_item(&mut self.m.pix, from, to);
+                    self.after_change();
                 }
             });
         });

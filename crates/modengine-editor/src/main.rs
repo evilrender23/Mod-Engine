@@ -1,9 +1,12 @@
 //! Mod Engine visual editor (`modeditor [project]`).
 
 mod agent;
+mod agent_attach;
 mod agent_panel;
 mod app;
+mod dnd;
 mod highlight;
+mod import;
 mod object;
 mod objsrc;
 mod project;
@@ -52,6 +55,17 @@ fn main() -> eframe::Result {
             "--select" => auto.select = true,
             "--fit" => auto.fit = true,
             "--agent" => auto.agent = true,
+            // --import <file or folder>: open the import dialog with it (screenshots)
+            "--import" => auto.import.extend(args.next().map(std::path::PathBuf::from)),
+            "--import-run" => auto.import_run = true,
+            // --drag object:Coin 700,400 : screenshot of a drag held at that point
+            "--drag" => {
+                let what = args.next().and_then(|s| app::Open::parse(&s));
+                let at = args.next().and_then(|s| s.split_once(',').and_then(|(x, y)| Some(eframe::egui::Pos2::new(x.trim().parse().ok()?, y.trim().parse().ok()?))));
+                if let (Some(w), Some(p)) = (what, at) {
+                    auto.drag = Some((w, p));
+                }
+            }
             _ => path = Some(std::path::PathBuf::from(a)),
         }
     }

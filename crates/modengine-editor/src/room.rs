@@ -585,9 +585,12 @@ impl RoomEditor {
         let mut remove = None;
         let mut swap = None;
         let n = self.m.layers.len();
+        let list_id = ui.scope_id().with("room_layers");
+        let dragging = crate::dnd::dragging_from(ui.ctx(), list_id);
+        let mut rects = vec![];
         for i in 0..n {
             let l = &mut self.m.layers[i];
-            ui.horizontal(|ui| {
+            let row = ui.horizontal(|ui| {
                 let eye = if l.t.visible { "👁" } else { "–" };
                 if ui.small_button(eye).on_hover_text("mostrar/ocultar").clicked() {
                     l.t.visible = !l.t.visible;
@@ -597,8 +600,10 @@ impl RoomEditor {
                     "background" => "🖼",
                     _ => "◆",
                 };
-                let r = ui.add(egui::Button::selectable(self.layer == i, format!("{icon} {}", if l.t.name.is_empty() { &l.t.kind } else { &l.t.name })));
-                if r.clicked() {
+                let label = format!("{icon} {}", if l.t.name.is_empty() { &l.t.kind } else { &l.t.name });
+                let r = ui.add(egui::Button::selectable(self.layer == i || dragging == Some(i), label.clone()).sense(Sense::click_and_drag())).on_hover_text("arrastra para cambiar el orden");
+                crate::dnd::source(&r, || crate::dnd::ListDrag { list: list_id, from: i, label });
+                if r.clicked() || r.drag_started() {
                     self.layer = i;
                     self.sel = None;
                 }
@@ -616,6 +621,14 @@ impl RoomEditor {
                     swap = Some((i, i + 1));
                 }
             });
+            rects.push(row.response.rect);
+        }
+        // drag a layer between two others (one undo step, like the arrows)
+        if let Some((from, to)) = crate::dnd::reorder(ui, list_id, &rects, true) {
+            let mut idx: Vec<usize> = (0..n).collect();
+            crate::dnd::move_item(&mut idx, from, to);
+            crate::dnd::move_item(&mut self.m.layers, from, to);
+            self.layer = idx.iter().position(|k| *k == self.layer).unwrap_or(0);
         }
         if let Some((a, b)) = swap {
             self.m.layers.swap(a, b);
@@ -789,7 +802,9 @@ impl RoomEditor {
                             } else {
                                 ui.painter().rect_stroke(r.shrink(3.0), 2.0, Stroke::new(1.0, Color32::GRAY), StrokeKind::Inside);
                             }
-                            if ui.add(egui::Button::selectable(self.brush.as_deref() == Some(n.as_str()), &n)).clicked() {
+                            let r = ui.add(egui::Button::selectable(self.brush.as_deref() == Some(n.as_str()), &n).sense(Sense::click_and_drag())).on_hover_text("clic: pincel · arrastrar a la room: colocar una instancia");
+                            crate::dnd::source(&r, || Open::Object(n.clone()));
+                            if r.clicked() {
                                 self.brush = Some(n.clone());
                                 if matches!(self.tool, Tool::Erase | Tool::Pick | Tool::Select) {
                                     self.tool = Tool::Paint;
@@ -839,6 +854,19 @@ impl RoomEditor {
                 ui.label("Añade una capa con el botón + de la izquierda.");
             }
         }
+    }
+
+    /// The selected free instance as the room file writes it (attached to Agente messages).
+    pub fn selection_toml(&self) -> Option<String> {
+        let l = self.m.layers.get(self.layer)?;
+        let i = l.t.instances.get(self.sel?)?;
+        let vars = if i.vars.is_empty() {
+            String::new()
+        } else {
+            let v: Vec<String> = i.vars.iter().map(|(k, v)| format!("{} = {v}", key(k))).collect();
+            format!(", vars = {{ {} }}", v.join(", "))
+        };
+        Some(format!("# layer {}, instance {} of its instances list\n{{ object = {}, x = {}, y = {}{vars} }}", q(&l.t.name), self.sel? + 1, q(&i.object), num(i.x), num(i.y)))
     }
 
     /// Selects the first free instance with the move tool (used by `--select`).
@@ -1104,6 +1132,39 @@ impl RoomEditor {
             let v = Rect::from_min_size(to_s(Vec2::new(self.m.camera.x as f32, self.m.camera.y as f32)), Vec2::new(d.width as f32, d.height as f32) * z);
             painter.rect_stroke(v, 0.0, Stroke::new(1.0, pal.camera), StrokeKind::Middle);
             painter.text(v.left_top() + Vec2::new(3.0, 2.0), egui::Align2::LEFT_TOP, "cámara", egui::FontId::proportional(11.0), pal.camera);
+        }
+
+        // ---- an object dragged from the asset browser or the palette: place one instance
+        if let Some(Open::Object(name)) = resp.dnd_hover_payload::<Open>().map(|o| (*o).clone()) {
+            let target = match self.m.layers.get(self.layer) {
+                Some(l) if l.kind() == "instances" => Some(self.layer),
+                _ => self.m.layers.iter().position(|l| l.kind() == "instances"),
+            };
+            if let (Some(li), Some(p)) = (target, crate::dnd::pointer_in(ui, area)) {
+                let w = to_w(p);
+                let l = &self.m.layers[li];
+                let (cw, ch) = (l.cell[0] as f32, l.cell[1] as f32);
+                let off = Vec2::new(l.t.x as f32, l.t.y as f32);
+                let cell = (((w.x - off.x) / cw).floor() as i32, ((w.y - off.y) / ch).floor() as i32);
+                let cell_rect = Rect::from_min_size(Pos2::ZERO + off + Vec2::new(cell.0 as f32 * cw, cell.1 as f32 * ch), Vec2::new(cw, ch));
+                let at = if self.snap { None } else { Some(Pos2::new(w.x.round(), w.y.round())) };
+                draw_object(&painter, cx.tex, ui.ctx(), project, &spr_of, &name, at, cell_rect, &to_s, z, Color32::from_white_alpha(170));
+                if self.snap {
+                    painter.rect_stroke(Rect::from_min_max(to_s(cell_rect.min.to_vec2()), to_s(cell_rect.max.to_vec2())), 0.0, Stroke::new(2.0, pal.selection), StrokeKind::Inside);
+                }
+                if resp.dnd_release_payload::<Open>().is_some() {
+                    // the end-of-frame comparison in `ui` turns this into one undo step
+                    let layer = &mut self.m.layers[li];
+                    if self.snap {
+                        layer.set_obj(cell.0, cell.1, vec![name.clone()]);
+                    } else {
+                        layer.t.instances.push(InstToml { object: name.clone(), x: w.x.round() as f64, y: w.y.round() as f64, vars: toml::Table::new() });
+                    }
+                    self.layer = li;
+                    self.brush = Some(name);
+                    self.sel = None;
+                }
+            }
         }
 
         // ---- interaction
@@ -1519,6 +1580,71 @@ pub(crate) mod tests {
         assert_eq!(l.get_obj(6, 3), ["Coin".to_string()]);
         let e = modengine::Engine::load(&dir).expect("edited project must load in the engine");
         assert!(e.rooms.iter().any(|r| r.name == "title"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real mouse drag: press, move in steps (past the click distance), release.
+    pub(crate) fn drag<S>(h: &mut Harness<S>, from: Pos2, to: Pos2) {
+        h.event(Event::PointerMoved(from));
+        h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for k in 1..=8 {
+            h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    }
+
+    fn room_harness(tag: &str) -> (PathBuf, Harness<'static, St>) {
+        let dir = temp_project(tag);
+        let project = Project::open(&dir).unwrap();
+        let path = project.rooms.iter().find(|r| r.name == "title").unwrap().path.clone();
+        let ed = RoomEditor::open("title", &path).unwrap();
+        let st = St { ed, project, tex: TexCache::default(), log: vec![], open: vec![] };
+        let mut h = Harness::builder().with_size([1300.0, 820.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut St| {
+                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+                s.ed.ui(ui, &mut cx);
+            },
+            st,
+        );
+        h.run_steps(3);
+        (dir, h)
+    }
+
+    #[test]
+    fn drag_object_from_palette_places_one_instance() {
+        use egui_kittest::kittest::Queryable;
+        let (dir, mut h) = room_harness("dnd_place");
+        assert!(h.state().ed.brush.is_none());
+        let from = h.get_by_label("Coin").rect().center();
+        let to = h.state().ed.screen_of(8.0 * 16.0 + 8.0, 5.0 * 16.0 + 8.0);
+        drag(&mut h, from, to);
+        let ed = &h.state().ed;
+        assert_eq!(ed.m.layers[ed.layer].get_obj(8, 5), ["Coin".to_string()]);
+        assert_eq!(ed.undo.len(), 1, "one drop = one undo step");
+        assert_eq!(ed.brush.as_deref(), Some("Coin"), "the dropped object becomes the brush");
+        h.state_mut().ed.undo();
+        assert!(h.state().ed.m.layers[h.state().ed.layer].get_obj(8, 5).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn drag_layer_to_the_top() {
+        use egui_kittest::kittest::Queryable;
+        let (dir, mut h) = room_harness("dnd_layers");
+        let kinds = |h: &Harness<St>| h.state().ed.m.layers.iter().map(|l| l.kind().to_string()).collect::<Vec<_>>();
+        assert_eq!(kinds(&h), ["background", "background", "instances"]);
+        let from = h.get_by_label("◆ instances").rect().center();
+        let first = h.get_all_by_label("🖼 background").next().unwrap().rect();
+        drag(&mut h, from, first.center() - Vec2::new(0.0, 5.0));
+        assert_eq!(kinds(&h), ["instances", "background", "background"]);
+        let ed = &h.state().ed;
+        assert_eq!(ed.layer, 0, "the selected layer follows the move");
+        assert_eq!(ed.undo.len(), 1);
+        h.state_mut().ed.undo();
+        assert_eq!(kinds(&h), ["background", "background", "instances"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

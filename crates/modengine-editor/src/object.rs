@@ -58,6 +58,17 @@ fn clean(v: &str) -> &str {
     v.split("//").next().unwrap_or("").trim()
 }
 
+/// Turns a move inside a filtered list (only events, or only methods) into a move of the
+/// object's items: `rows[k]` is the item index of the k-th row; `to` is an insertion index.
+/// The item lands right before the row it was dropped on (or right after the last row).
+fn item_move(rows: &[usize], from: usize, to: usize) -> (usize, usize) {
+    let target = match rows.get(to) {
+        Some(i) => *i,
+        None => rows.last().map(|i| i + 1).unwrap_or(0),
+    };
+    (rows[from], target)
+}
+
 fn event_label(name: &str, arg: &Option<String>) -> String {
     match arg {
         Some(a) => format!("{name}({a})"),
@@ -132,7 +143,7 @@ impl ObjectEditor {
         // ---- sprite & mask
         let sprites = cx.project.sprite_names();
         let sprite = m.prop("sprite").map(|v| clean(v).to_string());
-        ui.horizontal(|ui| {
+        let sprite_row = ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(56.0), Sense::hover());
             crate::tex::checkerboard(ui.painter(), rect, 8.0);
             let shown = sprite.clone().or_else(|| cx.project.object_sprite(&self.name));
@@ -165,12 +176,19 @@ impl ObjectEditor {
                 }
             });
         });
+        // a sprite dragged from the asset browser becomes the object's sprite
+        if let Some(Open::Sprite(_)) = sprite_row.response.dnd_hover_payload::<Open>().as_deref() {
+            crate::dnd::drop_hint(ui, sprite_row.response.rect, "");
+        }
+        if let Some(Open::Sprite(s)) = sprite_row.response.dnd_release_payload::<Open>().as_deref() {
+            m.set_prop("sprite", Some(s.clone()));
+        }
 
         // ---- parent
         let names = cx.project.object_names();
         let descendants: Vec<String> = names.iter().filter(|n| is_descendant(cx.project, n, &self.name)).cloned().collect();
         let mut parent = m.parent.clone();
-        ui.horizontal(|ui| {
+        let parent_row = ui.horizontal(|ui| {
             ui.label("Padre");
             egui::ComboBox::from_id_salt("parent").selected_text(parent.clone().unwrap_or_else(|| "(ninguno)".into())).show_ui(ui, |ui| {
                 ui.selectable_value(&mut parent, None, "(ninguno)");
@@ -186,6 +204,16 @@ impl ObjectEditor {
                 }
             }
         });
+        // an object dragged from the asset browser becomes the parent (no cycles)
+        let can_parent = |o: &Open| matches!(o, Open::Object(n) if *n != self.name && !descendants.contains(n));
+        if parent_row.response.dnd_hover_payload::<Open>().is_some_and(|o| can_parent(&o)) {
+            crate::dnd::drop_hint(ui, parent_row.response.rect, "");
+        }
+        if let Some(o) = parent_row.response.dnd_release_payload::<Open>() {
+            if let (true, Open::Object(n)) = (can_parent(&o), &*o) {
+                parent = Some(n.clone());
+            }
+        }
         if parent != m.parent {
             m.parent = parent;
         }
@@ -236,10 +264,19 @@ impl ObjectEditor {
             });
         });
         let mut delete: Option<usize> = None;
+        // events and methods can be dragged to change their order in the file
+        let mut moves: Vec<(usize, usize)> = vec![];
+        let ev_list = ui.scope_id().with("object_events");
+        let (mut ev_rows, mut ev_rects) = (vec![], vec![]);
         for (i, item) in m.items.iter().enumerate() {
             if let ItemKind::Event { name, arg, .. } = &item.kind {
                 let s = Sel::Event(name.clone(), arg.clone());
-                let r = ui.add(egui::Button::selectable(self.sel.as_ref() == Some(&s), format!("⚡ {}", event_label(name, arg))));
+                let label = format!("⚡ {}", event_label(name, arg));
+                let dragged = crate::dnd::dragging_from(ui.ctx(), ev_list) == Some(ev_rows.len());
+                let r = ui.add(egui::Button::selectable(self.sel.as_ref() == Some(&s) || dragged, label.clone()).sense(Sense::click_and_drag()));
+                crate::dnd::source(&r, || crate::dnd::ListDrag { list: ev_list, from: ev_rows.len(), label });
+                ev_rows.push(i);
+                ev_rects.push(r.rect);
                 if r.clicked() {
                     self.sel = Some(s);
                 }
@@ -250,6 +287,9 @@ impl ObjectEditor {
                     }
                 });
             }
+        }
+        if let Some((from, to)) = crate::dnd::reorder(ui, ev_list, &ev_rects, true) {
+            moves.push(item_move(&ev_rows, from, to));
         }
         for (owner, name, arg, _) in inherited_events(cx.project, m) {
             let s = Sel::Inherited(name.clone(), arg.clone(), owner.clone());
@@ -273,10 +313,17 @@ impl ObjectEditor {
                 ui.add(egui::TextEdit::singleline(&mut self.new_name).hint_text("nombre").desired_width(110.0));
             });
         });
+        let fn_list = ui.scope_id().with("object_methods");
+        let (mut fn_rows, mut fn_rects) = (vec![], vec![]);
         for (i, item) in m.items.iter().enumerate() {
             if let ItemKind::Method { name, params, .. } = &item.kind {
                 let s = Sel::Method(name.clone());
-                let r = ui.add(egui::Button::selectable(self.sel.as_ref() == Some(&s), format!("ƒ {name}({params})")));
+                let label = format!("ƒ {name}({params})");
+                let dragged = crate::dnd::dragging_from(ui.ctx(), fn_list) == Some(fn_rows.len());
+                let r = ui.add(egui::Button::selectable(self.sel.as_ref() == Some(&s) || dragged, label.clone()).sense(Sense::click_and_drag()));
+                crate::dnd::source(&r, || crate::dnd::ListDrag { list: fn_list, from: fn_rows.len(), label });
+                fn_rows.push(i);
+                fn_rects.push(r.rect);
                 if r.clicked() {
                     self.sel = Some(s);
                 }
@@ -287,6 +334,12 @@ impl ObjectEditor {
                     }
                 });
             }
+        }
+        if let Some((from, to)) = crate::dnd::reorder(ui, fn_list, &fn_rects, true) {
+            moves.push(item_move(&fn_rows, from, to));
+        }
+        for (from, to) in moves {
+            crate::dnd::move_item(&mut m.items, from, to);
         }
         ui.separator();
         let vars = m.items.iter().filter(|i| matches!(&i.kind, ItemKind::Prop { name, .. } if !KNOWN.contains(&name.as_str()))).count();
@@ -653,6 +706,41 @@ mod tests {
         let text = &p.scripts[o.script].text;
         assert!(text.contains("object Spike {\n    sprite = spike\n    solid = true\n\n    on step {\n    }\n}"), "{text}");
         assert!(p.scripts[o.script].dirty());
+        modscript::parse_file("x.ms", text).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn item_move_maps_list_rows_to_items() {
+        // items: 0 prop, 1 event, 2 method, 3 event, 4 event
+        let events = [1, 3, 4];
+        assert_eq!(item_move(&events, 2, 0), (4, 1)); // last event before the first one
+        assert_eq!(item_move(&events, 0, 3), (1, 5)); // first event after the last one
+        assert_eq!(item_move(&events, 0, 2), (1, 4));
+    }
+
+    #[test]
+    fn drag_an_event_above_another() {
+        let dir = crate::room::tests::temp_project("object_dnd");
+        let project = Project::open(&dir).unwrap();
+        let st = St { ed: ObjectEditor::new("Player"), project, tex: TexCache::default(), log: vec![], open: vec![] };
+        let mut h = Harness::builder().with_size([1200.0, 800.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut St| {
+                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+                s.ed.ui(ui, &mut cx);
+            },
+            st,
+        );
+        h.run_steps(3);
+        let from = h.get_by_label("⚡ alarm(0)").rect().center();
+        let step = h.get_by_label("⚡ step").rect();
+        crate::room::tests::drag(&mut h, from, step.center() - Vec2::new(0.0, 5.0));
+        let p = &h.state().project;
+        let o = p.object("Player").unwrap();
+        let text = &p.scripts[o.script].text;
+        let (alarm, step) = (text.find("on alarm(0)").unwrap(), text.find("on step").unwrap());
+        assert!(alarm < step, "alarm(0) now comes first:\n{text}");
+        assert!(text.contains("function die()") && text.contains("on collision(Spike)"));
         modscript::parse_file("x.ms", text).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
