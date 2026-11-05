@@ -1,0 +1,18 @@
+# frame 0: full, frame 1: empty
+pixels = ['''
+.kk.kk..
+krrkrrk.
+krwrrrk.
+krrrrrk.
+.krrrk..
+..krk...
+...k....
+''', '''
+.kk.kk..
+knnknnk.
+knmnnnk.
+knnnnnk.
+.knnnk..
+..knk...
+...k....
+''']

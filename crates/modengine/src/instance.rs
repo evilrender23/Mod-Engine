@@ -1,0 +1,200 @@
+//! Runtime instances of objects and their built-in variables.
+
+use modscript::{ArrayRef, Sym, Value};
+use std::collections::HashMap;
+
+pub const ALARM_COUNT: usize = 12;
+
+#[derive(Clone)]
+pub struct Instance {
+    pub id: u32,
+    pub object: u32,
+    pub alive: bool,
+    pub x: f64,
+    pub y: f64,
+    pub xprev: f64,
+    pub yprev: f64,
+    pub xstart: f64,
+    pub ystart: f64,
+    pub hspeed: f64,
+    pub vspeed: f64,
+    /// Direction of motion in degrees (0 = right, 90 = up). Kept even when speed is 0.
+    pub dir: f64,
+    pub gravity: f64,
+    pub gravity_dir: f64,
+    pub friction: f64,
+    pub sprite: Option<u32>,
+    pub mask: Option<u32>,
+    pub frame: f64,
+    pub anim_speed: f64,
+    pub scale_x: f64,
+    pub scale_y: f64,
+    pub angle: f64,
+    pub alpha: f64,
+    pub tint: u32,
+    pub depth: f64,
+    pub visible: bool,
+    pub solid: bool,
+    pub persistent: bool,
+    pub alarms: ArrayRef,
+    pub vars: HashMap<Sym, Value>,
+    pub outside: bool,
+    pub at_boundary: bool,
+    pub mouse_over: bool,
+}
+
+impl Instance {
+    pub fn new(id: u32, object: u32, x: f64, y: f64, depth: f64) -> Self {
+        let alarms = match Value::array(vec![Value::Num(-1.0); ALARM_COUNT]) {
+            Value::Array(a) => a,
+            _ => unreachable!(),
+        };
+        Instance {
+            id,
+            object,
+            alive: true,
+            x,
+            y,
+            xprev: x,
+            yprev: y,
+            xstart: x,
+            ystart: y,
+            hspeed: 0.0,
+            vspeed: 0.0,
+            dir: 0.0,
+            gravity: 0.0,
+            gravity_dir: 270.0,
+            friction: 0.0,
+            sprite: None,
+            mask: None,
+            frame: 0.0,
+            anim_speed: 1.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            angle: 0.0,
+            alpha: 1.0,
+            tint: 0xFFFFFF,
+            depth,
+            visible: true,
+            solid: false,
+            persistent: false,
+            alarms,
+            vars: HashMap::new(),
+            outside: false,
+            at_boundary: false,
+            mouse_over: false,
+        }
+    }
+
+    pub fn speed(&self) -> f64 {
+        self.hspeed.hypot(self.vspeed)
+    }
+
+    pub fn set_hv(&mut self, h: f64, v: f64) {
+        self.hspeed = snap(h);
+        self.vspeed = snap(v);
+        if self.hspeed != 0.0 || self.vspeed != 0.0 {
+            self.dir = (-self.vspeed).atan2(self.hspeed).to_degrees().rem_euclid(360.0);
+        }
+    }
+
+    pub fn set_speed(&mut self, s: f64) {
+        let r = self.dir.to_radians();
+        self.hspeed = snap(s * r.cos());
+        self.vspeed = snap(-s * r.sin());
+    }
+
+    pub fn set_dir(&mut self, d: f64) {
+        let s = self.speed();
+        self.dir = d.rem_euclid(360.0);
+        self.set_speed(s);
+    }
+}
+
+fn snap(v: f64) -> f64 {
+    if v.abs() < 1e-9 {
+        0.0
+    } else {
+        v
+    }
+}
+
+/// Built-in instance variables.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Bv {
+    X,
+    Y,
+    Xprev,
+    Yprev,
+    Xstart,
+    Ystart,
+    Hspeed,
+    Vspeed,
+    Speed,
+    Direction,
+    Gravity,
+    GravityDir,
+    Friction,
+    Sprite,
+    Mask,
+    Frame,
+    FrameCount,
+    AnimSpeed,
+    ScaleX,
+    ScaleY,
+    Angle,
+    Alpha,
+    Tint,
+    Depth,
+    Visible,
+    Solid,
+    Persistent,
+    Alarm,
+    Id,
+    Object,
+    BboxLeft,
+    BboxRight,
+    BboxTop,
+    BboxBottom,
+    SpriteWidth,
+    SpriteHeight,
+}
+
+pub const BUILTIN_VARS: &[(&str, Bv)] = &[
+    ("x", Bv::X),
+    ("y", Bv::Y),
+    ("xprev", Bv::Xprev),
+    ("yprev", Bv::Yprev),
+    ("xstart", Bv::Xstart),
+    ("ystart", Bv::Ystart),
+    ("hspeed", Bv::Hspeed),
+    ("vspeed", Bv::Vspeed),
+    ("speed", Bv::Speed),
+    ("direction", Bv::Direction),
+    ("gravity", Bv::Gravity),
+    ("gravity_dir", Bv::GravityDir),
+    ("friction", Bv::Friction),
+    ("sprite", Bv::Sprite),
+    ("mask", Bv::Mask),
+    ("frame", Bv::Frame),
+    ("frame_count", Bv::FrameCount),
+    ("anim_speed", Bv::AnimSpeed),
+    ("scale_x", Bv::ScaleX),
+    ("scale_y", Bv::ScaleY),
+    ("angle", Bv::Angle),
+    ("alpha", Bv::Alpha),
+    ("tint", Bv::Tint),
+    ("depth", Bv::Depth),
+    ("visible", Bv::Visible),
+    ("solid", Bv::Solid),
+    ("persistent", Bv::Persistent),
+    ("alarm", Bv::Alarm),
+    ("id", Bv::Id),
+    ("object", Bv::Object),
+    ("bbox_left", Bv::BboxLeft),
+    ("bbox_right", Bv::BboxRight),
+    ("bbox_top", Bv::BboxTop),
+    ("bbox_bottom", Bv::BboxBottom),
+    ("sprite_width", Bv::SpriteWidth),
+    ("sprite_height", Bv::SpriteHeight),
+];

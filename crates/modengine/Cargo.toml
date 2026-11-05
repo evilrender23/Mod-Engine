@@ -1,0 +1,13 @@
+[package]
+name = "modengine"
+description = "Mod Engine core: objects, events, rooms and the game loop (renderer-agnostic)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+modscript = { path = "../modscript" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }

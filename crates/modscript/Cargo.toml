@@ -1,0 +1,9 @@
+[package]
+name = "modscript"
+description = "ModScript: the scripting language of Mod Engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+indexmap = "2"

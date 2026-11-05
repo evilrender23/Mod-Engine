@@ -1,0 +1,33 @@
+# Coin Climber — Mod Engine example game
+[game]
+name = "Coin Climber"
+start_room = "title"
+# order used by next_room()
+rooms = ["title", "level1", "level2", "ending"]
+
+[display]
+width = 320
+height = 180
+scale = 4
+step_rate = 60
+letterbox = "#1a1c2c"
+
+# Characters usable in every pixel-art sprite. '.' is transparent.
+[palette]
+"k" = "#1a1c2c"   # outline
+"w" = "#f4f4f4"
+"s" = "#c2d3e8"
+"n" = "#566c86"
+"m" = "#333c57"
+"r" = "#b13e53"
+"o" = "#ef7d57"
+"y" = "#ffcd75"
+"g" = "#a7f070"
+"G" = "#38b764"
+"d" = "#257179"
+"b" = "#3b5dc9"
+"c" = "#41a6f6"
+"t" = "#f2c79e"   # skin
+"u" = "#a86a3d"   # dirt
+"U" = "#6e4127"
+"v" = "#c48a54"

@@ -1,0 +1,491 @@
+//! Window, rendering, input and audio through macroquad.
+
+use crate::script_input::ScriptedInput;
+use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
+use macroquad::prelude::*;
+use modengine::draw::{parse_color, DrawCmd, Rgba};
+use modengine::input::{Input, KEY_NAMES};
+use modengine::project::Sprite;
+use modengine::{AudioCmd, Engine};
+
+pub struct RunOpts {
+    /// Save a PNG of the window after this many rendered frames, then quit.
+    pub screenshot: Option<(u64, String)>,
+    pub input: Option<ScriptedInput>,
+}
+
+fn col(c: Rgba) -> Color {
+    Color::new(c.r, c.g, c.b, c.a)
+}
+
+fn key_codes(name: &str) -> Vec<KeyCode> {
+    use KeyCode::*;
+    let one = |k| vec![k];
+    match name {
+        "left" => one(Left),
+        "right" => one(Right),
+        "up" => one(Up),
+        "down" => one(Down),
+        "space" => one(Space),
+        "enter" => vec![Enter, KpEnter],
+        "escape" => one(Escape),
+        "shift" => vec![LeftShift, RightShift],
+        "ctrl" => vec![LeftControl, RightControl],
+        "alt" => vec![LeftAlt, RightAlt],
+        "tab" => one(Tab),
+        "backspace" => one(Backspace),
+        "delete" => one(Delete),
+        "insert" => one(Insert),
+        "home" => one(Home),
+        "end" => one(End),
+        "page_up" => one(PageUp),
+        "page_down" => one(PageDown),
+        "minus" => one(Minus),
+        "equal" => one(Equal),
+        "comma" => one(Comma),
+        "period" => one(Period),
+        "slash" => one(Slash),
+        s if s.len() == 1 => {
+            let c = s.chars().next().unwrap();
+            let k = match c {
+                'a' => A,
+                'b' => B,
+                'c' => C,
+                'd' => D,
+                'e' => E,
+                'f' => F,
+                'g' => G,
+                'h' => H,
+                'i' => I,
+                'j' => J,
+                'k' => K,
+                'l' => L,
+                'm' => M,
+                'n' => N,
+                'o' => O,
+                'p' => P,
+                'q' => Q,
+                'r' => R,
+                's' => S,
+                't' => T,
+                'u' => U,
+                'v' => V,
+                'w' => W,
+                'x' => X,
+                'y' => Y,
+                'z' => Z,
+                '0' => Key0,
+                '1' => Key1,
+                '2' => Key2,
+                '3' => Key3,
+                '4' => Key4,
+                '5' => Key5,
+                '6' => Key6,
+                '7' => Key7,
+                '8' => Key8,
+                '9' => Key9,
+                _ => return vec![],
+            };
+            vec![k]
+        }
+        s if s.starts_with('f') => match &s[1..] {
+            "1" => one(F1),
+            "2" => one(F2),
+            "3" => one(F3),
+            "4" => one(F4),
+            "5" => one(F5),
+            "6" => one(F6),
+            "7" => one(F7),
+            "8" => one(F8),
+            "9" => one(F9),
+            "10" => one(F10),
+            "11" => one(F11),
+            "12" => one(F12),
+            _ => vec![],
+        },
+        _ => vec![],
+    }
+}
+
+/// Collects keyboard/mouse edges between logic steps so no press is lost
+/// (or seen twice) when frame rate and step rate differ.
+struct InputCollector {
+    codes: Vec<Vec<KeyCode>>,
+    pressed: Vec<bool>,
+    released: Vec<bool>,
+    mpressed: [bool; 3],
+    mreleased: [bool; 3],
+    wheel: f32,
+}
+
+const BUTTONS: [MouseButton; 3] = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
+
+impl InputCollector {
+    fn new() -> Self {
+        let n = KEY_NAMES.len();
+        InputCollector {
+            codes: KEY_NAMES.iter().map(|k| key_codes(k)).collect(),
+            pressed: vec![false; n],
+            released: vec![false; n],
+            mpressed: [false; 3],
+            mreleased: [false; 3],
+            wheel: 0.0,
+        }
+    }
+
+    fn collect_frame(&mut self) {
+        let p = get_keys_pressed();
+        let r = get_keys_released();
+        for (i, cs) in self.codes.iter().enumerate() {
+            if cs.iter().any(|c| p.contains(c)) {
+                self.pressed[i] = true;
+            }
+            if cs.iter().any(|c| r.contains(c)) {
+                self.released[i] = true;
+            }
+        }
+        for (i, b) in BUTTONS.iter().enumerate() {
+            self.mpressed[i] |= is_mouse_button_pressed(*b);
+            self.mreleased[i] |= is_mouse_button_released(*b);
+        }
+        self.wheel += mouse_wheel().1;
+    }
+
+    fn apply(&mut self, inp: &mut Input, lay: &Layout) {
+        for (i, cs) in self.codes.iter().enumerate() {
+            inp.down[i] = cs.iter().any(|c| is_key_down(*c));
+            inp.pressed[i] = std::mem::take(&mut self.pressed[i]);
+            inp.released[i] = std::mem::take(&mut self.released[i]);
+        }
+        for (i, b) in BUTTONS.iter().enumerate() {
+            inp.mouse_down[i] = is_mouse_button_down(*b);
+            inp.mouse_pressed[i] = std::mem::take(&mut self.mpressed[i]);
+            inp.mouse_released[i] = std::mem::take(&mut self.mreleased[i]);
+        }
+        inp.wheel = std::mem::take(&mut self.wheel) as f64;
+        let (mx, my) = mouse_position();
+        inp.mouse_x = ((mx - lay.ox) / lay.scale) as f64;
+        inp.mouse_y = ((my - lay.oy) / lay.scale) as f64;
+    }
+}
+
+struct Layout {
+    scale: f32,
+    ox: f32,
+    oy: f32,
+    w: f32,
+    h: f32,
+}
+
+fn layout(rw: f32, rh: f32, pixel_perfect: bool) -> Layout {
+    let (sw, sh) = (screen_width(), screen_height());
+    let mut s = (sw / rw).min(sh / rh);
+    if pixel_perfect && s >= 1.0 {
+        s = s.floor();
+    }
+    let (w, h) = (rw * s, rh * s);
+    Layout { scale: s, ox: ((sw - w) / 2.0).floor(), oy: ((sh - h) / 2.0).floor(), w, h }
+}
+
+struct Gpu {
+    textures: Vec<Texture2D>,
+    fonts: Vec<Option<Font>>,
+    font_sizes: Vec<f32>,
+    default_size: f32,
+}
+
+fn draw_sprite(spr: &Sprite, tex: &Texture2D, frame: u32, x: f32, y: f32, sx: f32, sy: f32, angle: f32, color: Color) {
+    let Some(fr) = spr.frames.get(frame as usize) else { return };
+    let (fw, fh) = (fr[2] as f32, fr[3] as f32);
+    let (ox, oy) = (spr.origin.0 as f32, spr.origin.1 as f32);
+    let left = (x - ox * sx).min(x + (fw - ox) * sx);
+    let top = (y - oy * sy).min(y + (fh - oy) * sy);
+    draw_texture_ex(
+        tex,
+        left,
+        top,
+        color,
+        DrawTextureParams {
+            dest_size: Some(vec2(fw * sx.abs(), fh * sy.abs())),
+            source: Some(Rect::new(fr[0] as f32, fr[1] as f32, fw, fh)),
+            rotation: -angle.to_radians(),
+            flip_x: sx < 0.0,
+            flip_y: sy < 0.0,
+            pivot: Some(vec2(x, y)),
+        },
+    );
+}
+
+fn text_metrics(gpu: &Gpu, font: Option<u32>) -> (Option<&Font>, f32) {
+    match font.and_then(|f| gpu.fonts.get(f as usize)).and_then(|f| f.as_ref()) {
+        Some(f) => (Some(f), gpu.font_sizes[font.unwrap() as usize]),
+        None => (None, gpu.default_size),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_block(gpu: &Gpu, text: &str, x: f32, y: f32, font: Option<u32>, scale: f32, color: Color, halign: u8, valign: u8) {
+    let (f, size) = text_metrics(gpu, font);
+    let size16 = size.round().max(1.0) as u16;
+    let lines: Vec<&str> = text.split('\n').collect();
+    let line_h = size * scale;
+    let total = line_h * lines.len() as f32;
+    let ascent = measure_text("Ag", f, size16, scale).offset_y;
+    let mut top = y - match valign {
+        1 => total / 2.0,
+        2 => total,
+        _ => 0.0,
+    };
+    for line in lines {
+        let w = measure_text(line, f, size16, scale).width;
+        let lx = x - match halign {
+            1 => w / 2.0,
+            2 => w,
+            _ => 0.0,
+        };
+        draw_text_ex(line, lx.round(), (top + ascent).round(), TextParams { font: f, font_size: size16, font_scale: scale, color, ..Default::default() });
+        top += line_h;
+    }
+}
+
+fn camera_for(rt: &RenderTarget, x: f32, y: f32, w: f32, h: f32) -> Camera2D {
+    Camera2D {
+        target: vec2(x + w / 2.0, y + h / 2.0),
+        zoom: vec2(2.0 / w, 2.0 / h),
+        render_target: Some(rt.clone()),
+        ..Default::default()
+    }
+}
+
+fn exec(e: &Engine, gpu: &Gpu, rt: &RenderTarget) {
+    let (rw, rh) = (e.cam.w as f32, e.cam.h as f32);
+    for c in &e.cmds {
+        match c {
+            DrawCmd::View { x, y, w, h } => set_camera(&camera_for(rt, *x, *y, *w, *h)),
+            DrawCmd::Gui => set_camera(&camera_for(rt, 0.0, 0.0, rw, rh)),
+            DrawCmd::Clear(c) => clear_background(col(*c)),
+            DrawCmd::Sprite { spr, frame, x, y, sx, sy, angle, color } => {
+                let s = *spr as usize;
+                draw_sprite(&e.sprites[s], &gpu.textures[s], *frame, *x, *y, *sx, *sy, *angle, col(*color));
+            }
+            DrawCmd::Stretched { spr, frame, x, y, w, h, color } => {
+                let s = &e.sprites[*spr as usize];
+                if let Some(fr) = s.frames.get(*frame as usize) {
+                    draw_texture_ex(
+                        &gpu.textures[*spr as usize],
+                        *x,
+                        *y,
+                        col(*color),
+                        DrawTextureParams {
+                            dest_size: Some(vec2(*w, *h)),
+                            source: Some(Rect::new(fr[0] as f32, fr[1] as f32, fr[2] as f32, fr[3] as f32)),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            DrawCmd::Rect { x, y, w, h, color, outline } => {
+                if *outline {
+                    draw_rectangle_lines(*x, *y, *w, *h, 1.0, col(*color));
+                } else {
+                    draw_rectangle(*x, *y, *w, *h, col(*color));
+                }
+            }
+            DrawCmd::Circle { x, y, r, color, outline } => {
+                if *outline {
+                    draw_circle_lines(*x, *y, *r, 1.0, col(*color));
+                } else {
+                    draw_circle(*x, *y, *r, col(*color));
+                }
+            }
+            DrawCmd::Line { x1, y1, x2, y2, width, color } => draw_line(*x1, *y1, *x2, *y2, *width, col(*color)),
+            DrawCmd::Tri { pts, color, outline } => {
+                let (a, b, c) = (vec2(pts[0], pts[1]), vec2(pts[2], pts[3]), vec2(pts[4], pts[5]));
+                if *outline {
+                    draw_triangle_lines(a, b, c, 1.0, col(*color));
+                } else {
+                    draw_triangle(a, b, c, col(*color));
+                }
+            }
+            DrawCmd::Text { x, y, text, font, scale, color, halign, valign } => {
+                draw_text_block(gpu, text, *x, *y, *font, *scale, col(*color), *halign, *valign)
+            }
+        }
+    }
+}
+
+pub async fn run(mut e: Engine, mut opts: RunOpts) {
+    let smooth = e.config.display.smooth;
+    let filter = if smooth { FilterMode::Linear } else { FilterMode::Nearest };
+    let textures: Vec<Texture2D> = e
+        .sprites
+        .iter()
+        .map(|s| {
+            let t = Texture2D::from_rgba8(s.sheet_w as u16, s.sheet_h as u16, &s.rgba);
+            t.set_filter(filter);
+            t
+        })
+        .collect();
+    let mut fonts: Vec<Option<Font>> = Vec::new();
+    for f in &e.fonts {
+        match load_ttf_font_from_bytes(&f.data) {
+            Ok(mut font) => {
+                font.set_filter(filter);
+                fonts.push(Some(font));
+            }
+            Err(err) => {
+                eprintln!("[error] font '{}': {err:?} (using the default font)", f.name);
+                fonts.push(None);
+            }
+        }
+    }
+    let mut sounds: Vec<Option<Sound>> = Vec::new();
+    for s in &e.sounds {
+        match load_sound_from_bytes(&s.data).await {
+            Ok(snd) => sounds.push(Some(snd)),
+            Err(err) => {
+                eprintln!("[error] sound '{}': {err:?}", s.name);
+                sounds.push(None);
+            }
+        }
+    }
+    let gpu = Gpu {
+        textures,
+        font_sizes: e.fonts.iter().map(|f| f.size).collect(),
+        fonts: fonts.clone(),
+        default_size: e.config.display.font_size,
+    };
+    let (sizes, default_size) = (gpu.font_sizes.clone(), gpu.default_size);
+    e.measure = Box::new(move |font, text, scale| {
+        let (f, size) = match font.and_then(|i| fonts.get(i as usize)).and_then(|f| f.as_ref()) {
+            Some(f) => (Some(f), sizes[font.unwrap() as usize]),
+            None => (None, default_size),
+        };
+        let lines: Vec<&str> = text.split('\n').collect();
+        let w = lines.iter().map(|l| measure_text(l, f, size.round() as u16, scale).width).fold(0.0, f32::max);
+        (w, size * scale * lines.len() as f32)
+    });
+
+    let (rw, rh) = (e.config.display.width, e.config.display.height);
+    let rt = render_target(rw, rh);
+    rt.texture.set_filter(filter);
+    let letterbox = parse_color(&e.config.display.letterbox).unwrap_or(0);
+    let pixel_perfect = e.config.display.pixel_perfect;
+
+    prevent_quit();
+    e.start();
+    let mut collector = InputCollector::new();
+    let mut acc = 0.0f64;
+    let mut frames: u64 = 0;
+    let mut shot_n = 0;
+    let mut fullscreen = e.config.display.fullscreen;
+
+    loop {
+        if e.quit || is_quit_requested() {
+            e.shutdown();
+            break;
+        }
+        if is_key_pressed(KeyCode::F3) {
+            e.debug = !e.debug;
+        }
+        if is_key_pressed(KeyCode::F4) {
+            fullscreen = !fullscreen;
+            set_fullscreen(fullscreen);
+        }
+        let lay = layout(rw as f32, rh as f32, pixel_perfect);
+        collector.collect_frame();
+
+        let dt = 1.0 / e.step_rate();
+        acc += (get_frame_time() as f64).min(0.25);
+        let mut ticks = 0;
+        while acc >= dt && ticks < 5 {
+            collector.apply(&mut e.input, &lay);
+            if let Some(si) = &opts.input {
+                si.apply(e.steps + 1, &mut e.input);
+            }
+            e.tick();
+            acc -= dt;
+            ticks += 1;
+            if e.quit {
+                break;
+            }
+        }
+        if ticks == 5 {
+            acc = 0.0;
+        }
+        e.fps = get_fps() as f64;
+
+        for cmd in e.audio.drain(..) {
+            match cmd {
+                AudioCmd::Play { snd, looped, volume } => {
+                    if let Some(Some(s)) = sounds.get(snd as usize) {
+                        play_sound(s, PlaySoundParams { looped, volume: volume as f32 });
+                    }
+                }
+                AudioCmd::Stop(snd) => {
+                    if let Some(Some(s)) = sounds.get(snd as usize) {
+                        stop_sound(s);
+                    }
+                }
+                AudioCmd::StopAll => sounds.iter().flatten().for_each(stop_sound),
+                AudioCmd::Volume(snd, v) => {
+                    if let Some(Some(s)) = sounds.get(snd as usize) {
+                        set_sound_volume(s, v as f32);
+                    }
+                }
+            }
+        }
+
+        if ticks > 0 || frames == 0 {
+            e.render();
+            exec(&e, &gpu, &rt);
+        }
+
+        set_default_camera();
+        clear_background(col(Rgba::from_rgb(letterbox, 1.0)));
+        draw_texture_ex(&rt.texture, lay.ox, lay.oy, WHITE, DrawTextureParams { dest_size: Some(vec2(lay.w, lay.h)), ..Default::default() });
+        overlay(&e);
+
+        frames += 1;
+        if is_key_pressed(KeyCode::F12) {
+            shot_n += 1;
+            let path = e.dir.join(format!("screenshot_{shot_n}.png"));
+            get_screen_data().export_png(&path.to_string_lossy());
+            println!("saved {}", path.display());
+        }
+        if let Some((at, path)) = &opts.screenshot {
+            if frames >= *at {
+                get_screen_data().export_png(path);
+                println!("saved {path}");
+                opts.screenshot = None;
+                e.shutdown();
+                break;
+            }
+        }
+        next_frame().await;
+    }
+}
+
+fn overlay(e: &Engine) {
+    if e.debug {
+        let text = format!(
+            "{} fps  |  room {}  |  {} instances  |  step {}",
+            e.fps,
+            e.rooms[e.room].name,
+            e.insts.iter().filter(|i| i.alive).count(),
+            e.steps
+        );
+        draw_rectangle(0.0, 0.0, screen_width(), 22.0, Color::new(0.0, 0.0, 0.0, 0.6));
+        draw_text(&text, 6.0, 16.0, 18.0, WHITE);
+    }
+    if !e.errors.is_empty() {
+        let shown: Vec<&String> = e.errors.iter().rev().take(3).collect();
+        let lines: Vec<String> = shown.iter().flat_map(|m| m.lines().take(2).map(String::from)).collect();
+        let h = 8.0 + lines.len() as f32 * 18.0;
+        let y0 = screen_height() - h;
+        draw_rectangle(0.0, y0, screen_width(), h, Color::new(0.25, 0.0, 0.0, 0.85));
+        for (i, l) in lines.iter().enumerate() {
+            draw_text(l, 6.0, y0 + 18.0 + i as f32 * 18.0, 18.0, Color::new(1.0, 0.75, 0.75, 1.0));
+        }
+    }
+}

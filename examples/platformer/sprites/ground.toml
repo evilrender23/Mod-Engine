@@ -1,0 +1,36 @@
+# frame 0: grass on top, frame 1: plain dirt
+pixels = ['''
+gggggggggggggggg
+ggGggggggGgggggg
+GGGGgGGGGGGGgGGG
+GdGGGGdGGdGGGGdG
+uGuuuGuuuuGuuuGu
+uuuuuuuuuuuuuuuu
+uuUuuuuuuuvuuuuu
+uuuuuuUuuuuuuuuu
+uvuuuuuuuuuuUuuu
+uuuuuuuuvuuuuuuu
+uuuUuuuuuuuuuuvu
+uuuuuuuuuUuuuuuu
+uuuuvuuuuuuuuuuu
+uUuuuuuuuuuvuuuu
+uuuuuuuUuuuuuuuu
+uuuuuvuuuuuuUuuu
+''', '''
+uuuuuuuuuuuuuuuu
+uuUuuuuuuuvuuuuu
+uuuuuuUuuuuuuuuu
+uvuuuuuuuuuuUuuu
+uuuuuuuuvuuuuuuu
+uuuUuuuuuuuuuuvu
+uuuuuuuuuUuuuuuu
+uuuuvuuuuuuuuuuu
+uUuuuuuuuuuvuuuu
+uuuuuuuUuuuuuuuu
+uuuuuvuuuuuuUuuu
+uuuuuuuuuuuuuuuu
+uuvuuuuuUuuuuuuu
+uuuuuuuuuuuuvuuu
+uuuuUuuuuuuuuuuu
+uuuuuuuuuvuuuuUu
+''']

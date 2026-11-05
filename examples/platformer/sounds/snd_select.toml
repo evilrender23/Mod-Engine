@@ -1,0 +1,6 @@
+[synth]
+wave = "square"
+freq = 660
+freq_end = 880
+duration = 0.07
+volume = 0.25

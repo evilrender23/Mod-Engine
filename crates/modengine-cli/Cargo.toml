@@ -1,0 +1,15 @@
+[package]
+name = "modengine-cli"
+description = "Mod Engine runner (macroquad backend) and project tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "modengine"
+path = "src/main.rs"
+
+[dependencies]
+modengine = { path = "../modengine" }
+modscript = { path = "../modscript" }
+macroquad = { version = "0.4", features = ["audio"] }

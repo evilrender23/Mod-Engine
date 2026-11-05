@@ -1,0 +1,35 @@
+background = "#41a6f6"
+
+[[layer]]
+type = "background"
+sprite = "clouds"
+tile_x = true
+y = 10
+hspeed = -0.15
+depth = 1000
+
+[[layer]]
+type = "background"
+sprite = "hills"
+tile_x = true
+y = 112
+depth = 900
+
+[[layer]]
+type = "instances"
+cell = [16, 16]
+legend = { "#" = "Ground", "G" = "Game", "T" = "Title", "s" = "Slime", "o" = "Coin" }
+map = '''
+GT..................
+....................
+....................
+....................
+....................
+....................
+....................
+....................
+...o.o.........s....
+####################
+####################
+####################
+'''

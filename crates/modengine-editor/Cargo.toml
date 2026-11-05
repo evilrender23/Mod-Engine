@@ -1,0 +1,21 @@
+[package]
+name = "modengine-editor"
+description = "Visual editor for Mod Engine projects: rooms, objects, sprites, sounds and scripts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "modeditor"
+path = "src/main.rs"
+
+[dependencies]
+modengine = { path = "../modengine" }
+modscript = { path = "../modscript" }
+eframe = "0.37"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+egui_kittest = "0.37"

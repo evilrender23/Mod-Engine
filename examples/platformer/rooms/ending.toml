@@ -1,0 +1,17 @@
+background = "#29366f"
+
+[[layer]]
+type = "background"
+sprite = "clouds"
+tile_x = true
+y = 136
+hspeed = -0.1
+depth = 1000
+
+[[layer]]
+type = "instances"
+cell = [16, 16]
+legend = { "E" = "Ending" }
+map = '''
+E
+'''
