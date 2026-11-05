@@ -20,6 +20,7 @@ pub mod input;
 pub mod instance;
 pub mod natives;
 pub mod object;
+pub mod pack;
 pub mod path;
 pub mod palette;
 pub mod project;
@@ -28,6 +29,7 @@ pub mod sequence;
 pub mod synth;
 pub mod timeline;
 pub mod tileset;
+pub mod vfs;
 
 pub use engine::{AudioCmd, Engine};
 pub use modscript;

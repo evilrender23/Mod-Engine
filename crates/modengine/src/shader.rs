@@ -121,9 +121,8 @@ pub fn load_assets(dir: &Path) -> Result<Vec<ShaderAsset>, String> {
     let root = dir.join("shaders");
     let mut found: std::collections::BTreeMap<String, (Option<PathBuf>, Option<PathBuf>)> = Default::default();
     let mut scan = |d: &Path| {
-        let Ok(rd) = std::fs::read_dir(d) else { return };
-        for e in rd.flatten() {
-            let p = e.path();
+        let Ok(rd) = crate::vfs::read_dir(d) else { return };
+        for (p, _) in rd {
             let ext = p.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
             let Some(stem) = p.file_stem().map(|s| s.to_string_lossy().to_string()) else { continue };
             let slot = found.entry(stem).or_default();
@@ -135,8 +134,8 @@ pub fn load_assets(dir: &Path) -> Result<Vec<ShaderAsset>, String> {
         }
     };
     scan(&root);
-    if let Ok(rd) = std::fs::read_dir(&root) {
-        let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    if let Ok(rd) = crate::vfs::read_dir(&root) {
+        let mut dirs: Vec<PathBuf> = rd.into_iter().filter(|(_, is_dir)| *is_dir).map(|(p, _)| p).collect();
         dirs.sort();
         for d in dirs {
             scan(&d);
@@ -144,7 +143,7 @@ pub fn load_assets(dir: &Path) -> Result<Vec<ShaderAsset>, String> {
     }
     let read = |p: &Option<PathBuf>, default: &str| -> Result<String, String> {
         match p {
-            Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display())),
+            Some(p) => crate::vfs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display())),
             None => Ok(default.to_string()),
         }
     };

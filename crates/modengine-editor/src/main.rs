@@ -10,6 +10,7 @@ mod agent_slash;
 mod agent_snapshot;
 mod app;
 mod dnd;
+mod export;
 mod extension;
 mod font;
 mod fx;
@@ -89,6 +90,8 @@ fn main() -> eframe::Result {
             "--import-run" => auto.import_run = true,
             // --palettes pear36[:replace] : open the Paletas dialog with that palette selected
             "--palettes" => palette::open_dialog_with(&args.next().unwrap_or_default()),
+            // --export-dialog android : open Archivo → Exportar… on that target (screenshots)
+            "--export-dialog" => export::open_dialog_with(args.next().as_deref().and_then(export::Target::parse), true),
             // --drag object:Coin 700,400 : screenshot of a drag held at that point
             "--drag" => {
                 let what = args.next().and_then(|s| app::Open::parse(&s));

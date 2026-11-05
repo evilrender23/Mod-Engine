@@ -278,7 +278,7 @@ pub struct SequenceDef {
 
 impl SequenceDef {
     pub fn load(name: &str, path: &Path, rel: &str) -> Result<(String, SequenceToml), String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = crate::vfs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut t: SequenceToml = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         if t.length <= 0.0 || t.fps <= 0.0 {
             return Err(format!("{rel}: length and fps must be positive"));

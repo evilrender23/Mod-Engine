@@ -230,7 +230,7 @@ impl AnimCurve {
     }
 
     pub fn load(name: &str, path: &Path) -> Result<AnimCurve, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = crate::vfs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let t: CurveToml = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         AnimCurve::from_toml(name, &t).map_err(|e| format!("{}: {e}", path.display()))
     }

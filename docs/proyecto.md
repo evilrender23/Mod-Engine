@@ -29,6 +29,27 @@ fullscreen = false
 "r" = "#b13e53"
 ```
 
+Para exportar (Archivo → Exportar…, ver [exportar.md](exportar.md)) hay además, todos opcionales:
+
+```toml
+[game]
+version = "1.0.0"           # la que muestran el README y el APK
+icon = "sprites/icon.png"   # PNG: icono de la ventana, del lanzador de Linux y del APK
+
+[export]
+exe_name = "CoinClimber"    # nombre del ejecutable (por defecto, el del juego)
+out_dir = "export"          # carpeta de salida (+ /windows, /linux, /android)
+windows_console = false     # true: el .exe abre también una consola (depurar)
+
+[android]
+package = "com.miestudio.coinclimber"  # por defecto com.modengine.<nombre>
+version_code = 1                       # súbelo en cada versión que publiques
+orientation = "landscape"              # landscape, portrait o sensor
+virtual_pad = "arrows"                 # mando táctil: none, arrows (← →) o dpad
+virtual_buttons = ["space:A", "enter:OK"]  # botones redondos: tecla[:etiqueta]
+abis = ["arm64-v8a"]                   # y/o armeabi-v7a, x86_64 (emulador)
+```
+
 ## Sprites (`sprites/`)
 
 Un PNG suelto (`sprites/hero.png`) ya es un sprite de un frame con origen arriba a la izquierda.

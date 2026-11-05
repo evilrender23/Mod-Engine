@@ -102,7 +102,7 @@ impl FontAsset {
 pub fn load_font<'s>(name: &str, path: &Path, is_toml: bool, sprite: &dyn Fn(&str) -> Option<&'s Sprite>) -> Result<FontAsset, String> {
     let where_ = path.display().to_string();
     let t: FontToml = if is_toml {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{where_}: {e}"))?;
+        let text = crate::vfs::read_to_string(path).map_err(|e| format!("{where_}: {e}"))?;
         toml::from_str(&text).map_err(|e| format!("{where_}: {e}"))?
     } else {
         FontToml { file: Some(path.file_name().unwrap_or_default().to_string_lossy().to_string()), ..FontToml::default() }
@@ -129,7 +129,7 @@ pub fn load_font<'s>(name: &str, path: &Path, is_toml: bool, sprite: &dyn Fn(&st
     }
     if let Some(file) = &t.file {
         let fp = path.parent().unwrap_or(Path::new(".")).join(file);
-        f.data = std::fs::read(&fp).map_err(|e| format!("{}: {e}", fp.display()))?;
+        f.data = crate::vfs::read(&fp).map_err(|e| format!("{}: {e}", fp.display()))?;
         f.source = file.clone();
         // a broken face doesn't stop the game from loading: it falls back to the built-in font
         match bake_ttf(&f.data, &f.ranges, size, t.bold, t.italic, antialias, t.spacing) {

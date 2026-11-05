@@ -261,6 +261,15 @@ Para capturas: `modeditor <proyecto> --palettes pear36[:replace] --screenshot f.
   segundo y la paleta compartida de pixel art (con su tira de colores y el botón
   🎨 Paletas (Lospec)…).
 
+## Exportar
+
+**Archivo → 📦 Exportar…** (o el botón 📦 Exportar de la barra) crea el juego para Windows
+(.exe), Linux o Android (.apk), como «Create Executable» de GameMaker. Cada plataforma muestra si
+está ✔ lista o qué falta, con un botón ⬇ Instalar que lo descarga en segundo plano. El progreso y
+la salida aparecen en el diálogo y en Salida; al acabar, 📂 Abrir carpeta. Los ajustes (versión,
+icono, paquete de Android, mando táctil…) se guardan en `game.toml`. Todo en
+[exportar.md](exportar.md).
+
 ## Importar assets
 
 Trae imágenes, sonidos y fuentes de cualquier carpeta del disco al proyecto:

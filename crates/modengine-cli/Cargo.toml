@@ -5,11 +5,27 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "modengine_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "modengine"
 path = "src/main.rs"
+
+# The player of exported games: the engine without the command line (no console on Windows).
+[[bin]]
+name = "modengine-runner"
+path = "src/runner_main.rs"
 
 [dependencies]
 modengine = { path = "../modengine" }
 modscript = { path = "../modscript" }
 macroquad = { version = "0.4", features = ["audio"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1"
+flate2 = "1"
+crc32fast = "1"
+
+[dev-dependencies]
+toml = "0.8"

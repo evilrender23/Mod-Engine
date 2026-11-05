@@ -885,6 +885,13 @@ impl EditorApp {
                     crate::palette::open_dialog();
                     ui.close();
                 }
+                ui.separator();
+                if ui.button("📦 Exportar…").on_hover_text("Crear el juego para Windows (.exe), Linux o Android (.apk)").clicked() {
+                    self.save_all();
+                    crate::export::open_dialog();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Cerrar proyecto").clicked() {
                     if self.dirty_any() {
                         self.save_all();
@@ -1009,6 +1016,10 @@ impl EditorApp {
             }
             if ui.button("✔ Comprobar").on_hover_text("F6: carga el proyecto y ejecuta 300 pasos sin ventana").clicked() {
                 self.check(true);
+            }
+            if ui.button("📦 Exportar").on_hover_text("Crear el juego para Windows, Linux o Android").clicked() {
+                self.save_all();
+                crate::export::open_dialog();
             }
             ui.toggle_value(&mut self.docks[3], "✦ Agente").on_hover_text("Panel del agente de programación (Claude Code, Antigravity o Codex)");
             if let Some(p) = &self.project {
@@ -2003,6 +2014,7 @@ impl eframe::App for EditorApp {
         self.dialogs(&ctx);
         self.import_frame(ui);
         crate::palette::dialog_frame(&ctx, self.project.as_mut(), &mut self.log);
+        crate::export::dialog_frame(&ctx, self.project.as_mut(), &mut self.log);
         crate::dnd::ghost(&ctx);
     }
 }

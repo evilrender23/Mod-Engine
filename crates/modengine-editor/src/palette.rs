@@ -305,7 +305,7 @@ pub fn generation() -> u64 {
     GEN.load(Ordering::SeqCst)
 }
 
-fn bump() {
+pub fn bump() {
     GEN.fetch_add(1, Ordering::SeqCst);
 }
 

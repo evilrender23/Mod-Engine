@@ -119,6 +119,9 @@ pub type MeasureFn = Box<dyn Fn(Option<u32>, &str, f32) -> (f32, f32)>;
 
 pub struct Engine {
     pub dir: PathBuf,
+    /// Where save_data()/load_data() keep their files: `<project>/saves` when running a
+    /// project folder, a per-user folder when running an exported game.
+    pub save_dir: PathBuf,
     pub config: GameToml,
     pub sprites: Vec<Sprite>,
     pub sounds: Vec<SoundAsset>,
@@ -193,6 +196,24 @@ impl Engine {
     pub fn load(dir: &Path) -> Result<Engine, String> {
         let project = Project::load(dir)?;
         Self::from_project(project)
+    }
+
+    /// Loads an exported game: a `game.dat` pack, or an executable with a pack appended.
+    /// Saves go to the per-user data folder ([`crate::vfs::user_data_dir`]).
+    pub fn load_pack(file: &Path) -> Result<Engine, String> {
+        let pack = crate::pack::Pack::open(file)?;
+        Self::load_source(&crate::vfs::mount(file, pack))
+    }
+
+    /// Loads from a folder or a mounted pack.
+    pub fn load_source(src: &crate::vfs::Source) -> Result<Engine, String> {
+        let mut e = Self::load(src.root())?;
+        if src.is_pack() {
+            let pkg = e.config.android_package();
+            let env = |k: &str| std::env::var(k).ok();
+            e.save_dir = crate::vfs::user_data_dir(&e.config.game.name, Some(&pkg), &env).join("saves");
+        }
+        Ok(e)
     }
 
     pub fn from_project(p: Project) -> Result<Engine, String> {
@@ -282,6 +303,7 @@ impl Engine {
 
         let display = p.config.display.clone();
         let mut e = Engine {
+            save_dir: p.dir.join("saves"),
             dir: p.dir.clone(),
             config: p.config.clone(),
             sprites: p.sprites,

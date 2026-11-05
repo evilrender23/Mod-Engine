@@ -12,6 +12,9 @@ pub struct RunOpts {
     /// Save a PNG of the window after this many rendered frames, then quit.
     pub screenshot: Option<(u64, String)>,
     pub input: Option<ScriptedInput>,
+    /// On-screen touch controls from `[android]`: `Some(true)` shows them (the mouse acts
+    /// as a finger on desktop), `None` only on Android.
+    pub touch: Option<bool>,
 }
 
 fn col(c: Rgba) -> Color {
@@ -116,6 +119,9 @@ struct InputCollector {
     mpressed: [bool; 3],
     mreleased: [bool; 3],
     wheel: f32,
+    pad: Option<crate::touch::VirtualPad>,
+    /// Desktop testing of the touch pad: the mouse is a finger.
+    mouse_finger: bool,
 }
 
 const BUTTONS: [MouseButton; 3] = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
@@ -130,7 +136,19 @@ impl InputCollector {
             mpressed: [false; 3],
             mreleased: [false; 3],
             wheel: 0.0,
+            pad: None,
+            mouse_finger: false,
         }
+    }
+
+    /// Window-pixel positions of the fingers on the screen this frame. A finger lifted this
+    /// frame still counts once, so a quick tap (down and up between two frames) is not lost.
+    fn fingers(&self) -> Vec<(f32, f32)> {
+        let mut v: Vec<(f32, f32)> = touches().iter().filter(|t| t.phase != TouchPhase::Cancelled).map(|t| (t.position.x, t.position.y)).collect();
+        if self.mouse_finger && is_mouse_button_down(MouseButton::Left) {
+            v.push(mouse_position());
+        }
+        v
     }
 
     fn collect_frame(&mut self) {
@@ -149,11 +167,18 @@ impl InputCollector {
             self.mreleased[i] |= is_mouse_button_released(*b);
         }
         self.wheel += mouse_wheel().1;
+        let fingers = self.fingers();
+        if let Some(pad) = &mut self.pad {
+            pad.layout(screen_width(), screen_height());
+            let (p, r) = pad.update(&fingers);
+            p.into_iter().for_each(|i| self.pressed[i] = true);
+            r.into_iter().for_each(|i| self.released[i] = true);
+        }
     }
 
     fn apply(&mut self, inp: &mut Input, lay: &Layout) {
         for (i, cs) in self.codes.iter().enumerate() {
-            inp.down[i] = cs.iter().any(|c| is_key_down(*c));
+            inp.down[i] = cs.iter().any(|c| is_key_down(*c)) || self.pad.as_ref().is_some_and(|p| p.held[i]);
             inp.pressed[i] = std::mem::take(&mut self.pressed[i]);
             inp.released[i] = std::mem::take(&mut self.released[i]);
         }
@@ -166,6 +191,7 @@ impl InputCollector {
         let (mx, my) = mouse_position();
         inp.mouse_x = ((mx - lay.ox) / lay.scale) as f64;
         inp.mouse_y = ((my - lay.oy) / lay.scale) as f64;
+        inp.touches = self.fingers().into_iter().map(|(x, y)| (((x - lay.ox) / lay.scale) as f64, ((y - lay.oy) / lay.scale) as f64)).collect();
     }
 }
 
@@ -449,6 +475,10 @@ pub async fn run(mut e: Engine, mut opts: RunOpts) {
     prevent_quit();
     e.start();
     let mut collector = InputCollector::new();
+    if opts.touch.unwrap_or(cfg!(target_os = "android")) {
+        collector.pad = crate::touch::VirtualPad::from_config(&e.config.android);
+        collector.mouse_finger = !cfg!(target_os = "android");
+    }
     let mut acc = 0.0f64;
     let mut frames: u64 = 0;
     let mut shot_n = 0;
@@ -518,12 +548,18 @@ pub async fn run(mut e: Engine, mut opts: RunOpts) {
         set_default_camera();
         clear_background(col(Rgba::from_rgb(letterbox, 1.0)));
         draw_texture_ex(&rt.texture, lay.ox, lay.oy, WHITE, DrawTextureParams { dest_size: Some(vec2(lay.w, lay.h)), ..Default::default() });
+        if let Some(pad) = &collector.pad {
+            pad.draw();
+        }
         overlay(&e);
 
         frames += 1;
         if is_key_pressed(KeyCode::F12) {
             shot_n += 1;
-            let path = e.dir.join(format!("screenshot_{shot_n}.png"));
+            // exported games can't write inside their pack: next to the saves instead
+            let dir = if modengine::vfs::is_mounted(&e.dir) { e.save_dir.parent().unwrap_or(&e.save_dir).to_path_buf() } else { e.dir.clone() };
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join(format!("screenshot_{shot_n}.png"));
             get_screen_data().export_png(&path.to_string_lossy());
             println!("saved {}", path.display());
         }

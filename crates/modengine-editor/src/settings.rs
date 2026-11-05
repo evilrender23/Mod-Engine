@@ -24,6 +24,12 @@ pub fn write_game_toml(g: &GameToml) -> String {
     if !g.game.rooms.is_empty() {
         s += &format!("rooms = [{}]\n", g.game.rooms.iter().map(|r| q(r)).collect::<Vec<_>>().join(", "));
     }
+    if g.game.version != modengine::project::GameSection::default().version {
+        s += &format!("version = {}\n", q(&g.game.version));
+    }
+    if let Some(i) = &g.game.icon {
+        s += &format!("icon = {}\n", q(i));
+    }
     let d = &g.display;
     s += "\n[display]\n";
     s += &format!("width = {}\nheight = {}\nscale = {}\n", d.width, d.height, d.scale);
@@ -35,10 +41,58 @@ pub fn write_game_toml(g: &GameToml) -> String {
     if d.fullscreen {
         s += "fullscreen = true\n";
     }
+    s += &write_export_sections(g);
     if !g.palette.is_empty() {
         s += "\n[palette]\n";
         for (k, v) in &g.palette {
             s += &format!("{} = {}\n", key(k), q(v));
+        }
+    }
+    s
+}
+
+/// `[export]` and `[android]`, only the values that differ from the defaults (so projects
+/// that never exported keep the same game.toml).
+pub fn write_export_sections(g: &GameToml) -> String {
+    use modengine::project::{AndroidSection, ExportSection};
+    let list = |v: &[String]| format!("[{}]", v.iter().map(|x| q(x)).collect::<Vec<_>>().join(", "));
+    let mut s = String::new();
+    let (e, de) = (&g.export, ExportSection::default());
+    if *e != de {
+        s += "\n[export]\n";
+        if let Some(n) = &e.exe_name {
+            s += &format!("exe_name = {}\n", q(n));
+        }
+        if let Some(o) = &e.out_dir {
+            s += &format!("out_dir = {}\n", q(o));
+        }
+        if let Some(t) = &e.target {
+            s += &format!("target = {}\n", q(t));
+        }
+        if e.windows_console {
+            s += "windows_console = true\n";
+        }
+    }
+    let (a, da) = (&g.android, AndroidSection::default());
+    if *a != da {
+        s += "\n[android]\n";
+        if let Some(p) = &a.package {
+            s += &format!("package = {}\n", q(p));
+        }
+        if a.version_code != da.version_code {
+            s += &format!("version_code = {}\n", a.version_code);
+        }
+        if a.orientation != da.orientation {
+            s += &format!("orientation = {}\n", q(&a.orientation));
+        }
+        if a.virtual_pad != da.virtual_pad {
+            s += &format!("virtual_pad = {}\n", q(&a.virtual_pad));
+        }
+        if !a.virtual_buttons.is_empty() {
+            s += &format!("virtual_buttons = {}\n", list(&a.virtual_buttons));
+        }
+        if a.abis != da.abis {
+            s += &format!("abis = {}\n", list(&a.abis));
         }
     }
     s
@@ -202,5 +256,24 @@ impl SettingsEditor {
             self.dirty = true;
         }
         let _ = cx;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_and_android_sections_round_trip() {
+        let src = "[game]\nname = \"Coin\"\nversion = \"2.1\"\nicon = \"sprites/icon.png\"\n[export]\nexe_name = \"CoinGame\"\nwindows_console = true\n[android]\npackage = \"org.ana.coin\"\nversion_code = 3\norientation = \"portrait\"\nvirtual_pad = \"dpad\"\nvirtual_buttons = [\"space:A\", \"z\"]\nabis = [\"arm64-v8a\", \"x86_64\"]\n";
+        let g: GameToml = toml::from_str(src).unwrap();
+        assert_eq!(g.android.virtual_buttons, vec!["space:A", "z"]);
+        let text = write_game_toml(&g);
+        let back: GameToml = toml::from_str(&text).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{g:?}"), "{text}");
+        // projects that never exported keep their game.toml free of new sections
+        let plain: GameToml = toml::from_str("[game]\nname = \"x\"\n").unwrap();
+        let t = write_game_toml(&plain);
+        assert!(!t.contains("[export]") && !t.contains("[android]") && !t.contains("version") && !t.contains("icon"), "{t}");
     }
 }

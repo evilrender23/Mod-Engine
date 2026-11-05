@@ -360,6 +360,10 @@ pub(super) fn register(r: &mut Reg) {
     r.f("mouse_pressed", |e, _, a| Ok(Value::Bool(e.input.mouse_pressed[mouse_arg(&A(a), 0)?])));
     r.f("mouse_released", |e, _, a| Ok(Value::Bool(e.input.mouse_released[mouse_arg(&A(a), 0)?])));
     r.f("mouse_wheel", |e, _, _| Ok(Value::Num(e.input.wheel)));
+    // touch screens: fingers in GUI coordinates (a single finger also moves the mouse)
+    r.f("touch_count", |e, _, _| Ok(Value::Num(e.input.touches.len() as f64)));
+    r.f("touch_x", |e, _, a| Ok(Value::Num(e.input.touches.get(A(a).num(0)? as usize).map_or(0.0, |t| t.0))));
+    r.f("touch_y", |e, _, a| Ok(Value::Num(e.input.touches.get(A(a).num(0)? as usize).map_or(0.0, |t| t.1))));
     r.f("gui_mouse_x", |e, _, _| Ok(Value::Num(e.input.mouse_x)));
     r.f("gui_mouse_y", |e, _, _| Ok(Value::Num(e.input.mouse_y)));
 
@@ -458,14 +462,14 @@ pub(super) fn register(r: &mut Reg) {
     r.f("save_data", |e, _, a| {
         let name = safe_name(&A(a).text(0)?)?;
         let json = to_json(A(a).val(1)?)?;
-        let dir = e.dir.join("saves");
+        let dir = e.save_dir.clone();
         let ok = std::fs::create_dir_all(&dir).is_ok()
             && std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(&json).unwrap_or_default()).is_ok();
         Ok(Value::Bool(ok))
     });
     r.f("load_data", |e, _, a| {
         let name = safe_name(&A(a).text(0)?)?;
-        let path = e.dir.join("saves").join(format!("{name}.json"));
+        let path = e.save_dir.join(format!("{name}.json"));
         let fallback = a.get(1).cloned().unwrap_or(Value::Null);
         match std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
             Some(j) => Ok(from_json(&j)),

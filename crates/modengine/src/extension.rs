@@ -101,13 +101,12 @@ pub const META_FILE: &str = "extension.toml";
 /// `.ms` files of an extension folder (recursive), relative to the folder, sorted.
 pub fn script_files(dir: &Path) -> Vec<String> {
     fn walk(root: &Path, d: &Path, out: &mut Vec<String>) {
-        let Ok(rd) = std::fs::read_dir(d) else { return };
-        for e in rd.flatten() {
-            let p = e.path();
-            if e.file_name().to_string_lossy().starts_with('.') {
+        let Ok(rd) = crate::vfs::read_dir(d) else { return };
+        for (p, is_dir) in rd {
+            if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
                 continue;
             }
-            if p.is_dir() {
+            if is_dir {
                 walk(root, &p, out);
             } else if p.extension().is_some_and(|x| x == "ms") {
                 out.push(p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/"));
@@ -124,8 +123,8 @@ pub fn script_files(dir: &Path) -> Vec<String> {
 pub fn load_one(project: &Path, dir: &Path) -> Result<Extension, String> {
     let name = dir.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let meta_path = dir.join(META_FILE);
-    let meta: ExtensionToml = if meta_path.exists() {
-        let text = std::fs::read_to_string(&meta_path).map_err(|e| format!("{}: {e}", meta_path.display()))?;
+    let meta: ExtensionToml = if crate::vfs::exists(&meta_path) {
+        let text = crate::vfs::read_to_string(&meta_path).map_err(|e| format!("{}: {e}", meta_path.display()))?;
         toml::from_str(&text).map_err(|e| format!("{}: {e}", meta_path.display()))?
     } else {
         ExtensionToml { name: name.clone(), ..Default::default() }
@@ -152,8 +151,8 @@ pub fn load_one(project: &Path, dir: &Path) -> Result<Extension, String> {
 /// Every `extensions/<name>/` folder of a project, alphabetically.
 pub fn load_all(project: &Path) -> Result<Vec<Extension>, String> {
     let root = project.join("extensions");
-    let Ok(rd) = std::fs::read_dir(&root) else { return Ok(vec![]) };
-    let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().unwrap().to_string_lossy().starts_with('.')).collect();
+    let Ok(rd) = crate::vfs::read_dir(&root) else { return Ok(vec![]) };
+    let mut dirs: Vec<PathBuf> = rd.into_iter().filter(|(p, is_dir)| *is_dir && !p.file_name().unwrap().to_string_lossy().starts_with('.')).map(|(p, _)| p).collect();
     dirs.sort();
     dirs.iter().map(|d| load_one(project, d)).collect()
 }

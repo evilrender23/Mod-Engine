@@ -306,6 +306,9 @@ function Principal {
     New-Item -ItemType Directory (Join-Path $nuevo 'examples') | Out-Null
     # El editor lanza el juego con el modengine.exe que tenga al lado: van juntos.
     Copy-Item (Join-Path $compilado 'modengine.exe'), (Join-Path $compilado 'modeditor.exe') $nuevo
+    # Archivo → Exportar… copia este runner en los juegos exportados para Windows.
+    $runner = Join-Path $compilado 'modengine-runner.exe'
+    if (Test-Path $runner) { Copy-Item $runner $nuevo }
     Copy-Item (Join-Path $codigo 'examples\platformer') (Join-Path $nuevo 'examples') -Recurse
     Remove-Item (Join-Path $nuevo 'examples\platformer\saves') -Recurse -Force -ErrorAction SilentlyContinue
     [IO.File]::WriteAllText((Join-Path $nuevo 'version.json'), ($version | ConvertTo-Json), $utf8)

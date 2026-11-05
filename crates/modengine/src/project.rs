@@ -14,7 +14,6 @@ use crate::draw::parse_color;
 use crate::synth::{render_wav, SynthDef};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 // ------------------------------------------------------------------ game.toml
@@ -26,6 +25,10 @@ pub struct GameToml {
     pub display: DisplaySection,
     /// Default characters for inline pixel-art sprites: `"r" = "#ff0000"`.
     pub palette: BTreeMap<String, String>,
+    /// Options for `modengine export` (Archivo → Exportar…).
+    pub export: ExportSection,
+    /// Android package options (APK export, touch controls).
+    pub android: AndroidSection,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -35,11 +38,76 @@ pub struct GameSection {
     pub start_room: Option<String>,
     /// Room order used by next_room()/prev_room(). Defaults to alphabetical.
     pub rooms: Vec<String>,
+    /// Version shown by exported games (`1.0.0`).
+    pub version: String,
+    /// PNG inside the project used as the window/executable/app icon.
+    pub icon: Option<String>,
 }
 
 impl Default for GameSection {
     fn default() -> Self {
-        GameSection { name: "Mod Engine game".into(), start_room: None, rooms: vec![] }
+        GameSection { name: "Mod Engine game".into(), start_room: None, rooms: vec![], version: "1.0.0".into(), icon: None }
+    }
+}
+
+/// `[export]`: how `modengine export` packages the game.
+#[derive(Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct ExportSection {
+    /// File name of the executable (default: the game name).
+    pub exe_name: Option<String>,
+    /// Output folder (relative to the project; default `export/<target>`).
+    pub out_dir: Option<String>,
+    /// Last target exported from the editor: "linux", "windows" or "android".
+    pub target: Option<String>,
+    /// Windows: keep a console window (useful to see `show_debug_message` output).
+    pub windows_console: bool,
+}
+
+/// `[android]`: APK options.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct AndroidSection {
+    /// Application id, e.g. `com.example.mygame` (default: `com.modengine.<name>`).
+    pub package: Option<String>,
+    /// Increase for every release uploaded to a store.
+    pub version_code: u32,
+    /// "landscape", "portrait" or "sensor".
+    pub orientation: String,
+    /// On-screen direction pad: "none", "arrows" (left/right) or "dpad" (4 directions).
+    pub virtual_pad: String,
+    /// On-screen buttons, bottom right, each pressing a key: `["space", "z"]`.
+    pub virtual_buttons: Vec<String>,
+    /// CPU architectures to include: "arm64-v8a", "armeabi-v7a", "x86_64".
+    pub abis: Vec<String>,
+}
+
+impl Default for AndroidSection {
+    fn default() -> Self {
+        AndroidSection {
+            package: None,
+            version_code: 1,
+            orientation: "landscape".into(),
+            virtual_pad: "none".into(),
+            virtual_buttons: vec![],
+            abis: vec!["arm64-v8a".into()],
+        }
+    }
+}
+
+impl GameToml {
+    /// The Android application id (configured or derived from the game name).
+    pub fn android_package(&self) -> String {
+        match self.android.package.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => p.to_string(),
+            None => {
+                let mut id: String = crate::vfs::safe_id(&self.game.name).chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                if id.is_empty() || id.starts_with(|c: char| c.is_ascii_digit() || c == '_') {
+                    id = format!("game{id}");
+                }
+                format!("com.modengine.{id}")
+            }
+        }
     }
 }
 
@@ -246,7 +314,7 @@ pub struct Project {
 }
 
 fn read_text(p: &Path) -> Result<String, String> {
-    fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))
+    crate::vfs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 fn read_toml<T: for<'de> Deserialize<'de>>(p: &Path) -> Result<T, String> {
@@ -255,8 +323,8 @@ fn read_toml<T: for<'de> Deserialize<'de>>(p: &Path) -> Result<T, String> {
 }
 
 fn list_dir(dir: &Path) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = match fs::read_dir(dir) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_file()).collect(),
+    let mut v: Vec<PathBuf> = match crate::vfs::read_dir(dir) {
+        Ok(rd) => rd.into_iter().filter(|(_, is_dir)| !is_dir).map(|(p, _)| p).collect(),
         Err(_) => vec![],
     };
     v.sort();
@@ -291,7 +359,7 @@ pub fn asset_files(dir: &Path, exts: &[&str]) -> Vec<(String, PathBuf, bool)> {
 impl Project {
     pub fn load(dir: &Path) -> Result<Project, String> {
         let game_path = dir.join("game.toml");
-        if !game_path.exists() {
+        if !crate::vfs::is_file(&game_path) {
             return Err(format!("{} is not a Mod Engine project (missing game.toml)", dir.display()));
         }
         let config: GameToml = read_toml(&game_path)?;
@@ -308,14 +376,14 @@ impl Project {
                 let data = match (&t.file, &t.synth) {
                     (Some(f), _) => {
                         let fp = path.parent().unwrap().join(f);
-                        fs::read(&fp).map_err(|e| format!("{}: {e}", fp.display()))?
+                        crate::vfs::read(&fp).map_err(|e| format!("{}: {e}", fp.display()))?
                     }
                     (None, Some(s)) => render_wav(s),
                     (None, None) => return Err(format!("{}: needs `file = \"...\"` or a [synth] table", path.display())),
                 };
                 sounds.push(SoundAsset { name, data, volume: t.volume.unwrap_or(1.0) });
             } else {
-                let data = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let data = crate::vfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
                 sounds.push(SoundAsset { name, data, volume: 1.0 });
             }
         }
@@ -353,14 +421,13 @@ impl Project {
 }
 
 pub fn collect_scripts(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) -> Result<(), String> {
-    let Ok(rd) = fs::read_dir(dir) else { return Ok(()) };
-    for e in rd.filter_map(|e| e.ok()) {
-        let p = e.path();
-        let name = e.file_name().to_string_lossy().to_string();
+    let Ok(rd) = crate::vfs::read_dir(dir) else { return Ok(()) };
+    for (p, is_dir) in rd {
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         if name.starts_with('.') || name == "target" || name == "saves" {
             continue;
         }
-        if p.is_dir() {
+        if is_dir {
             collect_scripts(root, &p, out)?;
         } else if ext(&p) == "ms" {
             let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
@@ -385,7 +452,7 @@ pub fn load_sprite(name: &str, path: &Path, is_toml: bool, global_palette: &BTre
         } else {
             path.to_path_buf()
         };
-        let bytes = fs::read(&img_path).map_err(|e| format!("{}: {e}", img_path.display()))?;
+        let bytes = crate::vfs::read(&img_path).map_err(|e| format!("{}: {e}", img_path.display()))?;
         let img = image::load_from_memory(&bytes).map_err(|e| format!("{}: {e}", img_path.display()))?.to_rgba8();
         let (w, h) = img.dimensions();
         let mut frames = Vec::new();

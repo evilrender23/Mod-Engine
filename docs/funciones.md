@@ -103,6 +103,7 @@ recibe el evento vuelve antes a su posición del paso anterior.
 | `mouse_down(b)`, `mouse_pressed(b)`, `mouse_released(b)` | botones (`mouse.left`, `mouse.right`, `mouse.middle`) |
 | `mouse_wheel()` | movimiento de la rueda este paso |
 | `gui_mouse_x()`, `gui_mouse_y()` | ratón en coordenadas de pantalla (para `draw_gui`) |
+| `touch_count()`, `touch_x(i)`, `touch_y(i)` | dedos en una pantalla táctil (Android), en coordenadas de pantalla; un solo dedo también mueve el ratón |
 
 ## Dibujo
 

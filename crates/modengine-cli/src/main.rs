@@ -1,13 +1,8 @@
 //! `modengine` command line: run, check and create Mod Engine projects.
 
-mod backend;
-mod gpu_fx;
-mod shader_tool;
-
-mod script_input;
-
 use modengine::Engine;
-use script_input::ScriptedInput;
+use modengine_cli::script_input::ScriptedInput;
+use modengine_cli::{backend, export, runner, shader_tool};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -15,17 +10,21 @@ const USAGE: &str = "\
 Mod Engine — 2D games made of objects, events and rooms
 
 usage:
-  modengine run <project> [--room R] [--exec CODE] [--input SPEC] [--screenshot <file.png>] [--frames N]
+  modengine run <project|game.dat> [--room R] [--exec CODE] [--input SPEC] [--screenshot <file.png>] [--frames N] [--touch]
   modengine check <project> [--room R] [--exec CODE] [--input SPEC] [--steps N] [--watch Object]
   modengine new <folder>
   modengine shader <project> [name] [--check] [--sprite S] [--uniform n=a,b] [--screenshot F.png]
                                            compile shaders on the GPU / live shader preview
+  modengine export <project> --target linux|windows|android [--out DIR] [--release] [--arch A,B] [--zip]
+  modengine export --setup <target>        install/check what exporting to <target> needs
+  modengine export --doctor                show which export targets are ready
   modengine functions
   modengine <project>                      same as `run`
 
 --room R       start in room R instead of the configured start room
 --exec CODE    run ModScript (global scope) right after the first room starts, e.g. \"with Player x = 800\"
 --input SPEC   scripted keys, e.g. \"10-200:right,30:space\" (hold right on steps 10..200, tap space at 30)
+--touch        show the on-screen touch controls of [android] (the mouse acts as a finger)
 
 in game:  F3 debug overlay   F4 fullscreen   F12 screenshot";
 
@@ -39,11 +38,12 @@ struct Args {
     watch: Vec<String>,
     room: Option<String>,
     exec: Option<String>,
+    touch: bool,
 }
 
 fn parse_args() -> Args {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    let mut a = Args { cmd: String::new(), path: None, screenshot: None, frames: None, steps: 600, input: None, watch: vec![], room: None, exec: None };
+    let mut a = Args { cmd: String::new(), path: None, screenshot: None, frames: None, steps: 600, input: None, watch: vec![], room: None, exec: None, touch: false };
     let mut i = 0;
     let mut positional = Vec::new();
     while i < raw.len() {
@@ -63,6 +63,7 @@ fn parse_args() -> Args {
             "--watch" => a.watch.push(value()),
             "--room" => a.room = Some(value()),
             "--exec" => a.exec = Some(value()),
+            "--touch" => a.touch = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 exit(0)
@@ -82,7 +83,9 @@ fn parse_args() -> Args {
 }
 
 fn load(path: &Path, args: &Args) -> Engine {
-    let mut e = match Engine::load(path) {
+    // a folder is a project; a file is an exported game (game.dat or a runner with a pack)
+    let loaded = if path.is_file() { Engine::load_pack(path) } else { Engine::load(path) };
+    let mut e = match loaded {
         Ok(e) => e,
         Err(msg) => {
             eprintln!("could not load the project:\n{msg}");
@@ -121,24 +124,17 @@ fn main() {
     if raw.first().map(String::as_str) == Some("shader") {
         return shader_tool::main_cli(&raw[1..]);
     }
+    if raw.first().map(String::as_str) == Some("export") {
+        exit(export::main_cli(&raw[1..]));
+    }
     let args = parse_args();
     match args.cmd.as_str() {
         "run" => {
             let path = args.path.clone().unwrap_or_else(|| PathBuf::from("."));
             let engine = load(&path, &args);
-            let d = &engine.config.display;
-            let conf = macroquad::window::Conf {
-                window_title: engine.config.game.name.clone(),
-                window_width: (d.width * d.scale.max(1)) as i32,
-                window_height: (d.height * d.scale.max(1)) as i32,
-                fullscreen: d.fullscreen,
-                window_resizable: true,
-                high_dpi: false,
-                ..Default::default()
-            };
             let shot = args.screenshot.clone().map(|p| (args.frames.unwrap_or(120), p));
-            let opts = backend::RunOpts { screenshot: shot, input: scripted(&args.input) };
-            macroquad::Window::from_config(conf, backend::run(engine, opts));
+            let opts = backend::RunOpts { screenshot: shot, input: scripted(&args.input), touch: args.touch.then_some(true) };
+            runner::play(engine, opts);
         }
         "check" => {
             let path = args.path.clone().unwrap_or_else(|| PathBuf::from("."));

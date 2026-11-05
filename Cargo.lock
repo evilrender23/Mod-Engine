@@ -2004,9 +2004,14 @@ dependencies = [
 name = "modengine-cli"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "flate2",
+ "image 0.25.10",
  "macroquad",
  "modengine",
  "modscript",
+ "serde_json",
+ "toml 0.8.23",
 ]
 
 [[package]]

@@ -126,6 +126,7 @@ map = '''
 - [docs/lenguaje.md](docs/lenguaje.md): ModScript paso a paso.
 - [docs/proyecto.md](docs/proyecto.md): `game.toml`, sprites, sonidos, fuentes y rooms.
 - [docs/funciones.md](docs/funciones.md): todas las funciones integradas.
+- [docs/exportar.md](docs/exportar.md): crear el juego para **Windows (.exe), Linux y Android (.apk)**.
 - [docs/arquitectura.md](docs/arquitectura.md): cómo está hecho el motor y el orden exacto del bucle de juego.
 
 ## Línea de comandos
@@ -134,6 +135,9 @@ map = '''
 modengine run <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--screenshot f.png] [--frames N]
 modengine check <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--steps N] [--watch Objeto]
 modengine new <carpeta>
+modengine export <proyecto> --target windows|linux|android [--out CARPETA] [--release]
+modengine export --setup windows|linux|android   # instala lo que falte (en tu carpeta de usuario)
+modengine export --doctor                         # qué plataformas están listas
 modengine functions
 ```
 

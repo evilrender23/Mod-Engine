@@ -138,7 +138,7 @@ pub fn slice(sheet_w: u32, sheet_h: u32, tw: u32, th: u32, offset: [u32; 2], sep
 /// Loads `tilesets/<name>.toml`. `sprite` finds the project's sprites.
 pub fn load_tileset<'s>(name: &str, path: &Path, sprite: &dyn Fn(&str) -> Option<&'s Sprite>) -> Result<TileSetAsset, String> {
     let where_ = path.display().to_string();
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{where_}: {e}"))?;
+    let text = crate::vfs::read_to_string(path).map_err(|e| format!("{where_}: {e}"))?;
     let t: TileSetToml = toml::from_str(&text).map_err(|e| format!("{where_}: {e}"))?;
     from_toml(name, &t, path.parent().unwrap_or(Path::new(".")), sprite).map_err(|e| format!("{where_}: {e}"))
 }
@@ -151,7 +151,7 @@ pub fn from_toml<'s>(name: &str, t: &TileSetToml, folder: &Path, sprite: &dyn Fn
         }
         (None, Some(f)) => {
             let p = folder.join(f);
-            let bytes = std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+            let bytes = crate::vfs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             let img = image::load_from_memory(&bytes).map_err(|e| format!("{}: {e}", p.display()))?.to_rgba8();
             let (w, h) = img.dimensions();
             (w, h, img.into_raw(), f.clone(), [16, 16])

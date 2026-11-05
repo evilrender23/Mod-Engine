@@ -76,6 +76,17 @@ El resultado es una lista de `DrawCmd` (sprite, rectángulo, texto...). El backe
 - `check` ejecuta el mismo motor sin ventana: los dibujos se descartan y el texto se mide con
   una aproximación.
 
+## Juegos exportados
+
+- `modengine::pack` escribe y lee `game.dat`: el proyecto entero en un fichero (índice + datos +
+  suma de comprobación), pegado al final del runner o en los assets del APK.
+- `modengine::vfs` hace que los cargadores lean igual de una carpeta que de un pack montado en una
+  ruta (la del propio fichero). Con una carpeta no se monta nada: el comportamiento no cambia.
+- `modengine-cli` es también una biblioteca: `runner.rs` (busca el pack y abre la ventana),
+  `touch.rs` (mando táctil), `export/` (`modengine export`). El binario `modengine-runner` es lo que
+  se copia en los juegos exportados; en Android, la biblioteca se compila como `cdylib` y exporta
+  `quad_main`. Ver [exportar.md](exportar.md).
+
 ## Añadir una función integrada
 
 Las funciones están en `crates/modengine/src/natives/` (`core.rs`, `game.rs`, `gfx.rs`):
@@ -95,4 +106,4 @@ r.f("double", |_engine, _cx, a| {
 - Máscaras de colisión por píxel y cajas que rotan.
 - Rejilla espacial para colisiones con miles de instancias.
 - Mandos (gamepad), shaders, sistemas de partículas, caminos (paths) y timelines.
-- Exportar a web (macroquad compila a WebAssembly).
+- Exportar a web (macroquad compila a WebAssembly) y a macOS.

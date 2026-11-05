@@ -12,6 +12,12 @@ scale = 4
 step_rate = 60
 letterbox = "#1a1c2c"
 
+# Android export (Archivo → Exportar…): on-screen controls for touch screens
+[android]
+package = "com.modengine.coinclimber"
+virtual_pad = "arrows"
+virtual_buttons = ["space:A", "enter:OK"]
+
 # Characters usable in every pixel-art sprite. '.' is transparent.
 [palette]
 "k" = "#1a1c2c"   # outline

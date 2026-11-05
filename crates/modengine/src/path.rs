@@ -74,7 +74,7 @@ impl PathDef {
     }
 
     pub fn load(name: &str, path: &Path) -> Result<PathDef, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = crate::vfs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let t: PathToml = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(PathDef::new(name, t))
     }

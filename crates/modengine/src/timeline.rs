@@ -79,7 +79,7 @@ impl TimelineDef {
     }
 
     pub fn load(name: &str, path: &Path, rel: &str) -> Result<TimelineDef, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = crate::vfs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let t: TimelineToml = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
         TimelineDef::from_toml(name, rel, &t)
     }

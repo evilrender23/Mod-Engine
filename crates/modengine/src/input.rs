@@ -28,6 +28,8 @@ pub struct Input {
     pub mouse_x: f64,
     pub mouse_y: f64,
     pub wheel: f64,
+    /// Fingers on a touch screen, in game-screen (GUI) coordinates.
+    pub touches: Vec<(f64, f64)>,
 }
 
 impl Default for Input {
@@ -43,6 +45,7 @@ impl Default for Input {
             mouse_x: 0.0,
             mouse_y: 0.0,
             wheel: 0.0,
+            touches: vec![],
         }
     }
 }

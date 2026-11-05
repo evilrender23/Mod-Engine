@@ -351,6 +351,8 @@ principal() {
     mkdir -p "$NUEVO/examples"
     # El editor lanza el juego con el `modengine` que tenga al lado: van juntos.
     cp "$compilado/modengine" "$compilado/modeditor" "$NUEVO/" || fallar 'No se pudo copiar lo compilado.'
+    # Archivo → Exportar… copia este runner en los juegos exportados para este sistema.
+    [ -f "$compilado/modengine-runner" ] && cp "$compilado/modengine-runner" "$NUEVO/"
     cp -R "$CODIGO/examples/platformer" "$NUEVO/examples/" && rm -rf "$NUEVO/examples/platformer/saves"
     printf '{\n  "commit": %s,\n  "fecha": %s,\n  "rama": %s,\n  "repo": %s\n}\n' \
         "$(json "$commit")" "$(json "$fecha")" "$(json "$RAMA")" "$(json "$origen")" > "$NUEVO/version.json"
