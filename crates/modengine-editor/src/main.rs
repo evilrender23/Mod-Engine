@@ -87,7 +87,7 @@ fn main() -> eframe::Result {
             "--click" => auto.click = args.next().and_then(|s| s.split_once(',').and_then(|(x, y)| Some(eframe::egui::Pos2::new(x.trim().parse().ok()?, y.trim().parse().ok()?)))),
             // --layer Mundo: select that layer in the opened rooms (screenshots of tile painting)
             "--layer" => auto.layer = args.next(),
-            // --agent-demo history|queue|diff|browser : sample Agente state for screenshots
+            // --agent-demo history|queue|diff|browser|import : sample Agente state for screenshots
             "--agent-demo" => {
                 auto.agent = true;
                 auto.agent_demo = args.next();

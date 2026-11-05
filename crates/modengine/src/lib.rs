@@ -9,6 +9,7 @@
 
 pub mod anim_assets;
 pub mod animcurve;
+pub mod credits;
 pub mod draw;
 pub mod effects;
 pub mod extension;
@@ -16,6 +17,7 @@ pub mod particles;
 pub mod shader;
 pub mod engine;
 pub mod font;
+pub mod import;
 pub mod input;
 pub mod instance;
 pub mod natives;

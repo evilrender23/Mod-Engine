@@ -121,6 +121,64 @@ pub fn docs_dir() -> Option<PathBuf> {
     c.into_iter().find(|d| d.join("funciones.md").is_file()).map(|d| d.canonicalize().unwrap_or(d))
 }
 
+/// The `modengine` command line the agent imports art with: `$MODENGINE_BIN`, next to the
+/// editor (also one folder up, for test binaries in `target/<profile>/deps`), or in PATH.
+pub fn modengine_tool() -> Option<PathBuf> {
+    let name = format!("modengine{}", std::env::consts::EXE_SUFFIX);
+    let mut c: Vec<PathBuf> = vec![];
+    if let Some(b) = std::env::var_os("MODENGINE_BIN") {
+        c.push(b.into());
+    }
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
+        c.push(dir.join(&name));
+        if dir.file_name().is_some_and(|n| n == "deps") {
+            c.extend(dir.parent().map(|d| d.join(&name)));
+        }
+    }
+    c.into_iter().find(|p| is_executable(p)).map(|p| p.canonicalize().unwrap_or(p)).or_else(|| find_program("modengine"))
+}
+
+/// Assets a turn brought in, from its changed files: binaries in sprites/, sounds/ and
+/// fonts/, and new tile sets (`sprite 'hero'`, `tile set 'ts_cave'`).
+pub fn imported_assets(files: &[snapshot::FileChange]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for f in files.iter().filter(|f| f.kind != ChangeKind::Deleted) {
+        let Some((dir, file)) = f.rel.split_once('/') else { continue };
+        let Some((stem, ext)) = file.rsplit_once('.') else { continue };
+        let ext = ext.to_lowercase();
+        let what = match (dir, ext.as_str()) {
+            ("sprites", "png") => "sprite",
+            ("sounds", "wav" | "ogg") => "sonido",
+            ("fonts", "ttf" | "otf") => "fuente",
+            ("tilesets", "toml") if f.kind == ChangeKind::Added => "tile set",
+            _ => continue,
+        };
+        let line = format!("{what} '{stem}'");
+        if !out.contains(&line) {
+            out.push(line);
+        }
+    }
+    out
+}
+
+/// What the "Importar al proyecto" button writes in the message box for these attachments
+/// (`None`: no art folder or pictures from outside the project).
+pub fn import_instruction(root: Option<&Path>, attachments: &[Attachment]) -> Option<String> {
+    let outside = |a: &&Attachment| a.on_disk() && root.is_none_or(|r| !agent::inside(r, &a.path));
+    let dirs: Vec<&Attachment> = attachments.iter().filter(outside).filter(|a| a.path.is_dir()).collect();
+    let images: Vec<&Attachment> = attachments.iter().filter(outside).filter(|a| a.kind == agent::AttachKind::Image).collect();
+    let what = match (dirs.len(), images.len()) {
+        (0, 0) | (0, 1) => return None,
+        (1, 0) => format!("el arte de la carpeta «{}»", dirs[0].label),
+        (0, _) => "estas imágenes".to_string(),
+        _ => "el arte adjunto".to_string(),
+    };
+    Some(format!(
+        "Importa al proyecto {what}: mira cada imagen, decide qué es sprite (con sus frames y origen) y qué es tile set, \
+         e impórtalo con modengine import. Si hay ficheros de licencia o créditos, añádelos con --credit."
+    ))
+}
+
 /// Signals the whole process group (the CLI and the commands it started).
 #[cfg(unix)]
 fn signal_group(child: &Child, sig: i32) {
@@ -152,6 +210,8 @@ pub struct Polled {
     pub reload: bool,
     /// A run ended: check the project.
     pub finished: bool,
+    /// Assets the turn that ended brought into the project (`sprite 'hero'`), for Salida.
+    pub imported: Vec<String>,
     /// Project files the agent reported writing during the run that ended.
     pub changed: Vec<PathBuf>,
 }
@@ -250,6 +310,10 @@ pub struct AgentPanel {
     pub program: Option<PathBuf>,
     /// Use this executable for every agent instead of looking it up (tests).
     pub program_override: Option<PathBuf>,
+    /// The `modengine` the agent imports art with, instead of [`modengine_tool`] (tests).
+    pub tool_override: Option<PathBuf>,
+    /// Assets the last turn imported, until `poll` hands them over.
+    imported: Vec<String>,
     pub entries: Vec<Entry>,
     /// The streaming reply, as an index into `entries`.
     open_text: Option<usize>,
@@ -351,6 +415,8 @@ impl AgentPanel {
             config_path: config,
             program: None,
             program_override: None,
+            tool_override: None,
+            imported: vec![],
             entries: vec![],
             open_text: None,
             input: String::new(),
@@ -1110,10 +1176,12 @@ impl AgentPanel {
         let Some(program) = self.program.clone() else { return false };
         let Some((root, name)) = self.project.clone() else { return false };
         let docs = docs_dir();
+        let tool = self.tool_override.clone().or_else(modengine_tool);
+        let context_tool = tool.as_deref().filter(|_| self.permission != Permission::Plan);
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let context_file = std::env::temp_dir().join(format!("modengine-agent-{}-{n}.md", std::process::id()));
-        if let Err(e) = std::fs::write(&context_file, agent::engine_context(&name, docs.as_deref())) {
+        if let Err(e) = std::fs::write(&context_file, agent::engine_context(&name, docs.as_deref(), context_tool)) {
             self.notice(format!("No se pudo escribir un fichero temporal: {e}"), Tone::Error);
             return false;
         }
@@ -1130,6 +1198,7 @@ impl AgentPanel {
             raw,
             fork_at,
             seed: if self.session.is_empty() { self.seed.clone() } else { String::new() },
+            tool,
         };
         self.open_text = None;
         match self.spawn(&program, &run) {
@@ -1291,6 +1360,7 @@ impl AgentPanel {
             if r.stdout_done || r.exited_at.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
                 out.changed = r.changed.iter().cloned().collect();
                 self.finish(r, st);
+                out.imported = std::mem::take(&mut self.imported);
                 out.reload = true;
                 out.finished = true;
                 if self.compact_requested {
@@ -1345,6 +1415,7 @@ impl AgentPanel {
                 if let Some(before) = r.before.take() {
                     let after = Snapshot::take(&before.root);
                     let files = snapshot::changes(&before, &after);
+                    self.imported = imported_assets(&files);
                     if !files.is_empty() {
                         self.entries.push(Entry::Changes { turn, files });
                         self.snaps.push((turn, before));
@@ -1793,6 +1864,21 @@ impl AgentPanel {
                 });
                 if let Some(i) = remove {
                     self.attachments.remove(i);
+                }
+                // Art from outside the project: one click writes the instruction to import it.
+                if let Some(text) = import_instruction(self.project.as_ref().map(|(r, _)| r.as_path()), &self.attachments) {
+                    let plan = self.permission == Permission::Plan;
+                    let tip = if plan {
+                        "En «Solo planificar» el agente no puede importar: elige «Editar archivos» en el menú de permisos"
+                    } else {
+                        "Escribe la instrucción para que el agente mire cada imagen y la importe con modengine import (puedes editarla antes de enviar)"
+                    };
+                    let r = ui.add_enabled(!plan, egui::Button::new("🖼 Importar al proyecto").small()).on_hover_text(tip).on_disabled_hover_text(tip);
+                    if r.clicked() {
+                        self.input = text;
+                        ui.memory_mut(|m| m.request_focus(input_id));
+                        move_cursor_to_end(ui.ctx(), input_id, &self.input);
+                    }
                 }
                 ui.add_space(2.0);
             }
@@ -2779,6 +2865,37 @@ impl AgentPanel {
                 self.browser.selected = first.into_iter().collect();
                 self.attachments = vec![Attachment::file(&std::env::temp_dir()), Attachment::url("https://lospec.com/palette-list/pear36")];
             }
+            "import" => {
+                // an art folder attached (`$MODENGINE_DEMO_ART`, or a sample one) and an import turn done
+                let art = std::env::var_os("MODENGINE_DEMO_ART").map(PathBuf::from).unwrap_or_else(|| {
+                    let d = std::env::temp_dir().join("Arte del pack");
+                    let _ = std::fs::create_dir_all(&d);
+                    let strip = image::RgbaImage::from_fn(96, 24, |x, y| if x % 24 > 4 && x % 24 < 20 && y > 2 { image::Rgba([90, 120, 230, 255]) } else { image::Rgba([0, 0, 0, 0]) });
+                    let _ = strip.save(d.join("knight run.png"));
+                    d
+                });
+                let att = Attachment::file(&art);
+                let prompt = import_instruction(Some(root), std::slice::from_ref(&att)).unwrap_or_default();
+                self.title = "Importar el arte del pack".into();
+                self.entries = vec![
+                    Entry::User(prompt.clone()),
+                    Entry::Attached(vec![att.clone()]),
+                    Entry::Tool(ToolLine { icon: "👁", verb: "Leer".into(), detail: format!("{}/knight run.png", art.display()) }),
+                    Entry::Tool(ToolLine { icon: "▶", verb: "Ejecutar".into(), detail: "modengine inspect-image \"…/Arte del pack\" --json".into() }),
+                    Entry::Tool(ToolLine { icon: "▶", verb: "Ejecutar".into(), detail: "modengine import . \"…/knight run.png\" --name knight_run --frames 4 --origin bottom-center".into() }),
+                    Entry::Text("Importado **knight_run**: 4 frames de 24×24, origen abajo al centro.".into()),
+                    Entry::Changes {
+                        turn: 1,
+                        files: vec![
+                            snapshot::FileChange { rel: "sprites/knight_run.png".into(), kind: ChangeKind::Added, added: 0, removed: 0, binary: true, reverted: false },
+                            snapshot::FileChange { rel: "sprites/knight_run.toml".into(), kind: ChangeKind::Added, added: 4, removed: 0, binary: false, reverted: false },
+                        ],
+                    },
+                ];
+                self.permission = Permission::Edit;
+                self.attachments = vec![att];
+                self.input.clear();
+            }
             _ => {}
         }
     }
@@ -3148,6 +3265,106 @@ echo '{"type":"turn.completed"}'"#,
         assert!(p.entries.iter().any(|e| matches!(e, Entry::Divider(_))), "{:?}", p.entries.last());
         let _ = std::fs::remove_dir_all(&project);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// One real turn in "Editar archivos" importing a folder of art from outside a copy of
+    /// examples/platformer: `MODENGINE_AGENT_SMOKE=claude cargo test --release -p modengine-editor
+    /// -- --ignored smoke_real_cli_imports_art --nocapture` (`MODENGINE_SMOKE_KEEP=1` keeps the folders).
+    #[test]
+    #[ignore]
+    fn smoke_real_cli_imports_art() {
+        let Some(kind) = std::env::var("MODENGINE_AGENT_SMOKE").ok().and_then(|k| Kind::from_id(&k)) else { return };
+        fn copy_dir(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    copy_dir(&p, &to.join(e.file_name()));
+                } else {
+                    std::fs::copy(&p, to.join(e.file_name())).unwrap();
+                }
+            }
+        }
+        let base = std::env::temp_dir().join(format!("modeditor_smoke_import_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("platformer");
+        copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/platformer"), &project);
+        let project = project.canonicalize().unwrap();
+        let art = base.join("arte descargado");
+        std::fs::create_dir_all(&art).unwrap();
+        // real downloads from the store cache when present
+        let cache = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join(".cache/modengine/store/files");
+        let mut credits = String::new();
+        for (dir, file, credit) in [
+            ("92779efe4ffdf578", "slime spritesheet calciumtrice.png", "slime spritesheet calciumtrice.png: «Animated Slime» by Calciumtrice, CC-BY 3.0, https://opengameart.org/content/animated-slime"),
+            ("1df5f6b91d1fd194", "forest.png", "forest.png: «Forest Scene Items + Animated Slime/Exp Orbs», CC0, https://opengameart.org/content/forest-scene-items-animated-slimeexp-orbs"),
+        ] {
+            if std::fs::copy(cache.join(dir).join(file), art.join(file)).is_ok() {
+                credits += &format!("{credit}\n");
+            }
+        }
+        // a little knight running (6 frames of 24×24, no hint in the name) and a 16×16 grass tile set
+        let knight = image::RgbaImage::from_fn(144, 24, |x, y| {
+            let (f, cx) = (x / 24, x % 24);
+            let leg = (f % 3) as i32 - 1;
+            let body = (8..16).contains(&cx) && (6..16).contains(&y);
+            let head = (9..15).contains(&cx) && (1..6).contains(&y);
+            let legs = y >= 16 && y < 23 && ((cx as i32 - 9 - leg).abs() <= 1 || (cx as i32 - 14 + leg).abs() <= 1);
+            if head { image::Rgba([240, 200, 160, 255]) } else if body { image::Rgba([60, 90, 200, 255]) } else if legs { image::Rgba([60, 40, 30, 255]) } else { image::Rgba([0, 0, 0, 0]) }
+        });
+        knight.save(art.join("knight run.png")).unwrap();
+        let grass = image::RgbaImage::from_fn(64, 48, |x, y| {
+            let t = (x / 16) + (y / 16) * 4;
+            if y % 16 < 4 && y / 16 == 0 { image::Rgba([60, 170 + (t * 7) as u8, 60, 255]) } else { image::Rgba([120 + (t * 5) as u8, 80, 40 + ((x ^ y) % 7) as u8 * 5, 255]) }
+        });
+        grass.save(art.join("grass_tiles.png")).unwrap();
+        credits += "knight run.png, grass_tiles.png: hechos para esta prueba, dominio público\n";
+        std::fs::write(art.join("README.txt"), format!("Créditos del pack\n{credits}")).unwrap();
+        let art = art.canonicalize().unwrap();
+
+        let mut p = AgentPanel::with_config(None);
+        p.set_kind(kind);
+        p.set_permission(Permission::Edit);
+        p.set_model(&std::env::var("MODENGINE_AGENT_MODEL").unwrap_or_default());
+        assert!(p.program.is_some(), "{} not installed", kind.name());
+        p.tool_override = Some(workspace_modengine());
+        assert!(p.attach_path(&art));
+        let text = import_instruction(Some(&project), &p.attachments).unwrap();
+        println!("prompt: {text}");
+        let before = snapshot::Snapshot::take(&project);
+        p.send(&text, &project, "Coin Climber");
+        let ctx = egui::Context::default();
+        let (start, mut imported) = (Instant::now(), vec![]);
+        while p.running() && start.elapsed() < Duration::from_secs(900) {
+            imported.extend(p.poll(&ctx).imported);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for e in &p.entries {
+            println!("{e:?}");
+        }
+        println!("status={} imported={imported:?}", p.status);
+        let changes = snapshot::changes(&before, &snapshot::Snapshot::take(&project));
+        for c in &changes {
+            println!("{:?} {} {}", c.kind, c.rel, if c.binary { "(binario)" } else { "" });
+        }
+        for f in changes.iter().filter(|c| c.rel.ends_with(".toml") && c.kind != ChangeKind::Deleted) {
+            println!("--- {}\n{}", f.rel, std::fs::read_to_string(project.join(&f.rel)).unwrap_or_default());
+        }
+        assert!(!p.running() && p.status.starts_with("Hecho"), "{}", p.status);
+        let game = modengine::project::Project::load(&project).expect("the project still loads");
+        let new_pngs = changes.iter().filter(|c| c.kind == ChangeKind::Added && c.rel.starts_with("sprites/") && c.rel.ends_with(".png")).count();
+        assert!(new_pngs >= 3, "imported {new_pngs} images");
+        assert!(changes.iter().any(|c| c.kind == ChangeKind::Added && c.rel.starts_with("tilesets/")), "no tile set");
+        assert!(game.sprites.iter().any(|s| s.frames.len() == 6 && s.fw == 24), "the knight strip has 6 frames of 24 px");
+        assert!(!imported.is_empty());
+        let check = Command::new(workspace_modengine()).args(["check", project.to_str().unwrap(), "--steps", "60"]).output().unwrap();
+        println!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
+        assert!(check.status.success());
+        if std::env::var_os("MODENGINE_SMOKE_KEEP").is_none() {
+            let _ = std::fs::remove_dir_all(&base);
+        } else {
+            println!("kept {}", base.display());
+        }
     }
 
     #[test]
@@ -3641,5 +3858,132 @@ fi"#
         h.get_by_label("/compactar");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&project);
+    }
+
+    /// The `modengine` built from this workspace (built now when it is missing).
+    fn workspace_modengine() -> PathBuf {
+        let exe = std::env::current_exe().unwrap();
+        let profile_dir = exe.parent().unwrap().parent().unwrap().to_path_buf(); // target/<profile>
+        let bin = profile_dir.join(format!("modengine{}", std::env::consts::EXE_SUFFIX));
+        if !bin.exists() {
+            let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+            c.args(["build", "-p", "modengine-cli", "--bin", "modengine"]).current_dir(env!("CARGO_MANIFEST_DIR"));
+            if profile_dir.file_name().is_some_and(|n| n == "release") {
+                c.arg("--release");
+            }
+            assert!(c.status().unwrap().success(), "could not build modengine");
+        }
+        bin
+    }
+
+    /// An art folder outside the project: a strip named as one, a tile set and a licence.
+    fn art_folder(tag: &str) -> PathBuf {
+        let art = std::env::temp_dir().join(format!("modeditor_agent_art_{tag}_{}", std::process::id())).join("Arte del usuario");
+        let _ = std::fs::remove_dir_all(&art);
+        std::fs::create_dir_all(&art).unwrap();
+        image::RgbaImage::from_fn(64, 16, |x, _| if x % 16 > 2 && x % 16 < 13 { image::Rgba([220, 60, 60, 255]) } else { image::Rgba([0, 0, 0, 0]) }).save(art.join("hero_strip4.png")).unwrap();
+        image::RgbaImage::from_fn(32, 32, |x, y| image::Rgba([(x / 16 * 100) as u8, (y / 16 * 100) as u8, 80, 255])).save(art.join("cave_tiles.png")).unwrap();
+        std::fs::write(art.join("LICENSE.txt"), "CC0, by Tester\n").unwrap();
+        art.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn fake_claude_imports_attached_art_and_undo_removes_it() {
+        let project = crate::room::tests::temp_project("agent_import").canonicalize().unwrap();
+        let before = snapshot::Snapshot::take(&project);
+        let art = art_folder("fake");
+        let bin = workspace_modengine();
+        // The fake Claude runs the importer the editor allowed it to (read from its own argv).
+        let body = format!(
+            r#"tool=$(sed -n 's/^Bash(\(.*\) import \*)$/\1/p' '{d}/args.txt' | head -n 1)
+echo '{{"type":"system","subtype":"init","session_id":"S-imp"}}'
+echo '{{"type":"assistant","session_id":"S-imp","message":{{"content":[{{"type":"tool_use","id":"b1","name":"Bash","input":{{"command":"modengine import . art --credit CC0"}}}}]}}}}'
+"$tool" import . '{art}' --json --origin bottom-center --credit 'CC0, by Tester' > '{d}/import.json' 2> '{d}/import.err'
+echo '{{"type":"user","session_id":"S-imp","message":{{"content":[{{"type":"tool_result","tool_use_id":"b1","content":"ok"}}]}}}}'
+echo '{{"type":"result","subtype":"success","session_id":"S-imp","result":"Importados hero y ts_cave_tiles."}}'"#,
+            d = std::env::temp_dir().join(format!("modeditor_agent_import_{}", std::process::id())).display(),
+            art = art.display()
+        );
+        let (dir, exe) = fake_cli("import", &body);
+        let mut p = panel(&exe);
+        p.tool_override = Some(bin.clone());
+        p.set_permission(Permission::Edit);
+        assert!(p.attach_path(&art));
+        let text = import_instruction(Some(&project), &p.attachments).expect("an art folder offers the import");
+        assert!(text.contains("«Arte del usuario»") && text.contains("modengine import") && text.contains("--credit"), "{text}");
+        p.send(&text, &project, "x");
+        let ctx = egui::Context::default();
+        let (mut imported, start) = (vec![], Instant::now());
+        while p.running() && start.elapsed() < Duration::from_secs(30) {
+            imported.extend(p.poll(&ctx).imported);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let args = lines(&dir.join("args.txt"));
+        assert!(args.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
+        assert!(args.contains(&format!("Bash({} import *)", bin.display())) && args.contains(&format!("Bash({} inspect-image *)", bin.display())), "{args:?}");
+        assert!(std::fs::read_to_string(dir.join("stdin.txt")).unwrap().contains("licence/credit files"));
+        let out = std::fs::read_to_string(dir.join("import.json")).unwrap();
+        assert!(out.contains("\"ok\": true"), "{out}{}", std::fs::read_to_string(dir.join("import.err")).unwrap_or_default());
+        // the assets are in the project and load
+        let game = modengine::project::Project::load(&project).unwrap();
+        let hero = game.sprites.iter().find(|s| s.name == "hero").unwrap();
+        assert_eq!((hero.frames.len(), hero.origin), (4, (8.0, 16.0)));
+        assert!(game.tilesets.iter().any(|t| t.name == "ts_cave_tiles"));
+        assert!(std::fs::read_to_string(project.join("CREDITS.md")).unwrap().contains("CC0, by Tester"));
+        assert_eq!(imported, ["sprite 'hero'", "sprite 'spr_cave_tiles'", "tile set 'ts_cave_tiles'"]);
+        // listed as created in the turn's changes, binaries included...
+        let Some(Entry::Changes { files, .. }) = p.entries.iter().rev().find(|e| matches!(e, Entry::Changes { .. })).cloned() else { panic!("{:?}", p.entries) };
+        let added: Vec<(&str, bool)> = files.iter().filter(|f| f.kind == ChangeKind::Added).map(|f| (f.rel.as_str(), f.binary)).collect();
+        assert_eq!(
+            added,
+            [("CREDITS.md", false), ("sprites/hero.png", true), ("sprites/hero.toml", false), ("sprites/spr_cave_tiles.png", true), ("tilesets/ts_cave_tiles.toml", false)]
+        );
+        // ...and /deshacer removes them all
+        assert_eq!(p.undo_last_turn(), 5);
+        let after = snapshot::Snapshot::take(&project);
+        assert!(snapshot::changes(&before, &after).is_empty(), "{:?}", snapshot::changes(&before, &after));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(art.parent().unwrap());
+    }
+
+    #[test]
+    fn attached_art_offers_the_import_button() {
+        use egui_kittest::{kittest::Queryable, Harness};
+        let (dir, exe) = fake_cli("import_btn", "true");
+        let project = crate::room::tests::temp_project("agent_import_btn").canonicalize().unwrap();
+        let art = art_folder("btn");
+        // a project file or one picture is not "art to import"; a folder or several pictures are
+        assert_eq!(import_instruction(Some(&project), &[Attachment::file(&project.join("game.toml"))]), None);
+        assert_eq!(import_instruction(Some(&project), &[Attachment::file(&art.join("hero_strip4.png"))]), None);
+        let two = [Attachment::file(&art.join("hero_strip4.png")), Attachment::file(&art.join("cave_tiles.png"))];
+        assert!(import_instruction(Some(&project), &two).unwrap().starts_with("Importa al proyecto estas imágenes"));
+        let mut p = panel(&exe);
+        p.set_permission(Permission::Edit);
+        p.attach_path(&art);
+        let proj = crate::project::Project::open(&project).unwrap();
+        let mut h = Harness::builder().with_size([420.0, 700.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, (p, proj): &mut (AgentPanel, crate::project::Project)| {
+                let src = Sources { project: Some(proj), ..Default::default() };
+                p.ui(ui, &src);
+            },
+            (p, proj),
+        );
+        h.run();
+        h.get_by_label("Arte del usuario");
+        h.get_by_label("🖼 Importar al proyecto").click();
+        h.run();
+        assert!(h.state().0.input.starts_with("Importa al proyecto el arte de la carpeta «Arte del usuario»"), "{}", h.state().0.input);
+        // Solo planificar can't import: the button does nothing
+        h.state_mut().0.input.clear();
+        h.state_mut().0.set_permission(Permission::Plan);
+        h.run();
+        h.get_by_label("🖼 Importar al proyecto").click();
+        h.run();
+        assert!(h.state().0.input.is_empty());
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(art.parent().unwrap());
     }
 }

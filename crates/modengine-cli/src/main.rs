@@ -2,7 +2,7 @@
 
 use modengine::Engine;
 use modengine_cli::script_input::ScriptedInput;
-use modengine_cli::{backend, export, runner, shader_tool};
+use modengine_cli::{backend, export, import_cli, runner, shader_tool};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -20,6 +20,13 @@ usage:
   modengine export <project> --target linux|windows|android [--out DIR] [--release] [--arch A,B] [--zip]
   modengine export --setup <target>        install/check what exporting to <target> needs
   modengine export --doctor                show which export targets are ready
+  modengine import <project> <file|folder>... [--kind K] [--name N] [--frames N | --grid WxH]
+                   [--origin O] [--fps F] [--tile WxH] [--offset X,Y] [--sep X,Y] [--prefix]
+                   [--overwrite] [--credit TEXT] [--dry-run] [--json]
+                                           copy art into the project as sprites, tile sets,
+                                           sounds and fonts (modengine import --help)
+  modengine inspect-image <file|folder> [--json]
+                                           size, colours and likely frame layouts of PNGs
   modengine functions
   modengine <project>                      same as `run`
 
@@ -132,6 +139,12 @@ fn main() {
     }
     if raw.first().map(String::as_str) == Some("export") {
         exit(export::main_cli(&raw[1..]));
+    }
+    if raw.first().map(String::as_str) == Some("import") {
+        exit(import_cli::main_import(&raw[1..]));
+    }
+    if raw.first().map(String::as_str) == Some("inspect-image") {
+        exit(import_cli::main_inspect(&raw[1..]));
     }
     let args = parse_args();
     match args.cmd.as_str() {

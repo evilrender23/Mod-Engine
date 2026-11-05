@@ -10,140 +10,17 @@
 //! window (anywhere but the Agente panel) open it prefilled; see [`route_drop`].
 
 use crate::project::Project;
-use crate::tomlw::{num, q, valid_name};
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, TextureOptions, Vec2};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Files above this size get a warning (they are still imported).
-pub const BIG_FILE: u64 = 20 * 1024 * 1024;
-
-// ------------------------------------------------------------------ kinds and names
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
-pub enum Kind {
-    Sprite,
-    Sound,
-    Font,
-}
-
-impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::Sprite, Kind::Sound, Kind::Font];
-
-    /// By extension, case-insensitive: the formats the engine loads.
-    pub fn of(path: &Path) -> Option<Kind> {
-        let ext = path.extension()?.to_string_lossy().to_lowercase();
-        Kind::ALL.into_iter().find(|k| k.exts().contains(&ext.as_str()))
-    }
-
-    pub fn exts(self) -> &'static [&'static str] {
-        match self {
-            Kind::Sprite => &["png"],
-            Kind::Sound => &["wav", "ogg"],
-            Kind::Font => &["ttf", "otf"],
-        }
-    }
-
-    /// Project folder the files go to.
-    pub fn folder(self) -> &'static str {
-        match self {
-            Kind::Sprite => "sprites",
-            Kind::Sound => "sounds",
-            Kind::Font => "fonts",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Kind::Sprite => "sprite",
-            Kind::Sound => "sonido",
-            Kind::Font => "fuente",
-        }
-    }
-
-    pub fn icon(self) -> &'static str {
-        match self {
-            Kind::Sprite => "▣",
-            Kind::Sound => "♪",
-            Kind::Font => "A",
-        }
-    }
-
-    /// Browser filter label.
-    fn plural(self) -> &'static str {
-        match self {
-            Kind::Sprite => "Imágenes (PNG)",
-            Kind::Sound => "Sonidos (WAV, OGG)",
-            Kind::Font => "Fuentes (TTF, OTF)",
-        }
-    }
-}
-
-/// An asset name from a file name: ASCII letters, digits and `_`, lower case (`PlayerRun` →
-/// `player_run`, `Moneda dorada (2)` → `moneda_dorada_2`), never starting with a digit.
-pub fn sanitize(stem: &str) -> String {
-    let mut out = String::new();
-    let mut prev_lower = false;
-    for c in stem.chars() {
-        let c = fold_accent(c);
-        if c.is_ascii_alphanumeric() {
-            if c.is_ascii_uppercase() && prev_lower && !out.ends_with('_') {
-                out.push('_');
-            }
-            prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
-            out.push(c.to_ascii_lowercase());
-        } else {
-            prev_lower = false;
-            if !out.is_empty() && !out.ends_with('_') {
-                out.push('_');
-            }
-        }
-    }
-    let mut out = out.trim_end_matches('_').to_string();
-    if out.is_empty() {
-        out = "asset".into();
-    }
-    if out.starts_with(|c: char| c.is_ascii_digit()) {
-        out.insert(0, '_');
-    }
-    out
-}
-
-fn fold_accent(c: char) -> char {
-    match c {
-        'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => 'a',
-        'Á' | 'À' | 'Ä' | 'Â' | 'Ã' | 'Å' => 'A',
-        'é' | 'è' | 'ë' | 'ê' => 'e',
-        'É' | 'È' | 'Ë' | 'Ê' => 'E',
-        'í' | 'ì' | 'ï' | 'î' => 'i',
-        'Í' | 'Ì' | 'Ï' | 'Î' => 'I',
-        'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
-        'Ó' | 'Ò' | 'Ö' | 'Ô' | 'Õ' => 'O',
-        'ú' | 'ù' | 'ü' | 'û' => 'u',
-        'Ú' | 'Ù' | 'Ü' | 'Û' => 'U',
-        'ñ' => 'n',
-        'Ñ' => 'N',
-        'ç' => 'c',
-        'Ç' => 'C',
-        c => c,
-    }
-}
-
-/// GameMaker-style strips: `hero_run_strip4` → (`hero_run`, 4 frames).
-pub fn strip_suffix(stem: &str) -> Option<(&str, u32)> {
-    let i = stem.to_lowercase().rfind("_strip")?;
-    let n: u32 = stem[i + 6..].parse().ok()?;
-    (n > 0 && i > 0).then(|| (&stem[..i], n))
-}
-
-/// `base`, or `base_2`, `base_3`... the first one not taken.
-pub fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
-    if !taken(base) {
-        return base.to_string();
-    }
-    (2..).map(|n| format!("{base}_{n}")).find(|n| !taken(n)).unwrap()
-}
+// The files and names themselves are the engine's (shared with `modengine import`, which the
+// coding agent runs): both write the same files.
+pub use modengine::import::{expand, human_size, import, percent_decode, sanitize, strip_suffix, unique, valid_name, Frames, Imported, Kind, Origin, SpriteOpts, BIG_FILE, DEFAULT_FPS};
+use modengine::import::header_problem;
+#[cfg(test)]
+use modengine::import::sprite_toml;
 
 /// Every name in use in the project and what has it (`None`: an object or a room). Assets
 /// share one namespace.
@@ -164,313 +41,19 @@ pub fn owners(p: &Project) -> BTreeMap<String, Option<Kind>> {
     m
 }
 
-/// `~`, `~/x`, quotes and `file://` URIs (what file managers paste) become a plain path.
-pub fn expand(s: &str) -> PathBuf {
-    let s = s.trim().trim_matches(|c| c == '"' || c == '\'');
-    let s = match s.strip_prefix("file://") {
-        Some(rest) => percent_decode(rest),
-        None => s.to_string(),
-    };
-    let home = || std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    if s == "~" {
-        home()
-    } else if let Some(rest) = s.strip_prefix("~/") {
-        home().join(rest)
-    } else {
-        PathBuf::from(s)
-    }
+/// The browser/editor key of an imported asset (fonts have no editor).
+pub trait OpenImported {
+    fn open(&self) -> Option<crate::app::Open>;
 }
 
-pub fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-pub fn human_size(n: u64) -> String {
-    if n >= 1024 * 1024 {
-        format!("{:.1} MB", n as f64 / (1024.0 * 1024.0))
-    } else if n >= 1024 {
-        format!("{:.1} KB", n as f64 / 1024.0)
-    } else {
-        format!("{n} B")
-    }
-}
-
-// ------------------------------------------------------------------ sprite options
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Origin {
-    TopLeft,
-    Top,
-    Center,
-    Left,
-    Bottom,
-}
-
-impl Origin {
-    pub const ALL: [Origin; 5] = [Origin::TopLeft, Origin::Center, Origin::Bottom, Origin::Top, Origin::Left];
-
-    /// The engine's name (`origin = "..."`).
-    pub fn key(self) -> &'static str {
-        match self {
-            Origin::TopLeft => "top_left",
-            Origin::Top => "top",
-            Origin::Center => "center",
-            Origin::Left => "left",
-            Origin::Bottom => "bottom",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Origin::TopLeft => "arriba a la izquierda",
-            Origin::Top => "arriba al centro",
-            Origin::Center => "centro",
-            Origin::Left => "izquierda al centro",
-            Origin::Bottom => "abajo al centro",
-        }
-    }
-
-    /// Where it is inside a `w`×`h` frame (as the engine computes it).
-    pub fn point(self, w: f32, h: f32) -> Vec2 {
-        match self {
-            Origin::TopLeft => Vec2::ZERO,
-            Origin::Top => Vec2::new(w / 2.0, 0.0),
-            Origin::Center => Vec2::new(w / 2.0, h / 2.0),
-            Origin::Left => Vec2::new(0.0, h / 2.0),
-            Origin::Bottom => Vec2::new(w / 2.0, h),
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Frames {
-    Single,
-    /// Horizontal strip of N frames.
-    Strip(u32),
-    /// Grid of cells of this size (rows left to right).
-    Grid(u32, u32),
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct SpriteOpts {
-    pub frames: Frames,
-    pub origin: Origin,
-    pub fps: f64,
-}
-
-pub const DEFAULT_FPS: f64 = 10.0;
-
-impl Default for SpriteOpts {
-    fn default() -> Self {
-        SpriteOpts { frames: Frames::Single, origin: Origin::TopLeft, fps: DEFAULT_FPS }
-    }
-}
-
-impl SpriteOpts {
-    /// What a loose PNG already is: no TOML needed.
-    pub fn is_default(&self) -> bool {
-        matches!(self.frames, Frames::Single | Frames::Strip(1)) && self.origin == Origin::TopLeft && self.fps == DEFAULT_FPS
-    }
-
-    /// `(frames, frame width, frame height)` of a `w`×`h` image, as the engine slices it.
-    pub fn slice(&self, w: u32, h: u32) -> Result<(u32, u32, u32), String> {
-        match self.frames {
-            Frames::Single => Ok((1, w, h)),
-            Frames::Strip(n) => {
-                if n == 0 {
-                    return Err("el número de frames tiene que ser al menos 1".into());
-                }
-                if n > w {
-                    return Err(format!("la imagen mide {w} px de ancho: no caben {n} frames"));
-                }
-                Ok((n, w / n, h))
-            }
-            Frames::Grid(fw, fh) => {
-                if fw == 0 || fh == 0 {
-                    return Err("el tamaño del frame tiene que ser positivo".into());
-                }
-                if fw > w || fh > h {
-                    return Err(format!("un frame de {fw}×{fh} no cabe en una imagen de {w}×{h}"));
-                }
-                Ok(((w / fw) * (h / fh), fw, fh))
-            }
-        }
-    }
-
-    /// Pixels the slicing leaves out (the engine ignores them).
-    pub fn leftover(&self, w: u32, h: u32) -> Option<String> {
-        match self.frames {
-            Frames::Strip(n) if n > 0 && w % n != 0 => Some(format!("{w} px no se divide entre {n}: sobran {} px a la derecha", w % n)),
-            Frames::Grid(fw, fh) if fw > 0 && fh > 0 && (w % fw != 0 || h % fh != 0) => {
-                Some(format!("{w}×{h} no es múltiplo de {fw}×{fh}: los bordes sobrantes se ignoran"))
-            }
-            _ => None,
-        }
-    }
-}
-
-/// The sprite's `.toml` for `image_file`, or `None` when the defaults are enough (then the
-/// loose PNG is the sprite).
-pub fn sprite_toml(image_file: &str, o: &SpriteOpts) -> Option<String> {
-    if o.is_default() {
-        return None;
-    }
-    let mut s = format!("image = {}\n", q(image_file));
-    match o.frames {
-        Frames::Single | Frames::Strip(1) => {}
-        Frames::Strip(n) => s += &format!("frames = {n}\n"),
-        Frames::Grid(w, h) => s += &format!("frame_size = [{w}, {h}]\n"),
-    }
-    if o.origin != Origin::TopLeft {
-        s += &format!("origin = {}\n", q(o.origin.key()));
-    }
-    if o.fps != DEFAULT_FPS {
-        s += &format!("fps = {}\n", num(o.fps));
-    }
-    Some(s)
-}
-
-// ------------------------------------------------------------------ importing
-
-/// One imported asset.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Imported {
-    pub kind: Kind,
-    pub name: String,
-    /// Files written, relative to the project (`sprites/hero.png`, `sprites/hero.toml`).
-    pub files: Vec<String>,
-    /// An asset with this name was replaced (its old files are in `.trash`).
-    pub replaced: bool,
-    /// The file it was copied from (the store looks up its attribution by it).
-    pub src: PathBuf,
-}
-
-impl Imported {
-    /// The browser/editor key of the asset (fonts have no editor).
-    pub fn open(&self) -> Option<crate::app::Open> {
+impl OpenImported for Imported {
+    fn open(&self) -> Option<crate::app::Open> {
         match self.kind {
             Kind::Sprite => Some(crate::app::Open::Sprite(self.name.clone())),
             Kind::Sound => Some(crate::app::Open::Sound(self.name.clone())),
             Kind::Font => Some(crate::app::Open::Font(self.name.clone())),
         }
     }
-}
-
-/// The files of asset `name` in `folder`: `name.*`, plus the file its `.toml` points to.
-fn asset_files_named(folder: &Path, name: &str) -> Vec<PathBuf> {
-    let mut out = vec![];
-    let Ok(rd) = fs::read_dir(folder) else { return out };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_file() && p.file_stem().is_some_and(|s| s == name) {
-            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("toml")) {
-                if let Ok(t) = fs::read_to_string(&p).unwrap_or_default().parse::<toml::Table>() {
-                    for key in ["image", "file"] {
-                        if let Some(f) = t.get(key).and_then(|v| v.as_str()) {
-                            let f = folder.join(f);
-                            if f.is_file() && !out.contains(&f) {
-                                out.push(f);
-                            }
-                        }
-                    }
-                }
-            }
-            if !out.contains(&p) {
-                out.push(p);
-            }
-        }
-    }
-    out
-}
-
-/// Moves a project file into `<project>/.trash/` (same as deleting from the browser).
-fn trash(project: &Path, path: &Path) -> Result<(), String> {
-    let dir = project.join(".trash");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let name = path.file_name().ok_or("bad path")?;
-    let mut target = dir.join(name);
-    let mut n = 1;
-    while target.exists() {
-        target = dir.join(format!("{}.{n}", name.to_string_lossy()));
-        n += 1;
-    }
-    fs::rename(path, &target).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-/// Copies `src` into the project as asset `name` of `kind` and, for a sprite with
-/// non-default options, writes its `.toml`. With `overwrite`, an asset that already has this
-/// name in that folder is moved to `.trash` first; without it that is an error.
-pub fn import(project: &Path, kind: Kind, src: &Path, name: &str, opts: &SpriteOpts, overwrite: bool) -> Result<Imported, String> {
-    if !valid_name(name) {
-        return Err(format!("'{name}' no es un nombre válido (letras, números y _, sin empezar por número)"));
-    }
-    if Kind::of(src) != Some(kind) {
-        return Err(format!("{}: no es un fichero de {}", src.display(), kind.label()));
-    }
-    if !src.is_file() {
-        return Err(format!("no existe el fichero {}", src.display()));
-    }
-    let folder = project.join(kind.folder());
-    fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    let old = asset_files_named(&folder, name);
-    let replaced = !old.is_empty();
-    if replaced {
-        if !overwrite {
-            return Err(format!("ya existe un asset '{name}' en {}/", kind.folder()));
-        }
-        let src_real = src.canonicalize().unwrap_or(src.to_path_buf());
-        if old.iter().any(|f| f.canonicalize().is_ok_and(|f| f == src_real)) {
-            return Err(format!("{} ya es el asset '{name}' del proyecto", src.display()));
-        }
-    }
-    // Read before touching the project, so a failure leaves it as it was.
-    let bytes = fs::read(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    for f in &old {
-        trash(project, f)?;
-    }
-    let ext = src.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let file = format!("{name}.{ext}");
-    let dst = folder.join(&file);
-    fs::write(&dst, &bytes).map_err(|e| format!("{}: {e}", dst.display()))?;
-    let mut files = vec![format!("{}/{file}", kind.folder())];
-    if kind == Kind::Sprite {
-        if let Some(text) = sprite_toml(&file, opts) {
-            let t = folder.join(format!("{name}.toml"));
-            fs::write(&t, text).map_err(|e| format!("{}: {e}", t.display()))?;
-            files.push(format!("{}/{name}.toml", kind.folder()));
-        }
-    }
-    Ok(Imported { kind, name: name.to_string(), files, replaced, src: src.to_path_buf() })
-}
-
-/// Does the file look like what its extension says? (Images are checked by decoding them.)
-fn header_problem(kind: Kind, path: &Path) -> Option<String> {
-    use std::io::Read;
-    let mut head = [0u8; 12];
-    let n = fs::File::open(path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
-    let head = &head[..n];
-    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let ok = match (kind, ext.as_str()) {
-        (Kind::Sound, "wav") => head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WAVE"),
-        (Kind::Sound, "ogg") => head.starts_with(b"OggS"),
-        (Kind::Font, _) => head.starts_with(&[0, 1, 0, 0]) || head.starts_with(b"OTTO") || head.starts_with(b"true") || head.starts_with(b"ttcf"),
-        _ => true,
-    };
-    (!ok).then(|| format!("no parece un fichero .{ext} válido"))
 }
 
 // ------------------------------------------------------------------ editor hooks
@@ -1100,7 +683,8 @@ fn sprite_options(ui: &mut egui::Ui, it: &mut Item, i: usize, (w, h): (u32, u32)
                 }
             }
             if let Some((_, fw, fh)) = st.slice {
-                let o = img_rect.min + it.origin.point(fw as f32, fh as f32) * k;
+                let (ox, oy) = it.origin.point(fw as f32, fh as f32);
+                let o = img_rect.min + Vec2::new(ox, oy) * k;
                 p.circle_stroke(o, 3.5, Stroke::new(1.5, Color32::from_rgb(255, 230, 0)));
             }
         }
@@ -1469,6 +1053,42 @@ mod tests {
         let p = modengine::project::Project::load(&dir).unwrap();
         assert_eq!(p.sprites.iter().find(|s| s.name == "hero").unwrap().frames.len(), 4);
         let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn the_dialog_and_the_command_line_write_the_same_files() {
+        let (a, b) = (temp_project("import_same_a"), temp_project("import_same_b"));
+        let src = scratch("same");
+        png(&src.join("hero_strip4.png"), 64, 16);
+        png(&src.join("rock.png"), 10, 12);
+        wav(&src.join("jump.wav"));
+        // the editor's dialog
+        let owners = owners(&Project::open(&a).unwrap());
+        let mut d = ImportDialog::new(None);
+        for f in ["hero_strip4.png", "rock.png", "jump.wav"] {
+            d.add(&src.join(f), &owners);
+        }
+        d.items[0].origin = Origin::Bottom;
+        d.items[0].fps = 12.0;
+        assert_eq!(d.run(&a).len(), 3);
+        // `modengine import` (what the agent runs): the same choices as options
+        let files: Vec<PathBuf> = ["hero_strip4.png", "rock.png", "jump.wav"].iter().map(|f| src.join(f)).collect();
+        let hero = modengine::import::Options { origin: Some(Origin::Bottom), fps: Some(12.0), ..Default::default() };
+        let plan = modengine::import::plan(&b, &files[..1], &hero);
+        assert!(plan.errors.is_empty(), "{:?}", plan.errors);
+        let r = modengine::import::execute(&plan, None);
+        let rest = modengine::import::plan(&b, &files[1..], &Default::default());
+        let r2 = modengine::import::execute(&rest, None);
+        assert!(r.errors.is_empty() && r2.errors.is_empty());
+        let names: Vec<&str> = r.done.iter().chain(&r2.done).map(|(it, _, _)| it.name.as_str()).collect();
+        assert_eq!(names, ["hero", "rock", "jump"]);
+        for f in ["sprites/hero.png", "sprites/hero.toml", "sprites/rock.png", "sounds/jump.wav"] {
+            assert_eq!(fs::read(a.join(f)).unwrap(), fs::read(b.join(f)).unwrap(), "{f}");
+        }
+        assert!(!a.join("sprites/rock.toml").exists() && !b.join("sprites/rock.toml").exists());
+        let _ = fs::remove_dir_all(&a);
+        let _ = fs::remove_dir_all(&b);
         let _ = fs::remove_dir_all(&src);
     }
 }

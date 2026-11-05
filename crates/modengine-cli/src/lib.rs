@@ -10,6 +10,8 @@ pub mod touch;
 #[cfg(not(target_os = "android"))]
 pub mod export;
 #[cfg(not(target_os = "android"))]
+pub mod import_cli;
+#[cfg(not(target_os = "android"))]
 pub mod shader_tool;
 
 /// Entry point miniquad's Android activity calls (see `android/MainActivity.java`).

@@ -105,6 +105,69 @@ pub struct Run {
     /// What a new session should know of the conversation so far (a compacted summary or the
     /// transcript up to an edited message); put in front of the prompt.
     pub seed: String,
+    /// The `modengine` command line: the agent imports art with `modengine import` (allowed
+    /// even in Editar archivos, not in Solo planificar).
+    pub tool: Option<PathBuf>,
+}
+
+/// The `modengine` executable the agent may run to import art in this run (`None` in
+/// Solo planificar, for raw slash commands, or when it was not found).
+pub fn import_tool(run: &Run) -> Option<&Path> {
+    run.tool.as_deref().filter(|_| run.permission != Permission::Plan && !run.raw)
+}
+
+/// How the agent should type `tool` in a shell command (quoted when it has spaces).
+pub fn tool_command(tool: &Path) -> String {
+    let s = tool.to_string_lossy().into_owned();
+    if s.contains(' ') {
+        format!("\"{s}\"")
+    } else {
+        s
+    }
+}
+
+/// The subcommands of `modengine` the agent may always run.
+pub const IMPORT_SUBCOMMANDS: [&str; 2] = ["import", "inspect-image"];
+
+/// Claude Code rules allowing just `modengine import` and `modengine inspect-image` (as
+/// typed, quoted or not).
+pub fn claude_import_rules(tool: &Path) -> Vec<String> {
+    let plain = tool.to_string_lossy().replace('\\', "/");
+    let mut forms = vec![plain.clone()];
+    if plain.contains(' ') {
+        forms.push(format!("\"{plain}\""));
+    }
+    let mut out = vec![];
+    for f in &forms {
+        for sub in IMPORT_SUBCOMMANDS {
+            out.push(format!("Bash({f} {sub} *)"));
+        }
+    }
+    out
+}
+
+/// Licence / readme / credits files directly in `dir` or one folder down.
+pub fn license_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = vec![];
+    let scan = |d: &Path, deeper: bool, out: &mut Vec<PathBuf>| {
+        let Ok(rd) = std::fs::read_dir(d) else { return vec![] };
+        let mut subs = vec![];
+        let mut es: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        es.sort();
+        for p in es {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if p.is_file() && modengine::import::is_license_file(&name) {
+                out.push(p);
+            } else if deeper && p.is_dir() && !modengine::import::is_junk(&name) {
+                subs.push(p);
+            }
+        }
+        subs
+    };
+    for sub in scan(dir, true, &mut out) {
+        scan(&sub, false, &mut out);
+    }
+    out
 }
 
 /// How an attachment reaches the agent.
@@ -290,7 +353,15 @@ pub fn prompt_with_attachments(run: &Run) -> String {
         match a.kind {
             AttachKind::Image => t += &format!("- The image `{shown}`{about}. Look at it.\n"),
             AttachKind::File if a.path.is_dir() => {
-                t += &if inside { format!("- The project folder `{shown}`.\n") } else { format!("- The folder `{shown}`, outside the project.\n") }
+                t += &if inside { format!("- The project folder `{shown}`.\n") } else { format!("- The folder `{shown}`, outside the project.\n") };
+                let lic = if inside { vec![] } else { license_files(&a.path) };
+                if !lic.is_empty() {
+                    let names: Vec<String> = lic.iter().map(|p| format!("`{}`", p.display())).collect();
+                    t += &format!(
+                        "  It has licence/credit files: {}. Read them; if you import art from this folder, pass who made it and its licence with `--credit`.\n",
+                        names.join(", ")
+                    );
+                }
             }
             AttachKind::File if inside => t += &format!("- The project file `{shown}`{about}.\n"),
             AttachKind::File => match inline_text(&a.path) {
@@ -562,6 +633,11 @@ impl Kind {
                 for h in attached_hosts(run) {
                     readable.push(format!("WebFetch(domain:{h})"));
                 }
+                // Importing art: the agent's file tools can't copy binaries, so it may run the
+                // importer (and only that) even in Editar archivos.
+                if let Some(tool) = import_tool(run) {
+                    readable.extend(claude_import_rules(tool));
+                }
                 if !readable.is_empty() {
                     a.push("--allowedTools".into());
                     a.extend(readable);
@@ -577,6 +653,11 @@ impl Kind {
                 }
                 for p in attached_outside(run) {
                     allow.push(format!("read_file({})", agy_rule_path(p)));
+                }
+                if let Some(tool) = import_tool(run) {
+                    for sub in IMPORT_SUBCOMMANDS {
+                        allow.push(format!("command({} {sub})", agy_rule_path(tool)));
+                    }
                 }
                 let settings = json!({ "permissions": { "ask": ["write_file(/)"], "allow": allow } });
                 let mode = match run.permission {
@@ -600,7 +681,11 @@ impl Kind {
                 let mut prompt = prompt_with_context(run);
                 if run.permission != Permission::Auto && !run.raw {
                     prompt += "\n\n(From the Mod Engine editor: shell commands are not allowed in this mode and trying one \
-                               ends your turn. Use your file tools to list, read, search and edit files.)";
+                               ends your turn. Use your file tools to list, read, search and edit files.";
+                    if let Some(tool) = import_tool(run) {
+                        prompt += &format!(" The only commands allowed are `{t} import ...` and `{t} inspect-image ...`, to import art.", t = tool_command(tool));
+                    }
+                    prompt += ")";
                 }
                 // agy takes the prompt as the value of --print and reads nothing from stdin.
                 a.push(format!("--print={prompt}"));
@@ -640,7 +725,7 @@ impl Kind {
 
 /// What the agent is told about the engine: a system prompt for Claude Code, and the head of
 /// the first message for the CLIs without one.
-pub fn engine_context(name: &str, docs: Option<&Path>) -> String {
+pub fn engine_context(name: &str, docs: Option<&Path>, tool: Option<&Path>) -> String {
     let mut c = format!(
         "You are working inside Mod Engine, a 2D game engine in the spirit of GameMaker, through the \
          \"Agente\" panel of its visual editor (modeditor). The current folder is the open Mod Engine project \
@@ -669,7 +754,11 @@ pub fn engine_context(name: &str, docs: Option<&Path>) -> String {
         None => c += "There is no reference documentation at hand; learn the language and file formats from the project's existing files.\n",
     }
     c += "Before writing a new object, room or sprite, read an existing one and follow its style. \
-          `modengine check .` loads the project and reports errors (if you may run commands).\n\n\
+          `modengine check .` loads the project and reports errors (if you may run commands).\n\n";
+    if let Some(tool) = tool {
+        c += &import_section(&tool_command(tool));
+    }
+    c += "
           # The editor\n\
           The editor saves the user's open edits before each message and reloads the files you change, \
           then checks the project and shows engine errors in its Salida panel.\n\n\
@@ -679,13 +768,46 @@ pub fn engine_context(name: &str, docs: Option<&Path>) -> String {
     c
 }
 
+/// The "Importing art" part of the context: how to bring the user's PNG/WAV/TTF files into
+/// the project with `modengine import` (`tool`: the command to type).
+pub fn import_section(tool: &str) -> String {
+    format!(
+        "# Importing art\n\
+         Your file tools cannot copy binary files (PNG, WAV, OGG, TTF, OTF). To bring art the user gives you (an attached \
+         folder or images, usually outside the project) into the project, run the Mod Engine importer from the project \
+         folder (these two commands are always allowed, even when other shell commands are not):\n\
+         - `{tool} inspect-image <file|folder> --json`: size, colours and likely frame layouts of each PNG, with the \
+         import options for each layout.\n\
+         - `{tool} import . <file|folder>... [options] --json`: copies the files into sprites/, tilesets/, sounds/ or \
+         fonts/ and writes the sprite or tile set .toml. Options: `--kind sprite|tileset|sound|font`, `--name N` (one \
+         file), `--frames N` (horizontal strip) or `--grid WxH` (frames of WxH px in rows), `--origin \
+         top-left|center|bottom-center|x,y`, `--fps F`, `--tile WxH [--offset X,Y] [--sep X,Y]` (tile sets), \
+         `--split-rows [--row-names idle,walk,-,die]` (with --grid: each row of a sheet becomes its own sprite \
+         <name>_<row>, `-` skips a row), `--crop X,Y,W,H` (one file: just that part of an atlas; inspect-image lists the separate drawings as \
+         \"blobs\"), `--prefix` (subfolder in the name), `--overwrite`, `--credit \"text\"`, `--dry-run`. Without frame options, names like \
+         hero_strip4.png, bat_16x16.png or coin_8.png set the frames, and names with tiles/tileset/terrain become tile \
+         sets (ts_<name>, with the sheet as the sprite spr_<name>).\n\
+         How to do it: 1) look at every image first: open the PNG with your file-reading tool (it shows you the picture) \
+         and run inspect-image; 2) decide per file: animations of characters, enemies or items are sprites with the \
+         frames you see (a sheet with one animation per row: --grid plus --row-names) (origin bottom-center for things that stand on the ground, center for things that spin or fly); \
+         sheets of terrain blocks laid on a grid are tile sets; backgrounds and single pictures are one-frame sprites; \
+         3) import file by file with snake_case names (a whole folder at once only when one set of options fits every \
+         file); use --dry-run when unsure; 4) if the art came with LICENSE, README or credits files, read them and pass \
+         the author, licence and link with --credit (it goes to CREDITS.md); 5) reply with what you imported (asset names \
+         and frames). Type each command as a plain command line that starts with the importer's full path as written \
+         above (no variables, pipes or scripts around it), or it may be blocked; you don't need `modengine check`: the \
+         editor checks the project after your turn. Never copy art with other shell commands or write image files \
+         yourself.\n\n"
+    )
+}
+
 /// The prompt with the engine context in front on a new conversation, for CLIs without a
 /// system prompt option.
 pub fn prompt_with_context(run: &Run) -> String {
     if !run.session.is_empty() || run.raw {
         return prompt_with_attachments(run);
     }
-    format!("<modengine-editor-context>\n{}</modengine-editor-context>\n\n{}", engine_context(&run.name, run.docs.as_deref()), prompt_with_attachments(run))
+    format!("<modengine-editor-context>\n{}</modengine-editor-context>\n\n{}", engine_context(&run.name, run.docs.as_deref(), import_tool(run)), prompt_with_attachments(run))
 }
 
 /// Claude permission rules write absolute paths as "//path".
@@ -1218,6 +1340,7 @@ mod tests {
             raw: false,
             fork_at: String::new(),
             seed: String::new(),
+            tool: None,
         }
     }
 
@@ -1503,9 +1626,13 @@ mod tests {
 
     #[test]
     fn context_points_at_docs() {
-        let c = engine_context("Coin Climber", Some(Path::new("/opt/me/docs")));
+        let c = engine_context("Coin Climber", Some(Path::new("/opt/me/docs")), None);
         assert!(c.contains("\"Coin Climber\"") && c.contains("/opt/me/docs") && c.contains("funciones.md"));
-        assert!(engine_context("x", None).contains("no reference documentation"));
+        assert!(engine_context("x", None, None).contains("no reference documentation"));
+        assert!(!c.contains("# Importing art"));
+        let c = engine_context("x", None, Some(Path::new("/opt/me/bin/modengine")));
+        assert!(c.contains("# Importing art") && c.contains("`/opt/me/bin/modengine import . <file|folder>") && c.contains("inspect-image") && c.contains("--credit"));
+        assert!(engine_context("x", None, Some(Path::new("/my apps/modengine"))).contains("`\"/my apps/modengine\" import ."), "paths with spaces are quoted");
     }
 
     #[test]
@@ -1574,4 +1701,54 @@ mod tests {
         assert_eq!(m[0].context, 272000);
     }
 
+
+    #[test]
+    fn the_importer_is_allowed_outside_plan_mode() {
+        let tool = PathBuf::from("/opt/me/bin/modengine");
+        let with = |p: Permission| Run { tool: Some(tool.clone()), ..run(p, "", "") };
+        let rules = ["Bash(/opt/me/bin/modengine import *)", "Bash(/opt/me/bin/modengine inspect-image *)"];
+        // Claude Code: allowed in Editar archivos (and Auto), never in Solo planificar
+        for p in [Permission::Edit, Permission::Auto] {
+            let a = Kind::Claude.args(&with(p));
+            let at = a.iter().position(|x| x == "--allowedTools").unwrap();
+            for r in rules {
+                assert!(a[at..].contains(&r.to_string()), "{p:?}: {a:?}");
+            }
+        }
+        let plan = Kind::Claude.args(&with(Permission::Plan));
+        assert!(!plan.iter().any(|x| x.contains("modengine")), "{plan:?}");
+        assert!(!Kind::Claude.args(&run(Permission::Edit, "", "")).iter().any(|x| x.starts_with("Bash(")), "no tool found: no rule");
+        // a path with spaces: as typed and quoted
+        let spaced = claude_import_rules(Path::new("/my apps/modengine"));
+        assert_eq!(spaced, ["Bash(/my apps/modengine import *)", "Bash(/my apps/modengine inspect-image *)", "Bash(\"/my apps/modengine\" import *)", "Bash(\"/my apps/modengine\" inspect-image *)"]);
+        // Antigravity: a command() allow rule, and the steering note names the commands
+        let a = Kind::Antigravity.args(&with(Permission::Edit));
+        let s: Value = serde_json::from_str(&a[a.iter().position(|x| x == "--settings").unwrap() + 1]).unwrap();
+        let allow = s["permissions"]["allow"].as_array().unwrap();
+        assert!(allow.contains(&json!("command(/opt/me/bin/modengine import)")) && allow.contains(&json!("command(/opt/me/bin/modengine inspect-image)")), "{allow:?}");
+        let print = a.iter().find(|x| x.starts_with("--print=")).unwrap();
+        assert!(print.contains("# Importing art") && print.contains("The only commands allowed are `/opt/me/bin/modengine import ...`"));
+        let a = Kind::Antigravity.args(&with(Permission::Plan));
+        assert!(!a.iter().any(|x| x.contains("command(") || x.contains("# Importing art")), "{a:?}");
+        // Codex: commands run in its workspace-write sandbox; it is told about the importer
+        let r = with(Permission::Edit);
+        assert_eq!(Kind::Codex.args(&r), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-"]);
+        assert!(Kind::Codex.input(&r).contains("/opt/me/bin/modengine import . <file|folder>"));
+        assert!(!Kind::Codex.input(&with(Permission::Plan)).contains("# Importing art"));
+        assert_eq!(Kind::Codex.args(&with(Permission::Plan))[4], "read-only");
+    }
+
+    #[test]
+    fn attached_art_folders_point_at_their_licences() {
+        let (game, other) = attach_dirs("lic");
+        std::fs::write(other.join("LICENSE.txt"), "CC0").unwrap();
+        std::fs::create_dir_all(other.join("pack")).unwrap();
+        std::fs::write(other.join("pack/readme.md"), "by X").unwrap();
+        std::fs::write(other.join("hero.png"), "x").unwrap();
+        let r = run_with(&game, vec![Attachment::file(&other)]);
+        let t = prompt_with_attachments(&r);
+        assert!(t.contains("licence/credit files") && t.contains("LICENSE.txt") && t.contains("pack/readme.md") && t.contains("--credit"), "{t}");
+        assert_eq!(license_files(&other).len(), 2);
+        let _ = std::fs::remove_dir_all(game.parent().unwrap());
+    }
 }

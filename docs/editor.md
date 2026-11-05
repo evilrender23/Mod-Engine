@@ -336,6 +336,9 @@ conversación). El diálogo tiene:
   con su número de frames o **rejilla** con el tamaño del frame, **origen** y **fps**. Un fichero
   `algo_strip4.png` llega ya como tira de 4 frames (convención de GameMaker).
 
+Lo mismo se hace sin el editor con `modengine import` y `modengine inspect-image` (ver
+[proyecto.md](proyecto.md#importar-arte-desde-la-terminal)); es lo que usa el panel Agente.
+
 Al importar, el fichero se copia como `<nombre>.<ext>` en su carpeta. Solo si un sprite tiene
 opciones distintas de las de un PNG suelto (un frame, origen arriba a la izquierda, 10 fps) se
 escribe también su `<nombre>.toml` (`image`, `frames` o `frame_size`, `origin`, `fps`; ver
@@ -610,9 +613,43 @@ Cómo se lanza cada programa (en la carpeta del proyecto, sin ventana):
 
 | Agente | Orden |
 |---|---|
-| Claude Code | `claude --print --output-format stream-json --verbose --include-partial-messages --permission-mode plan\|acceptEdits\|auto --append-system-prompt-file <contexto> [--model M] [--resume ID [--fork-session --resume-session-at UUID]] [--add-dir <carpetas> --disallowedTools "Edit(//c/**)" "Write(//c/**)"…] --allowedTools "Read(//<docs>/**)" ["Read(//<adjunto>)"…] ["WebFetch(domain:h)"…]`, mensaje y adjuntos por stdin (`/compact` para compactar) |
+| Claude Code | `claude --print --output-format stream-json --verbose --include-partial-messages --permission-mode plan\|acceptEdits\|auto --append-system-prompt-file <contexto> [--model M] [--resume ID [--fork-session --resume-session-at UUID]] [--add-dir <carpetas> --disallowedTools "Edit(//c/**)" "Write(//c/**)"…] --allowedTools "Read(//<docs>/**)" ["Read(//<adjunto>)"…] ["WebFetch(domain:h)"…] ["Bash(<modengine> import *)" "Bash(<modengine> inspect-image *)"]`, mensaje y adjuntos por stdin (`/compact` para compactar) |
 | Antigravity | `agy --output-format stream-json --mode plan\|accept-edits\|auto --settings <permisos JSON> [--model M] [--conversation ID] [--add-dir <carpeta>…] --print=<contexto + mensaje>` (`--print=/compact` para compactar) |
 | Codex | `codex exec --json --skip-git-repo-check --sandbox read-only\|workspace-write [--model M] [resume ID] [--image=<imagen>…] -`, contexto + mensaje + adjuntos por stdin |
+
+### Importar arte con el agente
+
+Las herramientas de ficheros de los agentes no saben copiar PNG, WAV o TTF, así que el editor les
+da el importador de Mod Engine, [`modengine import`](proyecto.md#importar-arte-desde-la-terminal),
+el mismo código que el diálogo **Importar assets** (escriben exactamente los mismos ficheros):
+
+1. Adjunta la carpeta con el arte (o varias imágenes): **📎 Adjuntar**, arrastrándola al panel o
+   pegando su ruta. Suele estar fuera del proyecto; el agente la puede leer, no tocar.
+2. Junto a los adjuntos aparece **🖼 Importar al proyecto**: escribe en el mensaje *«Importa al
+   proyecto el arte de la carpeta «…»: mira cada imagen, decide qué es sprite (con sus frames y
+   origen) y qué es tile set, e impórtalo con modengine import. Si hay ficheros de licencia o
+   créditos, añádelos con --credit.»*. Puedes cambiarlo antes de enviarlo («los personajes con
+   origen abajo», «llámalos spr_…»).
+3. El agente **mira cada imagen** (Claude Code las abre con su herramienta de lectura) y ejecuta
+   `modengine inspect-image <carpeta> --json`, que da tamaño, colores, los dibujos separados y las
+   maneras probables de cortarla (tira de N frames, rejilla de W×H, tile set de 16×16…) con las
+   opciones de importar de cada una. Después importa fichero a fichero
+   (`modengine import . <fichero> --frames 6 --origin bottom-center --name hero_run`, `--kind
+   tileset --tile 16x16`, `--grid 32x32 --row-names idle,walk,attack` para hojas con una animación
+   por fila, `--crop X,Y,W,H` para sacar un sprite de un atlas…).
+4. Si la carpeta trae `LICENSE`, `README`, `credits.txt`… el mensaje se lo señala y el agente pasa
+   autor y licencia con `--credit`, que los apunta en `CREDITS.md`.
+5. Al terminar el turno, los assets nuevos aparecen en el navegador, **Salida** dice `Importado por
+   el agente: sprite 'hero_run', tile set 'ts_cave'…` y **Archivos cambiados** los lista (los PNG
+   como binarios): **Revertir** o `/deshacer` los borran.
+
+**Permisos:** en *Editar archivos* el agente puede ejecutar **solo** esos dos comandos: Claude Code
+recibe `--allowedTools "Bash(<modengine> import *)" "Bash(<modengine> inspect-image *)"` y
+Antigravity las reglas `command(<modengine> import)` y `command(<modengine> inspect-image)` en sus
+`--settings`; Codex ejecuta comandos en su sandbox `workspace-write`, que escribe solo en el
+proyecto y lee en todas partes. En *Editar y ejecutar comandos* también. En *Solo planificar* no se
+importa nada (el botón queda desactivado y al agente no se le habla del importador). `<modengine>`
+es la ruta absoluta del `modengine` que hay junto al editor (o `$MODENGINE_BIN`, o el del `PATH`).
 
 ## Tema
 

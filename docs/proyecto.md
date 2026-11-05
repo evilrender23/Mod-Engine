@@ -119,6 +119,42 @@ Desde ModScript la paleta se lee con `palette_size()`, `palette_color(i | "c")`,
 de los caracteres de arriba, que para una paleta importada es su orden original.
 Ejemplo: `examples/showcase_s5`.
 
+## Importar arte desde la terminal
+
+`modengine import` copia PNG, WAV, OGG, TTF y OTF de cualquier carpeta al proyecto y escribe sus
+`.toml`; es el mismo código que el diálogo **Importar assets** del editor y lo que usa el agente del
+editor. `modengine inspect-image` describe imágenes para decidir cómo cortarlas.
+
+```sh
+modengine inspect-image ~/Descargas/pack --json          # tamaño, colores, dibujos, cortes probables
+modengine import mijuego ~/Descargas/pack --dry-run      # qué haría, sin escribir nada
+modengine import mijuego ~/Descargas/pack/hero.png --name hero_run --frames 6 --origin bottom-center
+modengine import mijuego cave.png --kind tileset --tile 16x16 --offset 1,1 --sep 1,1
+modengine import mijuego slime.png --grid 32x32 --row-names idle,walk,-,die   # un sprite por fila
+modengine import mijuego atlas.png --crop 0,200,192,48 --frames 6 --name arbol
+modengine import mijuego ~/Descargas/pack --credit "Kenney (kenney.nl), CC0" --json
+```
+
+- Una **carpeta** se recorre entera (sin `.DS_Store`, `Thumbs.db`, `__MACOSX` ni ocultos); lo que
+  no es importable sale en *Omitidos* y los `LICENSE`/`README`/`credits` se listan aparte.
+- **Nombres:** los del fichero, limpios (`Hero Run.png` → `hero_run`) y sin repetir (`coin_2`);
+  `--name` para un fichero, `--prefix` añade la subcarpeta (`enemies/bat.png` → `enemies_bat`) y
+  `--name-prefix spr_` un prefijo. Un `--name` ocupado es un error salvo con `--overwrite`, que
+  manda el asset anterior a `.trash/`.
+- **Frames** sin opciones, por el nombre: `hero_strip4.png` (tira de 4), `bat_16x16.png` (celdas de
+  16×16), `coin_8.png` (8 frames cuadrados). Si no, un frame; cuando la imagen parece una hoja, la
+  salida sugiere las opciones (`--frames 3`). Opciones: `--frames N`, `--grid WxH`, `--split-rows`
+  / `--row-names a,b,-` (cada fila de la rejilla, un sprite), `--crop X,Y,W,H`, `--origin
+  top-left|center|bottom-center|top|left|x,y`, `--fps F`.
+- **Tile sets:** las imágenes con `tiles`, `tileset`, `terrain` o `ts_` en el nombre, `--kind
+  tileset` o `--tile WxH`: la hoja se copia como el sprite `spr_<nombre>` y se escribe
+  `tilesets/ts_<nombre>.toml` (`tile_width`, `tile_height`, `offset`, `separation`). Sin `--tile`, el
+  tamaño sale del nombre (`_16x16`) o es 16, 32 u 8 si divide la imagen.
+- `--credit "texto"` apunta los ficheros en `CREDITS.md`, en una sección por carpeta de origen.
+- `--json` da `assets` (tipo, nombre, ficheros, frames, tamaño de frame, origen…), `skipped`,
+  `license_files`, `credits` y `errors`. El código de salida es 0 si todo fue bien, 1 si algo
+  falló (si el plan tiene errores no se escribe nada) y 2 si las opciones están mal.
+
 ## Sonidos (`sounds/`)
 
 `.wav` y `.ogg` sueltos funcionan directamente. Con TOML:
