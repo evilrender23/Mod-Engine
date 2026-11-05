@@ -1,0 +1,61 @@
+# A torch flame: a stream of additive flames that turn into smoke, and sparks every second.
+depth = -5
+
+[[type]]
+name = "flame"
+shape = "flare"
+size = [0.25, 0.45]
+size_incr = -0.006
+speed = [0.4, 0.9]
+direction = [80, 100]
+direction_wiggle = 6
+colors = ["#ffe066", "#ff7a00", "#b13e53"]
+alphas = [0.9, 0.7, 0.0]
+additive = true
+life = [25, 40]
+death_type = "smoke"
+death_count = -3
+
+[[type]]
+name = "smoke"
+shape = "smoke"
+size = [0.3, 0.5]
+size_incr = 0.01
+speed = [0.3, 0.5]
+direction = [85, 95]
+colors = ["#566c86", "#333c57"]
+alphas = [0.4, 0.0]
+life = [40, 60]
+
+[[type]]
+name = "spark"
+shape = "spark"
+size = [0.08, 0.14]
+speed = [1.5, 2.5]
+direction = [60, 120]
+gravity = 0.08
+gravity_dir = 270
+orientation = [0, 360]
+orientation_incr = 8
+colors = ["#ffffff", "#ffcd75"]
+alphas = [1.0, 0.0]
+additive = true
+life = [30, 45]
+
+[[emitter]]
+name = "base"
+type = "flame"
+shape = "ellipse"
+distribution = "gaussian"
+region = [-5, -3, 5, 3]
+mode = "stream"
+count = 2
+
+[[emitter]]
+name = "sparks"
+type = "spark"
+shape = "rectangle"
+region = [-3, -6, 3, 0]
+mode = "burst"
+count = 6
+interval = [50, 70]

@@ -41,6 +41,10 @@ pub struct Instance {
     pub outside: bool,
     pub at_boundary: bool,
     pub mouse_over: bool,
+    /// path_start state (path_index, path_position...).
+    pub path: crate::path::PathFollow,
+    /// timeline_index, timeline_position...
+    pub timeline: crate::timeline::TimelineRun,
 }
 
 impl Instance {
@@ -83,6 +87,8 @@ impl Instance {
             outside: false,
             at_boundary: false,
             mouse_over: false,
+            path: Default::default(),
+            timeline: Default::default(),
         }
     }
 
@@ -158,6 +164,8 @@ pub enum Bv {
     BboxBottom,
     SpriteWidth,
     SpriteHeight,
+    Path(crate::path::PathVar),
+    Timeline(crate::timeline::TlVar),
 }
 
 pub const BUILTIN_VARS: &[(&str, Bv)] = &[
@@ -197,4 +205,16 @@ pub const BUILTIN_VARS: &[(&str, Bv)] = &[
     ("bbox_bottom", Bv::BboxBottom),
     ("sprite_width", Bv::SpriteWidth),
     ("sprite_height", Bv::SpriteHeight),
+    ("path_index", Bv::Path(crate::path::PathVar::Index)),
+    ("path_position", Bv::Path(crate::path::PathVar::Position)),
+    ("path_positionprevious", Bv::Path(crate::path::PathVar::PositionPrevious)),
+    ("path_speed", Bv::Path(crate::path::PathVar::Speed)),
+    ("path_scale", Bv::Path(crate::path::PathVar::Scale)),
+    ("path_orientation", Bv::Path(crate::path::PathVar::Orientation)),
+    ("path_endaction", Bv::Path(crate::path::PathVar::EndAction)),
+    ("timeline_index", Bv::Timeline(crate::timeline::TlVar::Index)),
+    ("timeline_position", Bv::Timeline(crate::timeline::TlVar::Position)),
+    ("timeline_speed", Bv::Timeline(crate::timeline::TlVar::Speed)),
+    ("timeline_running", Bv::Timeline(crate::timeline::TlVar::Running)),
+    ("timeline_loop", Bv::Timeline(crate::timeline::TlVar::Loop)),
 ];

@@ -1,0 +1,11 @@
+origin = "bottom"
+pixels = ['''
+.ooooo.
+.oyyyo.
+.oywyo.
+..ror..
+..ror..
+..ror..
+..ror..
+..rrr..
+''']

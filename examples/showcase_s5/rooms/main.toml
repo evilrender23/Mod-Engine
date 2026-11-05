@@ -1,0 +1,5 @@
+background = "#323e4f"
+
+[[layer]]
+type = "instances"
+instances = [ { object = "Swatches", x = 160, y = 132 } ]

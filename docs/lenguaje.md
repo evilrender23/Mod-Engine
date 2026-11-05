@@ -154,6 +154,7 @@ object Slime : Actor {
 | `color` | `#rrggbb` | selector de color |
 | `list("a", "b", …)` | uno de esos textos | desplegable |
 | `sprite`, `object`, `sound`, `room`, `font` | un asset de ese tipo | desplegable con los assets |
+| `path`, `timeline`, `animcurve`, `sequence` | una trayectoria, línea de tiempo, curva o secuencia | desplegable con los assets |
 
 - El motor comprueba el valor de cada instancia nueva **después** de sus propiedades y de las
   variables de la room, y antes de `create`. Un valor fuera de rango es un error con su línea.

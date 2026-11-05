@@ -1,0 +1,5 @@
+# Same face, small and crisp (no antialiasing): pixel-art text
+file = "fnt_title.ttf"
+size = 11
+antialias = false
+ranges = [[32, 127], [160, 255]]

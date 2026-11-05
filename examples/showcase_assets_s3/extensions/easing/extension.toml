@@ -1,0 +1,32 @@
+name = "easing"
+version = "1.2.0"
+author = "Mod Engine"
+description = "Funciones de easing (curvas de animación) y un tween sencillo"
+enabled = true
+files = ["easing.ms", "tween.ms"]
+init = "easing_init"
+final = "easing_final"
+
+[constants]
+EASING_VERSION = 120
+EASE_DEFAULT_STEPS = 60
+
+[[function]]
+name = "ease_out_back"
+args = "t"
+help = "pasa un poco del final y vuelve (0..1 → 0..1)"
+
+[[function]]
+name = "ease_in_out_sine"
+args = "t"
+help = "acelera y frena suavemente"
+
+[[function]]
+name = "ease_out_bounce"
+args = "t"
+help = "rebota al llegar"
+
+[[function]]
+name = "tween"
+args = "from, to, t, [curve]"
+help = "interpola de from a to con la curva dada (ease_out_back por defecto)"

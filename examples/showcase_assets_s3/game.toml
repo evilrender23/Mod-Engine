@@ -1,0 +1,25 @@
+# Showcase S3 — particle systems, shaders and extensions
+[game]
+name = "Showcase: partículas, shaders y extensiones"
+start_room = "demo"
+rooms = ["demo"]
+
+[display]
+width = 320
+height = 180
+scale = 3
+step_rate = 60
+letterbox = "#1a1c2c"
+
+[palette]
+"k" = "#1a1c2c"
+"w" = "#f4f4f4"
+"y" = "#ffcd75"
+"o" = "#ef7d57"
+"r" = "#b13e53"
+"g" = "#a7f070"
+"G" = "#38b764"
+"b" = "#3b5dc9"
+"c" = "#41a6f6"
+"s" = "#c2d3e8"
+"n" = "#566c86"

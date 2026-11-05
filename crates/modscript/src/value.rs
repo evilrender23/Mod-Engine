@@ -16,6 +16,13 @@ pub enum AssetKind {
     Sound,
     Room,
     Font,
+    TileSet,
+    Path,
+    Timeline,
+    AnimCurve,
+    Sequence,
+    ParticleSystem,
+    Shader,
 }
 
 impl AssetKind {
@@ -26,6 +33,13 @@ impl AssetKind {
             AssetKind::Sound => "sound",
             AssetKind::Room => "room",
             AssetKind::Font => "font",
+            AssetKind::TileSet => "tileset",
+            AssetKind::Path => "path",
+            AssetKind::Timeline => "timeline",
+            AssetKind::AnimCurve => "animcurve",
+            AssetKind::Sequence => "sequence",
+            AssetKind::ParticleSystem => "particles",
+            AssetKind::Shader => "shader",
         }
     }
 }

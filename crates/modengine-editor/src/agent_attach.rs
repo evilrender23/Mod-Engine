@@ -44,7 +44,12 @@ pub fn icon(o: &Open) -> &'static str {
         Open::Sprite(_) => "▣",
         Open::Sound(_) => "♪",
         Open::Script(_) => "✎",
+        Open::Font(_) => "🗛",
+        Open::Note(_) => "🗒",
+        Open::TileSet(_) => "▩",
         Open::Settings => "⚙",
+        Open::Anim(k, _) => k.icon(),
+        Open::Fx(k, _) => k.icon(),
     }
 }
 
@@ -52,7 +57,10 @@ pub fn icon(o: &Open) -> &'static str {
 pub fn asset_label(o: &Open) -> String {
     match o {
         Open::Room(n) | Open::Object(n) | Open::Sprite(n) | Open::Sound(n) | Open::Script(n) => format!("{} {n}", icon(o)),
+        Open::Font(n) | Open::Note(n) | Open::TileSet(n) => format!("{} {n}", icon(o)),
         Open::Settings => "⚙ Ajustes".into(),
+        Open::Anim(_, n) => format!("{} {n}", icon(o)),
+        Open::Fx(_, n) => format!("{} {n}", icon(o)),
     }
 }
 
@@ -69,6 +77,11 @@ pub fn asset(p: &Project, o: &Open) -> Option<Attachment> {
         Open::Sound(n) => (p.sounds.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the sound `{n}`")),
         Open::Script(rel) => (p.dir.join(rel), rel.clone(), String::new()),
         Open::Settings => (p.dir.join("game.toml"), "game.toml".into(), "the game settings".into()),
+        Open::Anim(k, n) => (p.motion.path(*k, n)?, n.clone(), format!("the {} `{n}` ({})", k.key(), k.folder())),
+        Open::Fx(k, n) => (p.fx.path(*k, n)?, n.clone(), format!("the {} `{n}` ({})", k.key(), k.folder())),
+        Open::Font(n) => (p.fonts.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the font `{n}`")),
+        Open::Note(n) => (p.notes.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the note `{n}`")),
+        Open::TileSet(n) => (p.tilesets.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the tile set `{n}`")),
     };
     let mut a = Attachment::file(&path);
     a.label = label;

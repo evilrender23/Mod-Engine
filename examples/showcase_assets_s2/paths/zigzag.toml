@@ -1,0 +1,25 @@
+# Straight, open zigzag. Followed relative to where the instance starts.
+closed = false
+smooth = false
+precision = 4
+room = "main"
+
+[[point]]
+x = 0
+y = 0
+
+[[point]]
+x = 24
+y = -24
+
+[[point]]
+x = 48
+y = 0
+
+[[point]]
+x = 72
+y = -24
+
+[[point]]
+x = 96
+y = 0

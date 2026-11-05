@@ -1,0 +1,5 @@
+# DejaVu Sans (Bitstream Vera license), bold at 20 px with Spanish characters
+file = "fnt_title.ttf"
+size = 20
+bold = true
+ranges = [[32, 127], [160, 255]]

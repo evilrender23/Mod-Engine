@@ -321,6 +321,12 @@ impl Parser {
             "sound" => no_args(self, VarType::Asset(AssetKind::Sound)),
             "room" => no_args(self, VarType::Asset(AssetKind::Room)),
             "font" => no_args(self, VarType::Asset(AssetKind::Font)),
+            "path" => no_args(self, VarType::Asset(AssetKind::Path)),
+            "timeline" => no_args(self, VarType::Asset(AssetKind::Timeline)),
+            "animcurve" => no_args(self, VarType::Asset(AssetKind::AnimCurve)),
+            "sequence" => no_args(self, VarType::Asset(AssetKind::Sequence)),
+            "particles" => no_args(self, VarType::Asset(AssetKind::ParticleSystem)),
+            "shader" => no_args(self, VarType::Asset(AssetKind::Shader)),
             "list" => {
                 let mut opts = Vec::new();
                 for e in args.unwrap_or_default() {

@@ -1,6 +1,8 @@
 //! `modengine` command line: run, check and create Mod Engine projects.
 
 mod backend;
+mod gpu_fx;
+mod shader_tool;
 
 mod script_input;
 
@@ -16,6 +18,8 @@ usage:
   modengine run <project> [--room R] [--exec CODE] [--input SPEC] [--screenshot <file.png>] [--frames N]
   modengine check <project> [--room R] [--exec CODE] [--input SPEC] [--steps N] [--watch Object]
   modengine new <folder>
+  modengine shader <project> [name] [--check] [--sprite S] [--uniform n=a,b] [--screenshot F.png]
+                                           compile shaders on the GPU / live shader preview
   modengine functions
   modengine <project>                      same as `run`
 
@@ -113,6 +117,10 @@ fn scripted(spec: &Option<String>) -> Option<ScriptedInput> {
 }
 
 fn main() {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("shader") {
+        return shader_tool::main_cli(&raw[1..]);
+    }
     let args = parse_args();
     match args.cmd.as_str() {
         "run" => {

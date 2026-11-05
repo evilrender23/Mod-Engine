@@ -39,6 +39,13 @@ pub enum Open {
     Sprite(String),
     Sound(String),
     Script(String),
+    Font(String),
+    Note(String),
+    TileSet(String),
+    /// Paths, timelines, animation curves and sequences (motion.rs).
+    Anim(crate::motion::AnimKind, String),
+    /// Particle systems, shaders and extensions (fx.rs).
+    Fx(crate::fx::FxKind, String),
     Settings,
 }
 
@@ -52,7 +59,12 @@ impl Open {
             "sprite" => Open::Sprite(v.into()),
             "sound" => Open::Sound(v.into()),
             "script" => Open::Script(v.into()),
+            "font" => Open::Font(v.into()),
+            "note" => Open::Note(v.into()),
+            "tileset" => Open::TileSet(v.into()),
             "settings" => Open::Settings,
+            k if crate::motion::AnimKind::parse(k).is_some() => Open::Anim(crate::motion::AnimKind::parse(k)?, v.into()),
+            k if crate::fx::FxKind::parse(k).is_some() => Open::Fx(crate::fx::FxKind::parse(k)?, v.into()),
             _ => return None,
         })
     }
@@ -65,6 +77,11 @@ impl Open {
             Open::Sprite(n) => format!("sprite:{n}"),
             Open::Sound(n) => format!("sound:{n}"),
             Open::Script(n) => format!("script:{n}"),
+            Open::Font(n) => format!("font:{n}"),
+            Open::Note(n) => format!("note:{n}"),
+            Open::TileSet(n) => format!("tileset:{n}"),
+            Open::Anim(k, n) => format!("{}:{n}", k.key()),
+            Open::Fx(k, n) => format!("{}:{n}", k.key()),
             Open::Settings => "settings".into(),
         }
     }
@@ -81,6 +98,14 @@ pub struct Auto {
     pub fit: bool,
     /// Show the Agente dock.
     pub agent: bool,
+    /// Select this layer in the opened room editors (`--layer Mundo`).
+    pub layer: Option<String>,
+    /// Open the New dialog of this kind (`--new font`).
+    pub new: Option<NewKind>,
+    /// Click here once the editor is up (`--click 60,14` opens the Crear menu).
+    pub click: Option<egui::Pos2>,
+    /// Fill the Agente dock with sample state (`agent_panel::AgentPanel::demo`).
+    pub agent_demo: Option<String>,
     /// Open the import dialog with these files or folders.
     pub import: Vec<PathBuf>,
     /// Then press its Importar button (end-to-end runs).
@@ -116,6 +141,11 @@ pub enum Tab {
     Sprite(SpriteEditor),
     Sound(SoundEditor),
     Script(ScriptEditor),
+    Font(crate::font::FontEditor),
+    Note(crate::note::NoteEditor),
+    TileSet(crate::tileset::TileSetEditor),
+    Anim(crate::motion::AnimTab),
+    Fx(crate::fx::FxTab),
     Settings(SettingsEditor),
 }
 
@@ -127,6 +157,11 @@ impl Tab {
             Tab::Sprite(e) => Open::Sprite(e.name.clone()),
             Tab::Sound(e) => Open::Sound(e.name.clone()),
             Tab::Script(e) => Open::Script(e.rel.clone()),
+            Tab::Font(e) => Open::Font(e.name.clone()),
+            Tab::Note(e) => Open::Note(e.name.clone()),
+            Tab::TileSet(e) => Open::TileSet(e.name.clone()),
+            Tab::Anim(e) => Open::Anim(e.kind(), e.name().to_string()),
+            Tab::Fx(e) => Open::Fx(e.kind(), e.name().to_string()),
             Tab::Settings(_) => Open::Settings,
         }
     }
@@ -139,6 +174,11 @@ impl Tab {
             Tab::Sprite(e) => format!("▣ Sprite: {}", e.name),
             Tab::Sound(e) => format!("♪ Sonido: {}", e.name),
             Tab::Script(e) => format!("✎ Script: {}", e.rel),
+            Tab::Font(e) => format!("🗛 Fuente: {}", e.name),
+            Tab::Note(e) => format!("🗒 Nota: {}", e.name),
+            Tab::TileSet(e) => format!("▩ Tile set: {}", e.name),
+            Tab::Anim(e) => e.title(),
+            Tab::Fx(e) => e.title(),
             Tab::Settings(_) => "⚙ Ajustes del juego".into(),
         }
     }
@@ -149,6 +189,11 @@ impl Tab {
             Tab::Sprite(e) => e.dirty,
             Tab::Sound(e) => e.dirty,
             Tab::Settings(e) => e.dirty,
+            Tab::Anim(e) => e.dirty(),
+            Tab::Fx(e) => e.dirty(),
+            Tab::Font(e) => e.dirty,
+            Tab::Note(e) => e.dirty,
+            Tab::TileSet(e) => e.dirty,
             Tab::Object(e) => e.script_rel(p).and_then(|r| p.script_index(&r)).map(|i| p.scripts[i].dirty()).unwrap_or(false),
             Tab::Script(e) => p.script_index(&e.rel).map(|i| p.scripts[i].dirty()).unwrap_or(false),
         }
@@ -160,6 +205,11 @@ impl Tab {
             Tab::Sprite(e) => e.save(cx),
             Tab::Sound(e) => e.save(cx),
             Tab::Settings(e) => e.save(cx),
+            Tab::Anim(e) => e.save(cx),
+            Tab::Fx(e) => e.save(cx),
+            Tab::Font(e) => e.save(cx),
+            Tab::Note(e) => e.save(cx),
+            Tab::TileSet(e) => e.save(cx),
             Tab::Object(e) => match e.script_rel(cx.project).and_then(|r| cx.project.script_index(&r)) {
                 Some(i) => cx.project.save_script(i),
                 None => Ok(()),
@@ -187,7 +237,10 @@ impl Tab {
     pub fn undo(&mut self) {
         match self {
             Tab::Room(e) => e.undo(),
+            Tab::Anim(e) => e.undo(),
+            Tab::Fx(e) => e.undo(),
             Tab::Sprite(e) => e.undo(),
+            Tab::TileSet(e) => e.undo(),
             _ => {}
         }
     }
@@ -195,7 +248,10 @@ impl Tab {
     pub fn redo(&mut self) {
         match self {
             Tab::Room(e) => e.redo(),
+            Tab::Anim(e) => e.redo(),
+            Tab::Fx(e) => e.redo(),
             Tab::Sprite(e) => e.redo(),
+            Tab::TileSet(e) => e.redo(),
             _ => {}
         }
     }
@@ -207,7 +263,12 @@ impl Tab {
             Tab::Sprite(e) => e.ui(ui, cx),
             Tab::Sound(e) => e.ui(ui, cx),
             Tab::Script(e) => e.ui(ui, cx),
+            Tab::Font(e) => e.ui(ui, cx),
+            Tab::Note(e) => e.ui(ui, cx),
+            Tab::TileSet(e) => e.ui(ui, cx),
             Tab::Settings(e) => e.ui(ui, cx),
+            Tab::Anim(e) => e.ui(ui, cx),
+            Tab::Fx(e) => e.ui(ui, cx),
         }
     }
 }
@@ -235,20 +296,42 @@ fn make_tab(p: &Project, what: &Open) -> Result<Tab, Option<String>> {
             p.script_index(rel).ok_or(None)?;
             Tab::Script(ScriptEditor::new(rel))
         }
+        Open::Font(n) => {
+            let s = p.fonts.iter().find(|s| &s.name == n).ok_or(None)?;
+            Tab::Font(crate::font::FontEditor::open(n, &s.path, s.is_toml).map_err(Some)?)
+        }
+        Open::Note(n) => {
+            let s = p.notes.iter().find(|s| &s.name == n).ok_or(None)?;
+            Tab::Note(crate::note::NoteEditor::open(n, &s.path).map_err(Some)?)
+        }
+        Open::TileSet(n) => {
+            let s = p.tilesets.iter().find(|s| &s.name == n).ok_or(None)?;
+            Tab::TileSet(crate::tileset::TileSetEditor::open(n, &s.path).map_err(Some)?)
+        }
+        Open::Anim(k, n) => Tab::Anim(crate::motion::AnimTab::open(p, *k, n)?),
+        Open::Fx(k, n) => Tab::Fx(crate::fx::FxTab::open(p, *k, n)?),
         Open::Settings => Tab::Settings(SettingsEditor::new(p)),
     })
 }
 
 // ------------------------------------------------------------------ dialogs
 
+/// What the New dialog creates (see the Crear menu table in `kinds.rs`).
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum NewKind {
+pub enum NewKind {
     PixelSprite,
     PngSprite,
     Sound,
     Object,
     Room,
     Script,
+    Font,
+    Note,
+    TileSet,
+    /// Path, timeline, animation curve or sequence.
+    Anim(crate::motion::AnimKind),
+    /// Particle system, shader or extension.
+    Fx(crate::fx::FxKind),
 }
 
 enum Dialog {
@@ -317,17 +400,16 @@ fn section_key(o: &Open) -> Option<&'static str> {
         Open::Room(_) => "rooms",
         Open::Sound(_) => "sounds",
         Open::Script(_) => "scripts",
+        Open::Font(_) => "fonts",
+        Open::Note(_) => "notes",
+        Open::TileSet(_) => "tilesets",
+        Open::Anim(k, _) => k.section(),
+        Open::Fx(k, _) => k.section(),
         Open::Settings => return None,
     })
 }
 
-/// One row of the asset browser.
-struct Row {
-    name: String,
-    label: String,
-    sprite: Option<String>,
-    what: Open,
-}
+use crate::kinds::Row;
 
 fn recent_file() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/modengine/recent.txt"))
@@ -615,6 +697,11 @@ impl EditorApp {
                 Open::Sprite(n) => p.sprite_entry(n).map(|s| s.path.clone()),
                 Open::Sound(n) => p.sounds.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
                 Open::Settings => Some(p.dir.join("game.toml")),
+                Open::Anim(k, n) => p.motion.path(*k, n),
+                Open::Fx(k, n) => p.fx.path(*k, n),
+                Open::Font(n) => p.fonts.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
+                Open::Note(n) => p.notes.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
+                Open::TileSet(n) => p.tilesets.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
                 Open::Object(_) | Open::Script(_) => None, // they show the project's scripts, synced above
             };
             let Some(path) = path.filter(|f| touched(f)) else { continue };
@@ -794,6 +881,10 @@ impl EditorApp {
                     self.open_import(&[], None);
                     ui.close();
                 }
+                if ui.button("🎨 Paletas (Lospec)…").on_hover_text("Descargar o importar paletas y aplicarlas al proyecto").clicked() {
+                    crate::palette::open_dialog();
+                    ui.close();
+                }
                 if ui.button("Cerrar proyecto").clicked() {
                     if self.dirty_any() {
                         self.save_all();
@@ -814,18 +905,8 @@ impl EditorApp {
                 }
             });
             ui.menu_button("Crear", |ui| {
-                for (label, kind) in [
-                    ("Sprite (pixel art)", NewKind::PixelSprite),
-                    ("Sprite (importar PNG)", NewKind::PngSprite),
-                    ("Sonido", NewKind::Sound),
-                    ("Objeto", NewKind::Object),
-                    ("Room", NewKind::Room),
-                    ("Script", NewKind::Script),
-                ] {
-                    if ui.button(label).clicked() {
-                        self.dialog = Some(Dialog::New { kind, name: String::new(), extra: String::new(), error: None });
-                        ui.close();
-                    }
+                if let Some(kind) = crate::kinds::create_menu(ui) {
+                    self.new_dialog(kind);
                 }
             });
             ui.menu_button("Juego", |ui| {
@@ -950,19 +1031,24 @@ impl EditorApp {
             }
             // sprites, sounds and fonts can come from files elsewhere on disk
             let import = crate::import::section_kind(key);
-            if let Some(k) = import {
-                head.context_menu(|ui| {
+            // right click: import (sprites, sounds, fonts) and the whole Crear menu
+            head.context_menu(|ui| {
+                if let Some(k) = import {
                     if ui.button(crate::import::menu_label(k)).clicked() {
                         self.open_import(&[], Some(k));
                         ui.close();
                     }
-                });
-            }
+                    ui.separator();
+                }
+                if let Some(kind) = crate::kinds::create_menu(ui) {
+                    self.new_dialog(kind);
+                }
+            });
             if add.is_some() || import.is_some() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(kind) = add {
                         if ui.small_button("+").on_hover_text("crear").clicked() {
-                            self.dialog = Some(Dialog::New { kind, name: String::new(), extra: String::new(), error: None });
+                            self.new_dialog(kind);
                         }
                     }
                     if let Some(k) = import {
@@ -1067,55 +1153,31 @@ impl EditorApp {
         });
         ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let Some(p) = &self.project else { return };
-            let sprites = self.sorted("sprites", p.sprite_names());
-            let sprites: Vec<Row> = sprites.into_iter().map(|s| Row { label: s.clone(), sprite: Some(s.clone()), what: Open::Sprite(s.clone()), name: s }).collect();
-            let objects = self.sorted("objects", p.object_names());
-            let objects: Vec<Row> = objects
-                .into_iter()
-                .map(|o| {
-                    let label = match p.object(&o).and_then(|e| e.parent.clone()) {
-                        Some(pa) => format!("{o}  ‹ {pa}"),
-                        None => o.clone(),
-                    };
-                    Row { label, sprite: p.object_sprite(&o), what: Open::Object(o.clone()), name: o }
-                })
-                .collect();
-            let start = p.game.game.start_room.clone();
-            let rooms = self.sorted("rooms", p.room_names());
-            let rooms: Vec<Row> = rooms
-                .into_iter()
-                .map(|r| Row { label: if start.as_deref() == Some(r.as_str()) { format!("{r}  ★") } else { r.clone() }, sprite: None, what: Open::Room(r.clone()), name: r })
-                .collect();
-            let sounds = self.sorted("sounds", p.sounds.iter().map(|s| s.name.clone()).collect());
-            let sounds: Vec<Row> = sounds.into_iter().map(|s| Row { label: s.clone(), sprite: None, what: Open::Sound(s.clone()), name: s }).collect();
-            let scripts = self.sorted("scripts", p.scripts.iter().map(|s| s.rel.clone()).collect());
-            let scripts: Vec<Row> = scripts.into_iter().map(|s| Row { label: s.clone(), sprite: None, what: Open::Script(s.clone()), name: s }).collect();
-            let fonts: Vec<String> = p.fonts.iter().map(|s| s.name.clone()).collect();
-
-            for (key, title, kind, rows) in [
-                ("sprites", "Sprites", NewKind::PixelSprite, sprites),
-                ("objects", "Objetos", NewKind::Object, objects),
-                ("rooms", "Rooms", NewKind::Room, rooms),
-                ("sounds", "Sonidos", NewKind::Sound, sounds),
-                ("scripts", "Scripts", NewKind::Script, scripts),
-            ] {
-                if self.section(ui, key, title, Some(kind)) {
-                    self.asset_list(ui, key, rows);
-                }
+            if self.project.is_none() {
+                return;
             }
-            if self.section(ui, "fonts", "Fuentes", None) {
-                for f in fonts {
-                    ui.horizontal(|ui| {
-                        ui.add_space(30.0);
-                        ui.label(f);
-                    });
+            // one section per asset kind (table in kinds.rs), rows in the user's order
+            for s in crate::kinds::SECTIONS {
+                let Some(p) = &self.project else { return };
+                let mut rows = (s.rows)(p);
+                let order = self.sorted(s.key, rows.iter().map(|r| r.name.clone()).collect());
+                rows.sort_by_key(|r| order.iter().position(|n| *n == r.name));
+                if self.section(ui, s.key, s.title, s.new) {
+                    self.asset_list(ui, s.key, rows);
                 }
             }
             ui.add_space(6.0);
             if ui.button("⚙ Ajustes del juego").clicked() {
                 self.open(Open::Settings);
             }
+            // right click on the empty space below: the Crear menu
+            let rest = ui.available_size().max(Vec2::new(ui.available_width(), 40.0));
+            let bg = ui.allocate_response(rest, Sense::click());
+            bg.context_menu(|ui| {
+                if let Some(kind) = crate::kinds::create_menu(ui) {
+                    self.new_dialog(kind);
+                }
+            });
         });
     }
 
@@ -1195,6 +1257,11 @@ impl EditorApp {
             Open::Sprite(n) => ("Sprite", n.clone()),
             Open::Sound(n) => ("Sonido", n.clone()),
             Open::Script(n) => ("Script", n.clone()),
+            Open::Font(n) => ("Fuente", n.clone()),
+            Open::Note(n) => ("Nota", n.clone()),
+            Open::TileSet(n) => ("Tile set", n.clone()),
+            Open::Anim(k, n) => (k.label(), n.clone()),
+            Open::Fx(k, n) => (k.label(), n.clone()),
             Open::Settings => ("Juego", p.game.game.name.clone()),
         };
         ui.label(RichText::new(format!("Inspector: {name}")).weak());
@@ -1217,7 +1284,12 @@ impl EditorApp {
                         Open::Room(_) => "▦",
                         Open::Sound(_) => "♪",
                         Open::Script(_) => "✎",
+                        Open::Font(_) => "🗛",
+                        Open::Note(_) => "🗒",
+                        Open::TileSet(_) => "▩",
                         Open::Settings => "⚙",
+                        Open::Anim(k, _) => k.icon(),
+                        Open::Fx(k, _) => k.icon(),
                         _ => "◆",
                     };
                     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(26.0), ui.visuals().text_color());
@@ -1321,10 +1393,25 @@ impl EditorApp {
                             row("estado", if sc.dirty() { "● sin guardar" } else { "guardado" }.into());
                         }
                     }
+                    Open::Anim(..) => {
+                        for (k, v) in crate::motion::inspector_rows(p, &what) {
+                            row(k, v);
+                        }
+                    }
+                    Open::Fx(..) => {
+                        for (k, v) in crate::fx::inspector_rows(p, &what) {
+                            row(k, v);
+                        }
+                    }
                     Open::Settings => {
                         let d = &p.game.display;
                         row("resolución", format!("{} × {}", d.width, d.height));
                         row("rooms", p.rooms.len().to_string());
+                    }
+                    Open::Font(_) | Open::Note(_) | Open::TileSet(_) => {
+                        for (k, v) in crate::kinds::inspector_rows(p, &what) {
+                            row(k, v);
+                        }
                     }
                 }
             });
@@ -1373,14 +1460,7 @@ impl EditorApp {
             Dialog::New { kind, mut name, mut extra, mut error } => {
                 let mut create = false;
                 egui::Modal::new(egui::Id::unique("new_asset")).show(ctx, |ui| {
-                    ui.heading(match kind {
-                        NewKind::PixelSprite => "Nuevo sprite (pixel art)",
-                        NewKind::PngSprite => "Importar PNG como sprite",
-                        NewKind::Sound => "Nuevo sonido",
-                        NewKind::Object => "Nuevo objeto",
-                        NewKind::Room => "Nueva room",
-                        NewKind::Script => "Nuevo script",
-                    });
+                    ui.heading(crate::kinds::new_title(kind));
                     ui.horizontal(|ui| {
                         ui.label("Nombre:");
                         let r = ui.text_edit_singleline(&mut name);
@@ -1403,6 +1483,9 @@ impl EditorApp {
                             }
                             ui.add(egui::TextEdit::singleline(&mut extra).desired_width(60.0));
                         });
+                    }
+                    if let Some(p) = &self.project {
+                        crate::kinds::new_extra(ui, kind, &mut extra, p);
                     }
                     if let Some(e) = &error {
                         ui.colored_label(crate::theme::colors(ui.ctx()).error, e);
@@ -1589,6 +1672,17 @@ impl EditorApp {
                 p.save_script(i)?;
                 Open::Script(rel)
             }
+            NewKind::Font => crate::font::create(p, name, extra)?,
+            NewKind::Note => crate::note::create(p, name)?,
+            NewKind::TileSet => crate::tileset::create(p, name, extra)?,
+            NewKind::Anim(k) => {
+                crate::motion::create(p, k, name)?;
+                Open::Anim(k, name.into())
+            }
+            NewKind::Fx(k) => {
+                crate::fx::create(p, k, name)?;
+                Open::Fx(k, name.into())
+            }
         };
         Ok(what)
     }
@@ -1658,6 +1752,26 @@ impl EditorApp {
                     p.rescan_objects();
                 }
             }
+            Open::Font(n) | Open::TileSet(n) | Open::Note(n) => {
+                let list = match what {
+                    Open::Font(_) => p.fonts.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
+                    Open::TileSet(_) => p.tilesets.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
+                    _ => p.notes.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
+                };
+                if let Some(path) = list {
+                    // a font's TTF goes with its .toml
+                    let mut files = vec![path.clone()];
+                    if let Some(f) = std::fs::read_to_string(&path).ok().and_then(|t| t.parse::<toml::Table>().ok()).and_then(|t| t.get("file").and_then(|v| v.as_str()).map(String::from)) {
+                        files.push(path.with_file_name(f));
+                    }
+                    for f in files.into_iter().filter(|f| f.exists()) {
+                        p.trash(&f)?;
+                    }
+                }
+                p.reload_lists();
+            }
+            Open::Anim(k, n) => crate::motion::delete(p, *k, n)?,
+            Open::Fx(k, n) => crate::fx::delete(p, *k, n)?,
             Open::Settings => {}
         }
         if let Some(id) = self.ws.find(what) {
@@ -1683,8 +1797,17 @@ impl EditorApp {
                 for t in self.ws.tabs_mut() {
                     match t {
                         Tab::Room(r) => r.auto_select(),
+                        Tab::Anim(a) => a.auto_select(),
                         Tab::Object(o) => o.show_vars(),
+                        Tab::TileSet(t) => t.auto_select(),
                         _ => {}
+                    }
+                }
+            }
+            if let Some(name) = self.auto.layer.clone() {
+                for t in self.ws.tabs_mut() {
+                    if let Tab::Room(r) = t {
+                        r.select_layer(&name);
                     }
                 }
             }
@@ -1693,6 +1816,14 @@ impl EditorApp {
         if self.auto.agent && self.auto.select && self.auto.frames == 20 {
             let src = Self::attach_sources(&self.project, &self.ws, &self.selected, &self.log);
             self.agent.attach_defaults(&src);
+        }
+        if let (Some(what), Some(p), 3) = (&self.auto.agent_demo, &self.project, self.auto.frames) {
+            self.agent.demo(what, &p.dir, &p.game.game.name);
+        }
+        if self.auto.frames == 2 {
+            if let Some(k) = self.auto.new.take() {
+                self.new_dialog(k);
+            }
         }
         if self.auto.frames == 2 && !self.auto.import.is_empty() {
             let paths = std::mem::take(&mut self.auto.import);
@@ -1728,7 +1859,22 @@ impl EditorApp {
         }
     }
 
+    /// Opens the New dialog of an asset kind (Crear menu, "+" buttons, Alt shortcuts).
+    fn new_dialog(&mut self, kind: NewKind) {
+        let extra = match (&self.project, kind) {
+            (Some(p), NewKind::TileSet) => p.sprite_names().first().cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        self.dialog = Some(Dialog::New { kind, name: String::new(), extra, error: None });
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        // Alt+letter: GameMaker's Create asset shortcuts (kinds.rs)
+        if self.dialog.is_none() {
+            if let Some(kind) = crate::kinds::shortcut(ctx) {
+                self.new_dialog(kind);
+            }
+        }
         let (find, escape, delete) = ctx.input_mut(|i| (i.consume_key(Modifiers::COMMAND, Key::F), i.key_pressed(Key::Escape), i.key_pressed(Key::Delete)));
         // a click anywhere outside the asset browser takes the keyboard away from it
         if ctx.input(|i| i.pointer.any_pressed()) && !ctx.pointer_interact_pos().is_some_and(|p| self.browser_rect.contains(p)) {
@@ -1796,6 +1942,16 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     /// `--drag`: keep the pointer where the fake drag is held.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // `--click x,y`: one click a few frames in (screenshots of menus)
+        if let Some(pos) = self.auto.click {
+            let ev = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            match self.auto.frames {
+                8 => raw_input.events.extend([egui::Event::PointerMoved(pos), ev(true)]),
+                9 => raw_input.events.push(ev(false)),
+                10.. => raw_input.events.push(egui::Event::PointerMoved(pos)),
+                _ => {}
+            }
+        }
         if let Some((_, pos)) = &self.auto.drag {
             if self.auto.frames >= 5 {
                 raw_input.events.push(egui::Event::PointerMoved(*pos));
@@ -1846,6 +2002,7 @@ impl eframe::App for EditorApp {
         egui::CentralPanel::default().frame(crate::theme::editor_frame(&ctx).inner_margin(0)).show(ui, |ui| self.workspace(ui));
         self.dialogs(&ctx);
         self.import_frame(ui);
+        crate::palette::dialog_frame(&ctx, self.project.as_mut(), &mut self.log);
         crate::dnd::ghost(&ctx);
     }
 }

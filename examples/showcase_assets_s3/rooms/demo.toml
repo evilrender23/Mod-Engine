@@ -1,0 +1,12 @@
+width = 320
+height = 180
+background = "#1a1c2c"
+
+[[layer]]
+name = "Instances"
+type = "instances"
+
+[[layer.instances]]
+object = "Demo"
+x = 0
+y = 0

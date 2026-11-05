@@ -1,0 +1,11 @@
+origin = "center"
+pixels = ['''
+...cc...
+..cwwc..
+.cwwwwc.
+cwwbbwwc
+cwbbbbwc
+.cccccc.
+.o.oo.o.
+..o..o..
+''']

@@ -1,0 +1,26 @@
+# Drawn with Pear36 characters: 0-9, A-Z (see the [palette] in game.toml).
+origin = "center"
+fps = 4
+pixels = ['''
+.....7....
+....76....
+..KKKKKK..
+.K444443K.
+K44F44443K
+K4F444443K
+K44444433K
+.K444333K.
+..K3333K..
+...KKKK...
+''', '''
+....7.....
+....67....
+..KKKKKK..
+.K444443K.
+K44F44443K
+K4F444443K
+K44444433K
+.K444333K.
+..K3333K..
+...KKKK...
+''']

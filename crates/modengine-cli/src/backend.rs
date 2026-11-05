@@ -188,7 +188,11 @@ fn layout(rw: f32, rh: f32, pixel_perfect: bool) -> Layout {
 }
 
 struct Gpu {
+    /// Shaders and blend modes (see gpu_fx.rs).
+    fx: std::cell::RefCell<crate::gpu_fx::GpuFx>,
     textures: Vec<Texture2D>,
+    /// Baked fonts (`fonts/`): glyph page texture + metrics, drawn quad by quad.
+    atlases: Vec<Option<(Texture2D, std::sync::Arc<modengine::font::GlyphAtlas>)>>,
     fonts: Vec<Option<Font>>,
     font_sizes: Vec<f32>,
     default_size: f32,
@@ -225,6 +229,9 @@ fn text_metrics(gpu: &Gpu, font: Option<u32>) -> (Option<&Font>, f32) {
 
 #[allow(clippy::too_many_arguments)]
 fn draw_text_block(gpu: &Gpu, text: &str, x: f32, y: f32, font: Option<u32>, scale: f32, color: Color, halign: u8, valign: u8) {
+    if let Some(Some((tex, atlas))) = font.and_then(|f| gpu.atlases.get(f as usize)) {
+        return draw_atlas_text(tex, atlas, text, x, y, scale, color, halign, valign);
+    }
     let (f, size) = text_metrics(gpu, font);
     let size16 = size.round().max(1.0) as u16;
     let lines: Vec<&str> = text.split('\n').collect();
@@ -248,6 +255,38 @@ fn draw_text_block(gpu: &Gpu, text: &str, x: f32, y: f32, font: Option<u32>, sca
     }
 }
 
+/// Text with a baked font: one textured quad per glyph (the same layout the editor previews).
+#[allow(clippy::too_many_arguments)]
+fn draw_atlas_text(tex: &Texture2D, atlas: &modengine::font::GlyphAtlas, text: &str, x: f32, y: f32, scale: f32, color: Color, halign: u8, valign: u8) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let line_h = atlas.line_height * scale;
+    let total = line_h * lines.len() as f32;
+    let mut top = y - match valign {
+        1 => total / 2.0,
+        2 => total,
+        _ => 0.0,
+    };
+    for line in lines {
+        let w = atlas.line_width(line) * scale;
+        let lx = x - match halign {
+            1 => w / 2.0,
+            2 => w,
+            _ => 0.0,
+        };
+        for q in atlas.layout_line(line) {
+            let g = q.glyph;
+            draw_texture_ex(
+                tex,
+                (lx + q.x * scale).round(),
+                (top + q.y * scale).round(),
+                color,
+                DrawTextureParams { dest_size: Some(vec2(g.w as f32 * scale, g.h as f32 * scale)), source: Some(Rect::new(g.x as f32, g.y as f32, g.w as f32, g.h as f32)), ..Default::default() },
+            );
+        }
+        top += line_h;
+    }
+}
+
 fn camera_for(rt: &RenderTarget, x: f32, y: f32, w: f32, h: f32) -> Camera2D {
     Camera2D {
         target: vec2(x + w / 2.0, y + h / 2.0),
@@ -259,8 +298,10 @@ fn camera_for(rt: &RenderTarget, x: f32, y: f32, w: f32, h: f32) -> Camera2D {
 
 fn exec(e: &Engine, gpu: &Gpu, rt: &RenderTarget) {
     let (rw, rh) = (e.cam.w as f32, e.cam.h as f32);
+    gpu.fx.borrow_mut().begin_frame();
     for c in &e.cmds {
         match c {
+            DrawCmd::Shader(_) | DrawCmd::Uniform { .. } | DrawCmd::Sampler { .. } | DrawCmd::Blend(_) => gpu.fx.borrow_mut().apply(c, &gpu.textures),
             DrawCmd::View { x, y, w, h } => set_camera(&camera_for(rt, *x, *y, *w, *h)),
             DrawCmd::Gui => set_camera(&camera_for(rt, 0.0, 0.0, rw, rh)),
             DrawCmd::Clear(c) => clear_background(col(*c)),
@@ -312,6 +353,7 @@ fn exec(e: &Engine, gpu: &Gpu, rt: &RenderTarget) {
             }
         }
     }
+    gpu.fx.borrow_mut().end_frame();
 }
 
 pub async fn run(mut e: Engine, mut opts: RunOpts) {
@@ -326,8 +368,28 @@ pub async fn run(mut e: Engine, mut opts: RunOpts) {
             t
         })
         .collect();
+    let atlases: Vec<_> = e
+        .fonts
+        .iter()
+        .map(|f| {
+            f.atlas.as_ref().map(|a| {
+                let t = Texture2D::from_rgba8(a.w as u16, a.h as u16, &a.rgba);
+                // pixel fonts stay crisp; antialiased ones follow the game's filter
+                t.set_filter(if f.antialias { filter } else { FilterMode::Nearest });
+                (t, a.clone())
+            })
+        })
+        .collect();
     let mut fonts: Vec<Option<Font>> = Vec::new();
     for f in &e.fonts {
+        if let Some(err) = &f.error {
+            eprintln!("[error] font '{}': {err} (using the default font)", f.name);
+        }
+        if f.atlas.is_some() || f.data.is_empty() || f.error.is_some() {
+            // baked (drawn from its atlas) or the built-in font at another size
+            fonts.push(None);
+            continue;
+        }
         match load_ttf_font_from_bytes(&f.data) {
             Ok(mut font) => {
                 font.set_filter(filter);
@@ -349,14 +411,26 @@ pub async fn run(mut e: Engine, mut opts: RunOpts) {
             }
         }
     }
+    // particle shapes are smooth textures even in pixel-perfect games
+    for k in 0..modengine::particles::SHAPE_NAMES.len() {
+        if let Some(t) = textures.get(e.parts.shape_base as usize + k) {
+            t.set_filter(FilterMode::Linear);
+        }
+    }
+    let measure_atlases: Vec<_> = atlases.iter().map(|a| a.as_ref().map(|(_, at)| at.clone())).collect();
     let gpu = Gpu {
+        fx: std::cell::RefCell::new(crate::gpu_fx::GpuFx::new(&mut e)),
         textures,
+        atlases,
         font_sizes: e.fonts.iter().map(|f| f.size).collect(),
         fonts: fonts.clone(),
         default_size: e.config.display.font_size,
     };
     let (sizes, default_size) = (gpu.font_sizes.clone(), gpu.default_size);
     e.measure = Box::new(move |font, text, scale| {
+        if let Some(Some(a)) = font.and_then(|i| measure_atlases.get(i as usize)) {
+            return a.measure(text, scale);
+        }
         let (f, size) = match font.and_then(|i| fonts.get(i as usize)).and_then(|f| f.as_ref()) {
             Some(f) => (Some(f), sizes[font.unwrap() as usize]),
             None => (None, default_size),

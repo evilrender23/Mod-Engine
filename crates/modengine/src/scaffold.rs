@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-const GAME: &str = r##"[game]
+const GAME_HEAD: &str = r##"[game]
 name = "My Mod Engine game"
 start_room = "main"
 
@@ -11,24 +11,26 @@ start_room = "main"
 width = 320
 height = 180
 scale = 3
+letterbox = "#272736"
 
-[palette]
-"k" = "#1a1c2c"
-"w" = "#f4f4f4"
-"b" = "#3b5dc9"
-"y" = "#ffcd75"
 "##;
 
+/// game.toml of a new project: the default palette is Pear36 (`0`-`9`, `A`-`Z`).
+pub fn game_toml() -> String {
+    format!("{GAME_HEAD}{}", crate::palette::game_toml_section(&crate::palette::Palette::pear36()))
+}
+
+// Pear36 characters: K outline, 4 yellow, F white, C blue.
 const HERO: &str = r#"origin = "center"
 pixels = ['''
-..kkkk..
-.kyyyyk.
-kywkkwyk
-kyyyyyyk
-.kbbbbk.
-kbbbbbbk
-.kbkkbk.
-.kk..kk.
+..KKKK..
+.K4444K.
+K4FKKF4K
+K444444K
+.KCCCCK.
+KCCCCCCK
+.KCKKCK.
+.KK..KK.
 ''']
 "#;
 
@@ -58,7 +60,7 @@ object Hero {
 }
 "#;
 
-const ROOM: &str = r##"background = "#29366f"
+const ROOM: &str = r##"background = "#323e4f"
 
 [[layer]]
 type = "instances"
@@ -77,8 +79,9 @@ pub fn create(dir: &Path) -> Result<(), String> {
     if dir.join("game.toml").exists() {
         return Err(format!("{} already contains a project", dir.display()));
     }
+    let game = game_toml();
     let files: [(&str, &str); 4] = [
-        ("game.toml", GAME),
+        ("game.toml", &game),
         ("sprites/hero.toml", HERO),
         ("objects/hero.ms", HERO_MS),
         ("rooms/main.toml", ROOM),

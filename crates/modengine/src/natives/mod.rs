@@ -3,6 +3,16 @@
 mod core;
 mod game;
 mod gfx;
+mod particles;
+mod shader;
+mod extension;
+mod font;
+pub mod tilemap;
+mod animcurve;
+mod path;
+mod sequence;
+mod timeline;
+mod palette;
 
 use crate::draw::NAMED_COLORS;
 use crate::engine::Engine;
@@ -26,6 +36,16 @@ pub fn registry() -> HashMap<Sym, NativeFn> {
     core::register(&mut r);
     game::register(&mut r);
     gfx::register(&mut r);
+    particles::register(&mut r);
+    shader::register(&mut r);
+    extension::register(&mut r);
+    font::register(&mut r);
+    tilemap::register(&mut r);
+    animcurve::register(&mut r);
+    path::register(&mut r);
+    sequence::register(&mut r);
+    timeline::register(&mut r);
+    palette::register(&mut r);
     m
 }
 
@@ -53,6 +73,15 @@ pub fn constants() -> HashMap<Sym, Value> {
             (intern("top"), Value::Num(0.0)),
             (intern("middle"), Value::Num(1.0)),
             (intern("bottom"), Value::Num(2.0)),
+        ]),
+    );
+    c.insert(
+        intern("path_action"),
+        Value::new_struct([
+            (intern("stop"), Value::Num(0.0)),
+            (intern("restart"), Value::Num(1.0)),
+            (intern("continue"), Value::Num(2.0)),
+            (intern("reverse"), Value::Num(3.0)),
         ]),
     );
     c.insert(intern("pi"), Value::Num(std::f64::consts::PI));

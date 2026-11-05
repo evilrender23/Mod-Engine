@@ -37,6 +37,15 @@ impl Script {
     }
 }
 
+/// A tile set file and its tiles, cut with the engine's own loader.
+pub struct TileSetEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub data: Result<modengine::tileset::TileSetAsset, String>,
+    /// Bumped on every reload so textures know when to refresh.
+    pub gen: u64,
+}
+
 pub struct ObjEntry {
     pub name: String,
     pub parent: Option<String>,
@@ -51,7 +60,14 @@ pub struct Project {
     pub sprites: Vec<SpriteEntry>,
     pub sounds: Vec<FileEntry>,
     pub fonts: Vec<FileEntry>,
+    /// `notes/*.md`: notes for the team, not used by the game.
+    pub notes: Vec<FileEntry>,
+    pub tilesets: Vec<TileSetEntry>,
     pub rooms: Vec<FileEntry>,
+    /// paths/, timelines/, curves/ and sequences/ (motion.rs).
+    pub motion: crate::motion::Lists,
+    /// particles/, shaders/ and extensions/ (fx.rs).
+    pub fx: crate::fx::Lists,
     pub scripts: Vec<Script>,
     pub objects: Vec<ObjEntry>,
     gen: u64,
@@ -89,7 +105,11 @@ impl Project {
             sprites: vec![],
             sounds: entries(&dir.join("sounds"), &["wav", "ogg"]),
             fonts: entries(&dir.join("fonts"), &["ttf", "otf"]),
+            notes: entries(&dir.join("notes"), &["md"]).into_iter().filter(|e| !e.is_toml).collect(),
+            tilesets: vec![],
             rooms: entries(&dir.join("rooms"), &[]),
+            motion: crate::motion::Lists::load(dir),
+            fx: crate::fx::Lists::load(dir),
             scripts: vec![],
             objects: vec![],
             gen: 0,
@@ -182,12 +202,32 @@ impl Project {
                 SpriteEntry { name, path, is_toml, data, gen: self.gen }
             })
             .collect();
+        self.reload_tilesets();
+    }
+
+    /// Tile sets are cut from sprites: reloaded whenever the sprites are.
+    pub fn reload_tilesets(&mut self) {
+        let files = asset_files(&self.dir.join("tilesets"), &[]);
+        let mut out = Vec::new();
+        for (name, path, _) in files {
+            self.gen += 1;
+            let data = modengine::tileset::load_tileset(&name, &path, &|n| self.sprite(n));
+            out.push(TileSetEntry { name, path, data, gen: self.gen });
+        }
+        self.tilesets = out;
+    }
+
+    pub fn tileset(&self, name: &str) -> Option<&modengine::tileset::TileSetAsset> {
+        self.tilesets.iter().find(|t| t.name == name).and_then(|t| t.data.as_ref().ok())
     }
 
     pub fn reload_lists(&mut self) {
         self.sounds = entries(&self.dir.join("sounds"), &["wav", "ogg"]);
         self.fonts = entries(&self.dir.join("fonts"), &["ttf", "otf"]);
+        self.notes = entries(&self.dir.join("notes"), &["md"]).into_iter().filter(|e| !e.is_toml).collect();
         self.rooms = entries(&self.dir.join("rooms"), &[]);
+        self.motion = crate::motion::Lists::load(&self.dir);
+        self.fx = crate::fx::Lists::load(&self.dir);
         self.reload_sprites();
     }
 
@@ -270,8 +310,12 @@ impl Project {
         s.extend(self.sprites.iter().map(|x| x.name.clone()));
         s.extend(self.sounds.iter().map(|x| x.name.clone()));
         s.extend(self.fonts.iter().map(|x| x.name.clone()));
+        s.extend(self.notes.iter().map(|x| x.name.clone()));
+        s.extend(self.tilesets.iter().map(|x| x.name.clone()));
         s.extend(self.rooms.iter().map(|x| x.name.clone()));
         s.extend(self.objects.iter().map(|x| x.name.clone()));
+        s.extend(self.motion.all_names());
+        s.extend(self.fx.asset_names());
         s
     }
 

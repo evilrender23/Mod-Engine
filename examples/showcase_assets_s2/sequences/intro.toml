@@ -1,0 +1,77 @@
+# Title card: a star spins in, a coin swoops along a curve, a ding at frame 40.
+length = 120
+fps = 30
+playback = "loop"
+origin = [0, 0]
+canvas = [320, 180]
+
+[[track]]
+name = "star"
+type = "sprite"
+asset = "star"
+
+[[track.key]]
+frame = 0
+x = 160
+y = 70
+angle = 0
+scale_x = 0.2
+scale_y = 0.2
+alpha = 0
+ease = "ease_out"
+
+[[track.key]]
+frame = 40
+x = 160
+y = 70
+angle = 360
+scale_x = 2
+scale_y = 2
+alpha = 1
+ease = "smooth"
+
+[[track.key]]
+frame = 100
+x = 160
+y = 70
+angle = 360
+scale_x = 1.5
+scale_y = 1.5
+alpha = 1
+
+[[track.key]]
+frame = 120
+alpha = 0
+
+[[track]]
+name = "coin"
+type = "object"
+asset = "Coin"
+start = 20
+
+[[track.key]]
+frame = 20
+x = 40
+y = 150
+ease = "ease"
+
+[[track.key]]
+frame = 70
+x = 280
+y = 110
+ease = "bounce"
+
+[[track.key]]
+frame = 110
+x = 160
+y = 110
+
+[[track]]
+name = "ding"
+type = "sound"
+asset = "snd_ding"
+start = 40
+
+[[moment]]
+frame = 40
+code = "global.dings += 1"

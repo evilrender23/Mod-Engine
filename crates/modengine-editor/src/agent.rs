@@ -67,11 +67,14 @@ pub struct Model {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// Context window in tokens, when the CLI says (Codex); 0 when unknown.
+    #[serde(default)]
+    pub context: u64,
 }
 
 impl Model {
     fn new(id: &str, name: &str, description: &str) -> Model {
-        Model { id: id.into(), name: name.into(), description: description.into() }
+        Model { id: id.into(), name: name.into(), description: description.into(), context: 0 }
     }
 }
 
@@ -93,10 +96,19 @@ pub struct Run {
     pub name: String,
     /// What the user attached to this message.
     pub attachments: Vec<Attachment>,
+    /// Send `prompt` exactly as typed: a CLI slash command such as `/compact` (no attachments,
+    /// context or notes added).
+    pub raw: bool,
+    /// Claude Code: continue `session` from this assistant message in a new session
+    /// (`--fork-session --resume-session-at`), dropping what came after it.
+    pub fork_at: String,
+    /// What a new session should know of the conversation so far (a compacted summary or the
+    /// transcript up to an edited message); put in front of the prompt.
+    pub seed: String,
 }
 
 /// How an attachment reaches the agent.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AttachKind {
     /// A file or folder: the agent opens project files itself; text from outside the project
     /// goes inside the message.
@@ -105,21 +117,53 @@ pub enum AttachKind {
     Image,
     /// Written into the message (the room selection, Salida lines).
     Text,
+    /// A web page (`text` is its URL): the agent is told to fetch it.
+    Url,
 }
 
 /// Something the user attached to the next message (modelled on Maker's `Attachment`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Attachment {
     pub kind: AttachKind,
-    pub icon: &'static str,
+    #[serde(deserialize_with = "de_icon")]
+    pub icon: Icon,
     /// Shown in the panel and the transcript; names a Text attachment for the agent.
     pub label: String,
     /// Absolute path (File, Image).
+    #[serde(default)]
     pub path: PathBuf,
     /// What it is, for the agent ("the object `Player`"); may be empty.
+    #[serde(default)]
     pub about: String,
     /// The content of a Text attachment.
+    #[serde(default)]
     pub text: String,
+}
+
+/// A short symbol shown before a line or chip. (An alias, so serde does not try to borrow it
+/// from the input when deserializing.)
+pub type Icon = &'static str;
+
+/// Deserializes an icon back into a `&'static str` (saved conversations hold the icons of
+/// their tool lines and attachments).
+pub fn de_icon<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
+    let s: String = serde::Deserialize::deserialize(d)?;
+    Ok(static_icon(&s))
+}
+
+/// `s` as a `&'static str`: icons are a handful of short strings, interned once each.
+pub fn static_icon(s: &str) -> &'static str {
+    static SEEN: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(i) = seen.iter().find(|i| **i == s) {
+        return i;
+    }
+    if s.chars().count() > 4 || seen.len() > 256 {
+        return "•";
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    seen.push(leaked);
+    leaked
 }
 
 /// File names the agent is told to look at as pictures.
@@ -156,9 +200,26 @@ impl Attachment {
         Attachment { kind: AttachKind::Text, icon, label: label.into(), path: PathBuf::new(), about: String::new(), text: text.into() }
     }
 
+    /// A web page the agent should read.
+    pub fn url(url: &str) -> Attachment {
+        let url = url.trim().to_string();
+        let label = url.split("://").nth(1).unwrap_or(&url).trim_end_matches('/').to_string();
+        Attachment { kind: AttachKind::Url, icon: "🔗", label: one_line(&label, 48), path: PathBuf::new(), about: String::new(), text: url }
+    }
+
     /// Same thing (attaching it again replaces it).
     pub fn same(&self, other: &Attachment) -> bool {
-        self.kind == other.kind && if self.kind == AttachKind::Text { self.label == other.label } else { self.path == other.path }
+        self.kind == other.kind
+            && match self.kind {
+                AttachKind::Text => self.label == other.label,
+                AttachKind::Url => self.text == other.text,
+                _ => self.path == other.path,
+            }
+    }
+
+    /// A file or folder on disk (not text or a URL).
+    pub fn on_disk(&self) -> bool {
+        matches!(self.kind, AttachKind::File | AttachKind::Image)
     }
 }
 
@@ -206,10 +267,22 @@ fn fence(text: &str, lang: &str) -> String {
 /// The message with a block listing what the user attached (paths relative to the project
 /// when inside it, text inline).
 pub fn prompt_with_attachments(run: &Run) -> String {
-    if run.attachments.is_empty() {
+    if run.raw {
         return run.prompt.clone();
     }
-    let mut t = format!("{}\n\n<attached-by-the-user>\nWith this message the user attached:\n", run.prompt);
+    let prompt = if run.seed.is_empty() {
+        run.prompt.clone()
+    } else {
+        format!(
+            "<earlier-conversation>\nThis continues an earlier conversation with the user in this project; here is what you need to know of it:\n{}\n</earlier-conversation>\n\n{}",
+            run.seed.trim(),
+            run.prompt
+        )
+    };
+    if run.attachments.is_empty() {
+        return prompt;
+    }
+    let mut t = format!("{prompt}\n\n<attached-by-the-user>\nWith this message the user attached:\n");
     for a in &run.attachments {
         let inside = inside(&run.root, &a.path);
         let shown = if inside { a.path.strip_prefix(&run.root).unwrap_or(&a.path).display().to_string() } else { a.path.display().to_string() };
@@ -232,6 +305,7 @@ pub fn prompt_with_attachments(run: &Run) -> String {
                 t += &format!("- {}{about}:\n", a.label);
                 t += &fence(&clip(&a.text, INLINE_MAX), "");
             }
+            AttachKind::Url => t += &format!("- The web page <{}>. Fetch it with your web tool and read it.\n", a.text),
         }
     }
     t + "</attached-by-the-user>"
@@ -239,7 +313,25 @@ pub fn prompt_with_attachments(run: &Run) -> String {
 
 /// Attached files and folders outside the project: the agent is allowed to read just those.
 pub fn attached_outside(run: &Run) -> Vec<&Path> {
-    run.attachments.iter().filter(|a| a.kind != AttachKind::Text && !inside(&run.root, &a.path)).map(|a| a.path.as_path()).collect()
+    run.attachments.iter().filter(|a| a.on_disk() && !inside(&run.root, &a.path)).map(|a| a.path.as_path()).collect()
+}
+
+/// Attached folders outside the project: added to the agent's workspace (read-only for Claude Code).
+pub fn attached_outside_dirs(run: &Run) -> Vec<&Path> {
+    attached_outside(run).into_iter().filter(|p| p.is_dir()).collect()
+}
+
+/// Hosts of the attached web pages.
+pub fn attached_hosts(run: &Run) -> Vec<String> {
+    let mut hosts: Vec<String> = run
+        .attachments
+        .iter()
+        .filter(|a| a.kind == AttachKind::Url)
+        .filter_map(|a| a.text.split("://").nth(1).map(|r| r.split(['/', '?', '#']).next().unwrap_or("").to_string()))
+        .filter(|h| !h.is_empty())
+        .collect();
+    hosts.dedup();
+    hosts
 }
 
 /// Attached pictures, for the CLIs that take images.
@@ -248,9 +340,10 @@ pub fn attached_images(run: &Run) -> Vec<&Path> {
 }
 
 /// A transcript line for something the agent did.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolLine {
-    pub icon: &'static str,
+    #[serde(deserialize_with = "de_icon")]
+    pub icon: Icon,
     pub verb: String,
     pub detail: String,
 }
@@ -282,10 +375,29 @@ pub enum Event {
     CommandRan,
     /// Worth showing, not an error.
     Notice(String),
+    /// Tokens and cost, as far as the CLI reports them.
+    Usage(Usage),
+    /// The CLI summarised the conversation to make room; tokens left in context when known.
+    Compacted(Option<u64>),
+    /// Claude Code: id of the latest assistant message (where a fork can resume).
+    Checkpoint(String),
     /// The turn completed.
     Finished,
     /// Why the turn failed.
     Failed(String),
+}
+
+/// What one output line says about the context and spending. `None`: not reported here.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Usage {
+    /// Tokens the conversation now takes in the model's context.
+    pub context: Option<u64>,
+    /// The model's context window.
+    pub window: Option<u64>,
+    /// Dollars spent by this CLI session so far (Claude Code reports it cumulatively).
+    pub cost: Option<f64>,
+    /// Output tokens of the turn.
+    pub output: Option<u64>,
 }
 
 impl Kind {
@@ -390,7 +502,9 @@ impl Kind {
                         let id = str_of(&m["slug"]);
                         let name = str_of(&m["display_name"]);
                         let name = if name.is_empty() { id } else { name };
-                        (m["priority"].as_i64().unwrap_or(0), Model::new(id, name, str_of(&m["description"])))
+                        let mut model = Model::new(id, name, str_of(&m["description"]));
+                        model.context = m["context_window"].as_u64().unwrap_or(0);
+                        (m["priority"].as_i64().unwrap_or(0), model)
                     })
                     .collect();
                 listed.sort_by_key(|(p, _)| *p);
@@ -420,6 +534,21 @@ impl Kind {
                 }
                 if !run.session.is_empty() {
                     a.extend(["--resume".into(), run.session.clone()]);
+                    if !run.fork_at.is_empty() {
+                        a.extend(["--fork-session".into(), "--resume-session-at".into(), run.fork_at.clone()]);
+                    }
+                }
+                // Folders from elsewhere join the workspace so search tools reach them, but stay
+                // read-only.
+                let dirs = attached_outside_dirs(run);
+                if !dirs.is_empty() {
+                    a.push("--add-dir".into());
+                    a.extend(dirs.iter().map(|d| d.to_string_lossy().into_owned()));
+                    a.push("--disallowedTools".into());
+                    for d in &dirs {
+                        let r = claude_rule_path(d);
+                        a.extend([format!("Edit({r}/**)"), format!("Write({r}/**)")]);
+                    }
                 }
                 // The engine docs and attachments from elsewhere live outside the project: allow
                 // reading them, not editing them.
@@ -429,6 +558,9 @@ impl Kind {
                 }
                 for p in attached_outside(run) {
                     readable.push(if p.is_dir() { format!("Read({}/**)", claude_rule_path(p)) } else { format!("Read({})", claude_rule_path(p)) });
+                }
+                for h in attached_hosts(run) {
+                    readable.push(format!("WebFetch(domain:{h})"));
                 }
                 if !readable.is_empty() {
                     a.push("--allowedTools".into());
@@ -460,10 +592,13 @@ impl Kind {
                 if !run.session.is_empty() {
                     a.extend(["--conversation".into(), run.session.clone()]);
                 }
+                for d in attached_outside_dirs(run) {
+                    a.extend(["--add-dir".into(), d.to_string_lossy().into_owned()]);
+                }
                 // Print mode refuses every command outside Auto, and a refusal ends the whole turn,
                 // so steer the agent to its file tools before it tries an innocent `ls`.
                 let mut prompt = prompt_with_context(run);
-                if run.permission != Permission::Auto {
+                if run.permission != Permission::Auto && !run.raw {
                     prompt += "\n\n(From the Mod Engine editor: shell commands are not allowed in this mode and trying one \
                                ends your turn. Use your file tools to list, read, search and edit files.)";
                 }
@@ -547,7 +682,7 @@ pub fn engine_context(name: &str, docs: Option<&Path>) -> String {
 /// The prompt with the engine context in front on a new conversation, for CLIs without a
 /// system prompt option.
 pub fn prompt_with_context(run: &Run) -> String {
-    if !run.session.is_empty() {
+    if !run.session.is_empty() || run.raw {
         return prompt_with_attachments(run);
     }
     format!("<modengine-editor-context>\n{}</modengine-editor-context>\n\n{}", engine_context(&run.name, run.docs.as_deref()), prompt_with_attachments(run))
@@ -716,7 +851,8 @@ impl Parser {
                         ev.push(Event::Blocked(t.into()));
                     }
                 }
-                "compact_boundary" => ev.push(Event::Notice("Los mensajes anteriores se resumieron para hacer sitio.".into())),
+                "compact_boundary" => ev.push(Event::Compacted(line["compact_metadata"]["post_tokens"].as_u64())),
+                "status" if str_of(&line["status"]) == "compacting" => ev.push(Event::Status("Compactando la conversación…".into())),
                 _ => {}
             },
             _ => {}
@@ -754,6 +890,16 @@ impl Parser {
     fn claude_assistant(&mut self, line: &Value, nested: bool, ev: &mut Vec<Event>) {
         if !nested {
             self.claude_model(str_of(&line["message"]["model"]), ev);
+            let uuid = str_of(&line["uuid"]);
+            if !uuid.is_empty() {
+                ev.push(Event::Checkpoint(uuid.into()));
+            }
+            let u = &line["message"]["usage"];
+            if u.is_object() {
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                let context = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens") + n("output_tokens");
+                ev.push(Event::Usage(Usage { context: Some(context), ..Default::default() }));
+            }
         }
         for b in line["message"]["content"].as_array().into_iter().flatten() {
             match str_of(&b["type"]) {
@@ -818,6 +964,11 @@ impl Parser {
     }
 
     fn claude_result(&mut self, line: &Value, ev: &mut Vec<Event>) {
+        let window = line["modelUsage"].as_object().and_then(|m| m.values().filter_map(|v| v["contextWindow"].as_u64()).max());
+        let cost = line["total_cost_usd"].as_f64();
+        if window.is_some() || cost.is_some() {
+            ev.push(Event::Usage(Usage { window, cost, output: line["usage"]["output_tokens"].as_u64(), ..Default::default() }));
+        }
         if line["is_error"].as_bool() != Some(true) && str_of(&line["subtype"]) == "success" {
             ev.push(Event::Finished);
             return;
@@ -847,7 +998,15 @@ impl Parser {
             "thread.started" => ev.push(Event::Session(str_of(&line["thread_id"]).into())),
             "turn.started" => ev.push(Event::Status("Trabajando…".into())),
             t @ ("item.started" | "item.updated" | "item.completed") => self.codex_item(&line["item"], t == "item.completed", ev),
-            "turn.completed" => ev.push(Event::Finished),
+            "turn.completed" => {
+                let u = &line["usage"];
+                if u.is_object() {
+                    let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                    let context = n("input_tokens") + n("output_tokens");
+                    ev.push(Event::Usage(Usage { context: Some(context), output: u["output_tokens"].as_u64(), ..Default::default() }));
+                }
+                ev.push(Event::Finished)
+            }
             "turn.failed" => ev.push(Event::Failed(str_of(&line["error"]["message"]).into())),
             "error" => ev.push(Event::ToolFailed(str_of(&line["message"]).into())),
             _ => {}
@@ -967,7 +1126,10 @@ impl Parser {
                     ev.push(Event::Text(std::mem::take(&mut self.text)));
                     self.text_step = None;
                 }
+                Self::agy_usage(step, ev);
             }
+            // Antigravity's `/compact` summarises the conversation into a checkpoint step.
+            "checkpoint" if state == "DONE" => ev.push(Event::Compacted(None)),
             "tool" => {
                 let info = &step["tool_info"];
                 let name = match str_of(&info["name"]) {
@@ -1009,6 +1171,14 @@ impl Parser {
         }
     }
 
+    fn agy_usage(step: &Value, ev: &mut Vec<Event>) {
+        let u = &step["usage"];
+        if u.is_object() {
+            let n = |k: &str| u[k].as_u64().unwrap_or(0);
+            ev.push(Event::Usage(Usage { context: Some(n("input_tokens") + n("output_tokens")), output: u["output_tokens"].as_u64(), ..Default::default() }));
+        }
+    }
+
     fn agy_result(&mut self, r: &Value, ev: &mut Vec<Event>) {
         // Refusals that never reached a tool step (an ask rule in print mode) are only listed here.
         if !self.step_blocked {
@@ -1045,6 +1215,9 @@ mod tests {
             docs: Some("/opt/me/docs".into()),
             name: "Juego".into(),
             attachments: vec![],
+            raw: false,
+            fork_at: String::new(),
+            seed: String::new(),
         }
     }
 
@@ -1334,4 +1507,71 @@ mod tests {
         assert!(c.contains("\"Coin Climber\"") && c.contains("/opt/me/docs") && c.contains("funciones.md"));
         assert!(engine_context("x", None).contains("no reference documentation"));
     }
+
+    #[test]
+    fn outside_folders_urls_and_forks_reach_the_clis() {
+        let (game, other) = attach_dirs("dirs");
+        let r = Run {
+            session: "S1".into(),
+            fork_at: "U9".into(),
+            ..run_with(&game, vec![Attachment::file(&other), Attachment::url("https://docs.example.org/x/y?z=1")])
+        };
+        let other = other.canonicalize().unwrap();
+        let rule = claude_rule_path(&other);
+        let a = Kind::Claude.args(&r);
+        assert!(a.windows(4).any(|w| w == ["--resume", "S1", "--fork-session", "--resume-session-at"]), "{a:?}");
+        assert!(a.contains(&"U9".to_string()));
+        let at = a.iter().position(|x| x == "--add-dir").unwrap();
+        assert_eq!(a[at + 1], other.display().to_string());
+        let deny = a.iter().position(|x| x == "--disallowedTools").unwrap();
+        assert_eq!(a[deny + 1..deny + 3], [format!("Edit({rule}/**)"), format!("Write({rule}/**)")]);
+        assert!(a.contains(&format!("Read({rule}/**)")) && a.contains(&"WebFetch(domain:docs.example.org)".to_string()), "{a:?}");
+        let p = prompt_with_attachments(&r);
+        assert!(p.contains("- The web page <https://docs.example.org/x/y?z=1>. Fetch it"), "{p}");
+        assert!(p.contains("outside the project"));
+        // Antigravity adds the folder to its workspace; Codex reads anywhere already.
+        let a = Kind::Antigravity.args(&r);
+        assert!(a.windows(2).any(|w| w[0] == "--add-dir" && w[1] == other.display().to_string()), "{a:?}");
+        assert!(!Kind::Codex.args(&r).contains(&"--add-dir".to_string()));
+        // A raw slash command goes as typed, with no notes or context.
+        let raw = Run { prompt: "/compact".into(), raw: true, ..run(Permission::Plan, "S1", "") };
+        assert_eq!(Kind::Claude.input(&raw), "/compact");
+        assert!(Kind::Antigravity.args(&raw).contains(&"--print=/compact".to_string()));
+        // A seed goes in front of the prompt of a new session.
+        let seeded = Run { seed: "Antes: salto a 12".into(), ..run(Permission::Edit, "", "") };
+        assert!(prompt_with_attachments(&seeded).starts_with("<earlier-conversation>\n") && prompt_with_attachments(&seeded).ends_with("haz algo"));
+        let _ = std::fs::remove_dir_all(game.parent().unwrap());
+    }
+
+    #[test]
+    fn usage_and_compaction_events() {
+        let ev = parse_all(
+            Kind::Claude,
+            &[
+                r#"{"type":"assistant","session_id":"S","uuid":"U1","message":{"model":"m","content":[],"usage":{"input_tokens":2,"cache_creation_input_tokens":183,"cache_read_input_tokens":30889,"output_tokens":8}}}"#,
+                r#"{"type":"system","subtype":"status","status":"compacting","session_id":"S"}"#,
+                r#"{"type":"system","subtype":"compact_boundary","session_id":"S","compact_metadata":{"pre_tokens":31082,"post_tokens":10052}}"#,
+                r#"{"type":"result","subtype":"success","session_id":"S","total_cost_usd":0.12,"usage":{"output_tokens":99},"modelUsage":{"m":{"contextWindow":1000000}}}"#,
+            ],
+        );
+        assert!(ev.contains(&Event::Checkpoint("U1".into())));
+        assert!(ev.contains(&Event::Usage(Usage { context: Some(31082), ..Default::default() })));
+        assert!(ev.contains(&Event::Compacted(Some(10052))));
+        assert!(ev.contains(&Event::Usage(Usage { window: Some(1_000_000), cost: Some(0.12), output: Some(99), context: None })));
+        let ev = parse_all(Kind::Codex, &[r#"{"type":"turn.completed","usage":{"input_tokens":900,"cached_input_tokens":800,"output_tokens":40}}"#]);
+        assert_eq!(ev[0], Event::Usage(Usage { context: Some(940), output: Some(40), ..Default::default() }));
+        let ev = parse_all(
+            Kind::Antigravity,
+            &[
+                r#"{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"agent_response","text_delta":"ok","usage":{"input_tokens":8503,"output_tokens":44}}}"#,
+                r#"{"event":"step_update","step_update":{"step_index":6,"state":"DONE","step_type":"checkpoint"}}"#,
+            ],
+        );
+        assert!(ev.contains(&Event::Usage(Usage { context: Some(8547), output: Some(44), ..Default::default() })));
+        assert!(ev.contains(&Event::Compacted(None)));
+        // Codex model lists carry their context window.
+        let m = Kind::Codex.parse_models(r#"{"models":[{"slug":"g","display_name":"G","visibility":"list","priority":1,"context_window":272000}]}"#);
+        assert_eq!(m[0].context, 272000);
+    }
+
 }

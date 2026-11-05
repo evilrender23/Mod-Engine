@@ -363,7 +363,7 @@ impl Imported {
         match self.kind {
             Kind::Sprite => Some(crate::app::Open::Sprite(self.name.clone())),
             Kind::Sound => Some(crate::app::Open::Sound(self.name.clone())),
-            Kind::Font => None,
+            Kind::Font => Some(crate::app::Open::Font(self.name.clone())),
         }
     }
 }

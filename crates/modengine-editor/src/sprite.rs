@@ -2,7 +2,7 @@
 //! settings for PNG sprites.
 
 use crate::app::Cx;
-use crate::tex::{checkerboard, rgb};
+use crate::tex::checkerboard;
 use crate::tomlw::{color_hex, num, parse_hex, q};
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2};
 use serde::Deserialize;
@@ -63,6 +63,10 @@ pub struct SpriteEditor {
     frame: usize,
     tool: Tool,
     color: char,
+    /// Right-button colour ('.' = erase, the old behaviour).
+    color2: char,
+    /// [`crate::palette::generation`] when last loaded: palette changes reload the editor.
+    pal_gen: u64,
     zoom: f32,
     onion: bool,
     grid: bool,
@@ -188,6 +192,8 @@ impl SpriteEditor {
             frame: 0,
             tool: Tool::Pencil,
             color: '.',
+            color2: '.',
+            pal_gen: crate::palette::generation(),
             zoom: 0.0,
             onion: false,
             grid: true,
@@ -230,6 +236,16 @@ impl SpriteEditor {
     }
 
     pub fn save(&mut self, cx: &mut Cx) -> Result<(), String> {
+        // colours picked from the default Pear36 swatches (no project palette) travel
+        // with the sprite so the engine knows them
+        let (base, default) = Self::base_colors(cx);
+        if default {
+            for c in self.m.pix.iter().flatten().flatten() {
+                if let Some(col) = base.get(c) {
+                    self.m.palette.entry(*c).or_insert(*col);
+                }
+            }
+        }
         let path = if self.is_toml { self.path.clone() } else { self.path.with_extension("toml") };
         std::fs::write(&path, write_toml(&self.m)).map_err(|e| format!("{}: {e}", path.display()))?;
         self.path = path;
@@ -239,15 +255,51 @@ impl SpriteEditor {
         Ok(())
     }
 
-    fn colors(&self, cx: &Cx) -> BTreeMap<char, [u8; 3]> {
+    /// The project palette, or Pear36 when the project has none (`true`).
+    fn base_colors(cx: &Cx) -> (BTreeMap<char, [u8; 3]>, bool) {
         let mut all = BTreeMap::new();
         for (k, v) in &cx.project.game.palette {
             if let (Some(c), Some(col)) = (k.chars().next(), parse_hex(v)) {
                 all.insert(c, col);
             }
         }
+        if all.is_empty() {
+            let pear = modengine::palette::Palette::pear36();
+            return (pear.colors.iter().zip(modengine::palette::PALETTE_CHARS.chars()).map(|(c, ch)| (ch, crate::palette::rgb3(*c))).collect(), true);
+        }
+        (all, false)
+    }
+
+    fn colors(&self, cx: &Cx) -> BTreeMap<char, [u8; 3]> {
+        let mut all = Self::base_colors(cx).0;
         all.extend(self.m.palette.iter().map(|(k, v)| (*k, *v)));
         all
+    }
+
+    /// Replaces this sprite's own colours by the nearest colour of the project palette
+    /// (one undo step). Returns how many colours were folded.
+    fn snap_to_palette(&mut self, base: &BTreeMap<char, [u8; 3]>) -> usize {
+        let chars: Vec<char> = base.keys().copied().collect();
+        let p = modengine::palette::Palette { colors: base.values().map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32).collect(), ..Default::default() };
+        let table: BTreeMap<char, char> = self
+            .m
+            .palette
+            .iter()
+            .filter(|(c, col)| base.get(c) != Some(col))
+            .filter_map(|(c, col)| p.nearest((col[0] as u32) << 16 | (col[1] as u32) << 8 | col[2] as u32).map(|i| (*c, chars[i])))
+            .collect();
+        if table.is_empty() {
+            return 0;
+        }
+        self.snapshot();
+        for px in self.m.pix.iter_mut().flatten().flatten() {
+            if let Some(n) = table.get(px) {
+                *px = *n;
+            }
+        }
+        self.m.palette.retain(|c, _| !table.contains_key(c));
+        self.after_change();
+        table.len()
     }
 
     fn rebuild_texture(&mut self, ctx: &egui::Context, colors: &BTreeMap<char, [u8; 3]>) {
@@ -283,17 +335,31 @@ impl SpriteEditor {
         if !self.m.is_pixel() {
             return self.png_ui(ui, cx);
         }
+        if self.pal_gen != crate::palette::generation() {
+            // the palette (and maybe this file) changed on disk: reload if nothing is unsaved
+            self.pal_gen = crate::palette::generation();
+            self.ver += 1;
+            if !self.dirty && self.is_toml {
+                if let Ok(fresh) = SpriteEditor::open(&self.name, &self.path, true) {
+                    self.m = fresh.m;
+                    self.undo.clear();
+                    self.redo.clear();
+                    self.frame = self.frame.min(self.m.pix.len().saturating_sub(1));
+                }
+            }
+        }
         let colors = self.colors(cx);
+        let base = Self::base_colors(cx);
         self.rebuild_texture(ui.ctx(), &colors);
 
         egui::Panel::left("sprite_side").resizable(true).default_size(250.0).show(ui, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.side(ui, &colors));
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.side(ui, &colors, &base));
         });
         egui::Panel::bottom("sprite_frames").resizable(false).exact_size(92.0).show(ui, |ui| self.frames_strip(ui));
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (t, label, tip) in [
-                    (Tool::Pencil, "✏ Lápiz", "pinta con el color elegido (clic derecho borra)"),
+                    (Tool::Pencil, "✏ Lápiz", "pinta con el color elegido (clic derecho: color secundario)"),
                     (Tool::Eraser, "⌫ Borrar", "deja el píxel transparente"),
                     (Tool::Fill, "🪣 Rellenar", "rellena la zona del mismo color"),
                     (Tool::Pick, "💧 Cuentagotas", "toma el color de un píxel"),
@@ -321,7 +387,7 @@ impl SpriteEditor {
         });
     }
 
-    fn side(&mut self, ui: &mut egui::Ui, colors: &BTreeMap<char, [u8; 3]>) {
+    fn side(&mut self, ui: &mut egui::Ui, colors: &BTreeMap<char, [u8; 3]>, base: &(BTreeMap<char, [u8; 3]>, bool)) {
         ui.heading(&self.name);
         ui.label(RichText::new(format!("{}×{} px, {} fotograma(s)", self.m.w, self.m.h, self.m.pix.len())).weak());
         ui.add_space(6.0);
@@ -352,31 +418,41 @@ impl SpriteEditor {
         });
 
         ui.separator();
-        ui.strong("Colores");
-        ui.horizontal_wrapped(|ui| {
-            let mut swatch = |ui: &mut egui::Ui, c: char, col: Option<[u8; 3]>| {
-                let (r, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
-                match col {
-                    Some(col) => {
-                        ui.painter().rect_filled(r, 3.0, rgb(col));
-                    }
-                    None => checkerboard(ui.painter(), r, 6.0),
-                }
-                if self.color == c {
-                    ui.painter().rect_stroke(r, 3.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
-                }
-                if resp.on_hover_text(format!("'{c}'")).clicked() {
-                    self.color = c;
-                    if matches!(self.tool, Tool::Eraser | Tool::Pick | Tool::Origin) {
-                        self.tool = Tool::Pencil;
-                    }
-                }
-            };
-            swatch(ui, '.', None);
-            for (c, col) in colors {
-                swatch(ui, *c, Some(*col));
-            }
+        ui.horizontal(|ui| {
+            ui.strong("Paleta");
+            let what = if base.1 { "Pear36 (por defecto)".to_string() } else { format!("del proyecto · {}", base.0.len()) };
+            let local = colors.len() - base.0.len().min(colors.len());
+            let what = if local > 0 { format!("{what} + {local} del sprite") } else { what };
+            ui.label(RichText::new(what).weak());
         });
+        if ui.small_button("🎨 Paletas (Lospec)…").on_hover_text("Descargar de lospec.com, importar y aplicar paletas al proyecto").clicked() {
+            crate::palette::open_dialog();
+        }
+        // palette order (0-9, A-Z, a-z… for imported palettes), then the rest
+        let rank = |c: &char| (modengine::palette::PALETTE_CHARS.find(*c).unwrap_or(usize::MAX), *c);
+        let mut keys: Vec<char> = colors.keys().copied().collect();
+        keys.sort_by_key(rank);
+        let mut entries = vec![('.', None)];
+        entries.extend(keys.iter().map(|c| (*c, colors.get(c).copied())));
+        let picked = crate::palette::swatch_grid(ui, &entries, self.color, self.color2, 22.0, false);
+        if let Some(c) = picked.primary {
+            self.color = c;
+            if matches!(self.tool, Tool::Eraser | Tool::Pick | Tool::Origin) {
+                self.tool = Tool::Pencil;
+            }
+        }
+        if let Some(c) = picked.secondary {
+            self.color2 = c;
+        }
+        let name = |c: char| match colors.get(&c) {
+            Some(col) => format!("'{c}' {}", color_hex(*col)),
+            None => "transparente".into(),
+        };
+        ui.label(RichText::new(format!("Izq.: {}   ·   Der.: {}", name(self.color), name(self.color2))).small());
+        let foreign = self.m.palette.iter().filter(|(c, col)| base.0.get(c) != Some(col)).count();
+        if !base.1 && foreign > 0 && ui.small_button(format!("🧲 Ajustar {foreign} color(es) propios a la paleta")).on_hover_text("Cambia los colores de este sprite por el más parecido de la paleta del proyecto").clicked() {
+            self.snap_to_palette(&base.0);
+        }
         ui.horizontal(|ui| {
             ui.color_edit_button_srgb(&mut self.add_color);
             if ui.button("Añadir color al sprite").clicked() {
@@ -596,7 +672,9 @@ impl SpriteEditor {
                 self.stroke = Some(self.m.clone());
             }
             if active && (primary || secondary) {
-                let tool = if secondary { Tool::Eraser } else { self.tool };
+                // right button: same tool with the secondary colour ('.' erases)
+                let tool = if secondary && matches!(self.tool, Tool::Origin) { Tool::Pencil } else { self.tool };
+                let ink = if secondary { self.color2 } else { self.color };
                 match tool {
                     Tool::Origin => {
                         self.m.origin = Origin::At((fx as f64).round(), (fy as f64).round());
@@ -604,7 +682,7 @@ impl SpriteEditor {
                     }
                     _ if !inside => {}
                     Tool::Pencil | Tool::Eraser => {
-                        let c = if tool == Tool::Eraser { '.' } else { self.color };
+                        let c = if tool == Tool::Eraser { '.' } else { ink };
                         let px = &mut self.m.pix[self.frame][cy_ as usize][cx_ as usize];
                         if *px != c {
                             *px = c;
@@ -612,12 +690,17 @@ impl SpriteEditor {
                         }
                     }
                     Tool::Fill => {
-                        if flood(&mut self.m.pix[self.frame], cx_ as usize, cy_ as usize, self.color) {
+                        if flood(&mut self.m.pix[self.frame], cx_ as usize, cy_ as usize, ink) {
                             self.ver += 1;
                         }
                     }
                     Tool::Pick => {
-                        self.color = self.m.pix[self.frame][cy_ as usize][cx_ as usize];
+                        let c = self.m.pix[self.frame][cy_ as usize][cx_ as usize];
+                        if secondary {
+                            self.color2 = c;
+                        } else {
+                            self.color = c;
+                        }
                         self.tool = Tool::Pencil;
                     }
                 }
@@ -632,7 +715,7 @@ impl SpriteEditor {
                 }
             }
         }
-        painter.text(area.left_bottom() + Vec2::new(6.0, -6.0), egui::Align2::LEFT_BOTTOM, format!("zoom {z}×  ·  rueda: zoom  ·  clic derecho: borrar"), egui::FontId::proportional(12.0), crate::theme::colors(ui.ctx()).canvas_text);
+        painter.text(area.left_bottom() + Vec2::new(6.0, -6.0), egui::Align2::LEFT_BOTTOM, format!("zoom {z}×  ·  rueda: zoom  ·  clic derecho: color secundario"), egui::FontId::proportional(12.0), crate::theme::colors(ui.ctx()).canvas_text);
     }
 
     fn png_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
@@ -778,6 +861,77 @@ mod tests {
         }
         let spr = h.state().project.sprite("heart").expect("saved sprite reloads");
         assert_eq!(&spr.rgba[0..4], &[0xff, 0xcd, 0x75, 255], "top-left pixel is now yellow");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn harness(st: St) -> Harness<'static, St> {
+        let mut h = Harness::builder().with_size([1200.0, 800.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut St| {
+                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+                s.ed.ui(ui, &mut cx);
+            },
+            st,
+        );
+        h.run_steps(3);
+        h
+    }
+
+    fn click(h: &mut Harness<St>, x: usize, y: usize, button: PointerButton) {
+        let r = h.state().ed.image_rect;
+        let z = h.state().ed.zoom;
+        let p = r.min + Vec2::new((x as f32 + 0.5) * z, (y as f32 + 0.5) * z);
+        h.event(Event::PointerMoved(p));
+        h.event(Event::PointerButton { pos: p, button, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        h.event(Event::PointerButton { pos: p, button, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+
+    #[test]
+    fn secondary_colour_default_palette_and_snap() {
+        let dir = crate::room::tests::temp_project("sprite_pal");
+        let mut project = Project::open(&dir).unwrap();
+        // a project without [palette]: the swatches are Pear36
+        project.game.palette.clear();
+        let e = project.sprite_entry("heart").unwrap();
+        let ed = SpriteEditor::open("heart", &e.path, e.is_toml).unwrap();
+        let mut h = harness(St { ed, project, tex: TexCache::default(), log: vec![], open: vec![] });
+        {
+            let s = h.state_mut();
+            let cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+            let colors = s.ed.colors(&cx);
+            assert_eq!(colors.get(&'K'), Some(&[0x27, 0x27, 0x36]), "Pear36 is the default palette");
+            assert!(SpriteEditor::base_colors(&cx).1);
+        }
+        h.state_mut().ed.color = '4';
+        h.state_mut().ed.color2 = 'K';
+        click(&mut h, 0, 0, PointerButton::Primary);
+        click(&mut h, 1, 0, PointerButton::Secondary);
+        assert_eq!(h.state().ed.m.pix[0][0][0], '4');
+        assert_eq!(h.state().ed.m.pix[0][0][1], 'K', "right click paints the secondary colour");
+        h.state_mut().ed.color2 = '.';
+        click(&mut h, 1, 0, PointerButton::Secondary);
+        assert_eq!(h.state().ed.m.pix[0][0][1], '.', "secondary '.' erases (the old right click)");
+        {
+            let s = h.state_mut();
+            let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+            s.ed.save(&mut cx).unwrap();
+        }
+        let text = std::fs::read_to_string(dir.join("sprites/heart.toml")).unwrap();
+        assert!(text.contains("\"4\" = \"#ffe478\""), "Pear36 colours used travel with the sprite: {text}");
+
+        // with the example palette back: snap the sprite's own colours to it
+        let mut project = Project::open(&dir).unwrap();
+        project.reload_sprites();
+        let e = project.sprite_entry("heart").unwrap();
+        let mut ed = SpriteEditor::open("heart", &e.path, e.is_toml).unwrap();
+        let cx = Cx { project: &mut project, tex: &mut TexCache::default(), log: &mut vec![], open: &mut vec![], active: true };
+        let base = SpriteEditor::base_colors(&cx).0;
+        assert_eq!(ed.snap_to_palette(&base), 1);
+        assert_eq!(ed.m.pix[0][0][0], 'y', "#ffe478 -> the example's #ffcd75 'y'");
+        assert!(ed.m.palette.is_empty());
+        ed.undo();
+        assert_eq!(ed.m.pix[0][0][0], '4');
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

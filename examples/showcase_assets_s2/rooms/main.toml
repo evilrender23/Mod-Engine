@@ -1,0 +1,14 @@
+width = 320
+height = 180
+background = "#29366f"
+
+[[layer]]
+name = "Instances"
+type = "instances"
+instances = [
+    { object = "Director", x = 0, y = 0 },
+    { object = "Ship", x = 40, y = 40 },
+    { object = "Zig", x = 200, y = 120 },
+    { object = "Lamp", x = 300, y = 16 },
+    { object = "Bouncer", x = 24, y = 100 },
+]

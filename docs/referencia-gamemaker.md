@@ -39,6 +39,37 @@ Observado (tipos y literales):
 | Mover/alinear/duplicar selección | `MoveSelectionUp/Down/Left/Right`, `InvertSelection`, `Duplicate`, `Align canvas item(s)` | ⚠️ mover una instancia |
 | Guías | `SmartGuidePrefs`, `GridWidgetSettings_Snap` | ⚠️ ajustar a rejilla |
 
+## Partículas, shaders y extensiones (`ParticleSystemEditor.dll`, `ShaderEditor.dll`, `ExtensionsEditor.dll`)
+
+| GameMaker | Mod Engine |
+|---|---|
+| Sistema de partículas con emisores que incluyen su tipo (`GMPSEmitterAdapter`, `EmittersPanel`) | ✅ `particles/*.toml` con `[[type]]` y `[[emitter]]` separados (un tipo sirve a varios emisores y a subpartículas) |
+| Vista previa en el lienzo (`ParticleCanvas`, `ParticleSysPreviewGadget`), mover emisores (`ParticleEditor_CanvasEmitter`) | ✅ vista previa animada con la simulación del motor, regiones arrastrables y redimensionables |
+| Texturas integradas (`InspectorParticleTexSelector`) | ✅ las 14 formas `pt_shape_*` generadas por el motor, o un sprite |
+| Presets (`InspectorParticlePresets`) | ✅ menú *Añadir preset* (fuego, humo, chispas, nieve, lluvia, explosión, magia) |
+| `part_system_*`, `part_type_*`, `part_emitter_*`, `part_particles_*` | ✅ (ver funciones.md); sin `part_emitter_relative` ni unidades de tiempo en segundos (todo en pasos) |
+| Shaders GLSL ES / HLSL / GLSL por plataforma, editor de código del IDE (`GMShaderAdapter`) | ✅ GLSL ES 1.00 con los nombres de GameMaker; ❌ HLSL y GLSL 3 |
+| Errores de compilación al ejecutar | ✅ al ejecutar, más comprobación estática en el editor y `modengine shader --check` en la GPU |
+| `shader_set_uniform_*`, `texture_set_stage`, `gpu_set_blendmode` | ✅ (sin `gpu_set_blendmode_ext` ni `surface_*`) |
+| Extensiones con ficheros nativos DLL/dylib/so/JS por plataforma (`FilePropsWindow`, `AndroidPropsWindow`, `IosPropsWindow`, `HTML5PropsWindow`) | ❌ fuera de alcance: solo ModScript (portátil y seguro) |
+| Funciones exportadas con nombre externo y tipos (`FunctionPropsWindow`), constantes (`ConstantPropsWindow`), init/final | ✅ funciones exportadas (documentación + comprobación), constantes, `init`/`final`, orden de ficheros |
+| Opciones de extensión editables por proyecto (`ExtensionOptionsWindow`, variables label/number/string/path/boolean/list) | ⚠️ solo constantes (valores TOML) |
+
+## Menú Crear, fuentes, notas y tile sets (`FontEditor.dll`, `NotesEditor.dll`, `TileSetEditor.dll`)
+
+| GameMaker | Mod Engine |
+|---|---|
+| Menú *Create* con los 15 tipos y atajos Alt | ✅ menú **Crear** (barra, clic derecho en el navegador y en las secciones) con los 15 tipos e iconos; Sprite es Alt+I en vez de Alt+S |
+| Fuente: familia del sistema o TTF incluido (`BrowseIncludeTTF`, `GetFontFamilyNames`), tamaño, negrita, cursiva, antialias, rangos (`CreateRangeDialog`, «from text») | ✅ TTF/OTF del proyecto o del sistema (se copia a `fonts/`), negrita/cursiva sintetizadas, antialias, rangos con atajos y «del texto de prueba», vista previa en vivo y página de glifos |
+| `font_add_sprite` / `font_add_sprite_ext` | ✅ fuentes de sprite en `fonts/*.toml` (proporcionales o de ancho fijo, espaciado) |
+| Editor de glifos (desplazamientos por glifo), SDF (`EnableSDFClicked`), `font_add` en tiempo de ejecución, kerning editable | ❌ (el kerning de la fuente sí se aplica) |
+| Notas Markdown (`NotesMarkdownView`) | ✅ texto + vista previa, tareas marcables |
+| Tile set: tamaño, desplazamiento, separación, borde de salida | ✅ (sin borde de salida: no hace falta sin texture pages) |
+| Animaciones de tiles (`AddNewAnimation`, reordenar frames) | ✅ crear desde la selección, velocidad común y vista previa; ⚠️ los frames se reordenan editando el TOML |
+| Auto tiles de 16 y 47 (`Add16TileSet`, `Add47TileSet`), de transición | ⚠️ 16 por vecinos en cruz (arriba/derecha/abajo/izquierda), no la plantilla por esquinas de GameMaker; ❌ 47 y transición |
+| Pinceles (`BrushBuilder`), espejo/volteo/giro (X/Y/Z), rellenar, rectángulo | ✅ pincel de varios tiles arrastrando en la paleta, X/Y/Z, rectángulo que repite el pincel, relleno, cuentagotas; ❌ pinceles guardados con nombre, línea, selección + mover |
+| `tilemap_*`, `tile_*`, `layer_tilemap_*`, `draw_tile(map)`, `tileset_get_info` | ✅ (ver funciones.md); además `tile_meeting` y `tilemap_autotile`. Diferencia: el vacío es `-1`, no el tile 0 |
+
 ## Hoja de ruta propuesta (por valor / esfuerzo)
 
 1. ✅ **Variables con tipo** en objetos (número con rango, booleano, color, lista, asset) y vista
@@ -48,7 +79,8 @@ Observado (tipos y literales):
 3. **Instancias en room**: escala, rotación, color, nombre y código de creación propio.
 4. **Orden de creación** explícito y **herencia de rooms** (`parent = "base"`), muy útil para
    niveles con el mismo HUD/fondo.
-5. **Tiles**: línea, selección + mover, flip/rotar por tile y luego autotile (máscara de 16/47).
+5. **Tiles**: ✅ flip/rotar por tile, pinceles de varios tiles, animados y autotile de 16; queda
+   línea, selección + mover y autotile de 47.
 6. Capas de assets (sprites sueltos sin objeto) y de paths; carpetas de capas.
 7. Física y efectos al final: son los que más cambian el motor.
 

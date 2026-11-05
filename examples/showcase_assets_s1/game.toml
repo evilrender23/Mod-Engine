@@ -1,0 +1,20 @@
+# Mod Engine showcase: fonts, notes and tile sets (GameMaker-style assets)
+[game]
+name = "Escaparate: fuentes, notas y tile sets"
+start_room = "demo"
+rooms = ["demo"]
+
+[display]
+width = 320
+height = 180
+scale = 3
+step_rate = 60
+letterbox = "#1a1c2c"
+
+[palette]
+"k" = "#1a1c2c"
+"w" = "#f4f4f4"
+"y" = "#ffcd75"
+"o" = "#ef7d57"
+"r" = "#b13e53"
+"b" = "#41a6f6"

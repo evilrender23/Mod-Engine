@@ -63,6 +63,31 @@ impl TexCache {
     }
 }
 
+impl TexCache {
+    /// The tiles of a tile set (frame `i` = tile `i`).
+    pub fn get_tileset<'a>(&mut self, ctx: &egui::Context, project: &'a Project, name: &str) -> Option<SpriteTex<'a>> {
+        let entry = project.tilesets.iter().find(|t| t.name == name)?;
+        let spr = &entry.data.as_ref().ok()?.sprite;
+        let key = format!("tileset:{name}");
+        let fresh = matches!(self.map.get(&key), Some((g, _)) if *g == entry.gen);
+        if !fresh {
+            let img = egui::ColorImage::from_rgba_unmultiplied([spr.sheet_w as usize, spr.sheet_h as usize], &spr.rgba);
+            let tex = ctx.load_texture(key.clone(), img, TextureOptions::NEAREST);
+            self.map.insert(key.clone(), (entry.gen, tex));
+        }
+        Some(SpriteTex { id: self.map[&key].1.id(), spr })
+    }
+
+    /// What a tile layer paints with: a tile set, or (older rooms) a sprite's frames.
+    pub fn get_tiles<'a>(&mut self, ctx: &egui::Context, project: &'a Project, name: &str) -> Option<SpriteTex<'a>> {
+        if project.tilesets.iter().any(|t| t.name == name) {
+            self.get_tileset(ctx, project, name)
+        } else {
+            self.get(ctx, project, name)
+        }
+    }
+}
+
 pub fn checkerboard(p: &Painter, rect: Rect, cell: f32) {
     let pal = crate::theme::colors(p.ctx());
     p.rect_filled(rect, 0.0, pal.checker_a);

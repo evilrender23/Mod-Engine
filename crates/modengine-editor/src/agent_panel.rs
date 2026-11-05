@@ -4,9 +4,20 @@
 //!
 //! The app saves everything before each message and, when [`AgentPanel::poll`] says so,
 //! reloads the project from disk and checks it.
+//!
+//! On top of the chat: a per-project history of conversations that resume their CLI session
+//! (`agent_history.rs`), compaction (the CLI's own `/compact` where print mode runs it, a
+//! summary otherwise), a context and cost meter, slash commands (`agent_slash.rs`), a queue of
+//! messages typed while the agent works, retry / edit-and-resend (forking the session),
+//! review of the files each turn changed with Revertir and `/deshacer` (`agent_snapshot.rs`),
+//! and attachments from anywhere on disk, URLs and text snippets (`agent_browser.rs`).
 
+pub use crate::agent_history::{Entry, Tone};
 use crate::agent::{self, AttachKind, Attachment, Event, Kind, Model, Parser, Permission, Run, ToolLine};
 use crate::agent_attach::{self as attach, Sources};
+use crate::agent_history::{self as history, Conversation, Store, Summary, Turn, Usage};
+use crate::agent_slash::{self as slash, Command as Slash};
+use crate::agent_snapshot::{self as snapshot, ChangeKind, DiffLine, Snapshot};
 use crate::app::Open;
 use eframe::egui::{self, Color32, DragAndDrop, Key, Modifiers, RichText};
 use serde::{Deserialize, Serialize};
@@ -33,6 +44,18 @@ pub struct Config {
     /// Agent id -> its CLI's last model list.
     #[serde(default)]
     pub models: BTreeMap<String, Vec<Model>>,
+    /// Folders starred in "Adjuntar desde el disco".
+    #[serde(default)]
+    pub favorites: Vec<PathBuf>,
+    /// Folders things were last attached from (newest first).
+    #[serde(default)]
+    pub recent_dirs: Vec<PathBuf>,
+    /// Files and folders from outside the project attached lately (newest first).
+    #[serde(default)]
+    pub recent_paths: Vec<PathBuf>,
+    /// Web pages attached lately.
+    #[serde(default)]
+    pub recent_urls: Vec<String>,
 }
 
 pub fn config_path() -> Option<PathBuf> {
@@ -122,23 +145,6 @@ fn hard_kill(child: &mut Child) {
 
 // ------------------------------------------------------------------ transcript
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Tone {
-    Muted,
-    Warning,
-    Error,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Entry {
-    User(String),
-    /// What went with the user message before it.
-    Attached(Vec<Attachment>),
-    Text(String),
-    Tool(ToolLine),
-    Notice(String, Tone),
-}
-
 /// What the app must do after [`AgentPanel::poll`].
 #[derive(Default, Debug, PartialEq)]
 pub struct Polled {
@@ -156,6 +162,17 @@ enum Msg {
     Stderr(String),
 }
 
+/// Why a run was started.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Purpose {
+    /// A user message (turn id).
+    Chat(u64),
+    /// `/compact` run by the CLI itself (Claude Code, Antigravity).
+    CompactNative,
+    /// Asking the agent for a summary to seed a new session (Codex).
+    CompactSummary,
+}
+
 struct Running {
     child: Child,
     rx: Receiver<Msg>,
@@ -166,17 +183,62 @@ struct Running {
     exited_at: Option<Instant>,
     stdout_done: bool,
     got_result: bool,
+    failed: bool,
+    compacted: bool,
     stderr: String,
     changed: BTreeSet<PathBuf>,
     blocked: usize,
     context_file: PathBuf,
     root: PathBuf,
+    purpose: Purpose,
+    /// The project before a chat turn, to list and revert what it changed.
+    before: Option<Snapshot>,
+    /// First transcript entry of this run.
+    first_entry: usize,
 }
 
 struct Lister {
     kind: Kind,
     rx: Receiver<Vec<Model>>,
 }
+
+/// A message typed while the agent was busy, sent when it finishes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Queued {
+    pub text: String,
+    pub attachments: Vec<Attachment>,
+}
+
+/// What the next [`AgentPanel::send`] carries besides its text (queued, retried or edited messages).
+#[derive(Clone, Debug, Default)]
+struct Outgoing {
+    attachments: Vec<Attachment>,
+    /// Continue from before this turn (index into `turns`), dropping it and what followed.
+    fork: Option<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum View {
+    Chat,
+    History,
+}
+
+/// The diff window.
+struct DiffView {
+    turn: u64,
+    rel: String,
+    lines: Vec<DiffLine>,
+    note: Option<String>,
+}
+
+/// Past this share of the context the meter turns amber and the panel suggests compacting.
+pub const WARN_AT: f32 = 0.8;
+
+/// What a Codex conversation is compacted into.
+const SUMMARY_PROMPT: &str = "Summarise our conversation so far so that it can continue in a new session that will only see your summary. \
+Include: what the user wants overall, every decision and preference they stated, what you changed in which files (and why), \
+what is still pending or failing, and anything you were about to do. Be complete but concise, use short bullet points, \
+write in the user's language, and do not change any file now.";
 
 pub struct AgentPanel {
     pub kind: Kind,
@@ -194,7 +256,6 @@ pub struct AgentPanel {
     pub input: String,
     other_model: String,
     pub session: String,
-    session_root: Option<PathBuf>,
     answering_model: String,
     pub status: String,
     run: Option<Running>,
@@ -214,6 +275,59 @@ pub struct AgentPanel {
     /// Highlighted `@` suggestion, and the input the user closed the suggestions for (Esc).
     mention_sel: usize,
     mention_closed: Option<String>,
+
+    // -- the conversation
+    /// Saved as `<id>.json`; empty until it is first saved.
+    pub conv_id: String,
+    pub title: String,
+    renamed: bool,
+    created: u64,
+    pub turns: Vec<Turn>,
+    next_turn: u64,
+    /// Claude Code: the last assistant message of the session (fork point).
+    checkpoint: String,
+    /// Told to the next new session (a compaction summary or an edited transcript).
+    pub seed: String,
+    pub usage: Usage,
+    warned_full: bool,
+    /// Messages waiting for the agent to finish.
+    pub queue: Vec<Queued>,
+    /// The queue waits (the last turn failed or was stopped).
+    pub queue_paused: bool,
+    outgoing: Option<Outgoing>,
+    /// A message the panel wants sent (from the queue, Reintentar): returned by `ui`.
+    auto_send: Option<String>,
+    /// The message box holds the last message again, to resend from before it (turn index).
+    pub editing: Option<usize>,
+    compact_requested: bool,
+    pending_reload: bool,
+
+    // -- the project
+    /// Its folder and game name, once known.
+    project: Option<(PathBuf, String)>,
+    /// `~/.config/modengine/agent/history`; `None`: nothing is saved (tests without config).
+    pub history_root: Option<PathBuf>,
+    store: Option<Store>,
+    /// Compact by itself past this % of the context (0: never).
+    pub autocompact: u8,
+
+    // -- views
+    pub view: View,
+    history: Vec<Summary>,
+    history_query: String,
+    renaming: Option<(String, String)>,
+    confirm_delete: Option<String>,
+    /// Before-snapshots of recent turns, by turn id.
+    snaps: Vec<(u64, Snapshot)>,
+    diff: Option<DiffView>,
+    browser: crate::agent_browser::Browser,
+    /// "Texto…" attachment being written: (title, text).
+    text_modal: Option<(String, String)>,
+    slash_sel: usize,
+    /// Summaries the user unfolded (entry index).
+    unfolded: BTreeSet<usize>,
+    /// Demo processes shown in screenshots.
+    demo: bool,
 }
 
 impl Default for AgentPanel {
@@ -223,11 +337,13 @@ impl Default for AgentPanel {
 }
 
 impl AgentPanel {
-    /// Loads the remembered choices from `config` (none: defaults, nothing saved).
+    /// Loads the remembered choices from `config` (none: defaults, nothing saved). The history
+    /// goes next to it, in `agent/history/`.
     pub fn with_config(config: Option<PathBuf>) -> AgentPanel {
         let cfg = config.as_deref().map(Config::load).unwrap_or_default();
         let kind = Kind::from_id(&cfg.agent).unwrap_or(Kind::Claude);
         let permission = Permission::from_key(&cfg.permission).unwrap_or(Permission::Auto);
+        let history_root = config.as_deref().and_then(Path::parent).map(|d| d.join("agent/history"));
         let mut p = AgentPanel {
             kind,
             permission,
@@ -240,7 +356,6 @@ impl AgentPanel {
             input: String::new(),
             other_model: String::new(),
             session: String::new(),
-            session_root: None,
             answering_model: String::new(),
             status: String::new(),
             run: None,
@@ -255,6 +370,39 @@ impl AgentPanel {
             files_of: None,
             mention_sel: 0,
             mention_closed: None,
+            conv_id: String::new(),
+            title: String::new(),
+            renamed: false,
+            created: 0,
+            turns: vec![],
+            next_turn: 1,
+            checkpoint: String::new(),
+            seed: String::new(),
+            usage: Usage::default(),
+            warned_full: false,
+            queue: vec![],
+            queue_paused: false,
+            outgoing: None,
+            auto_send: None,
+            editing: None,
+            compact_requested: false,
+            pending_reload: false,
+            project: None,
+            history_root,
+            store: None,
+            autocompact: 0,
+            view: View::Chat,
+            history: vec![],
+            history_query: String::new(),
+            renaming: None,
+            confirm_delete: None,
+            snaps: vec![],
+            diff: None,
+            browser: Default::default(),
+            text_modal: None,
+            slash_sel: 0,
+            unfolded: BTreeSet::new(),
+            demo: false,
         };
         p.locate();
         p
@@ -268,8 +416,11 @@ impl AgentPanel {
         self.cfg.agent = self.kind.id().into();
         self.cfg.permission = self.permission.key().into();
         if let Some(path) = &self.config_path {
-            self.cfg.save(path);
+            if !self.demo {
+                self.cfg.save(path);
+            }
         }
+        self.save_state();
     }
 
     pub fn locate(&mut self) {
@@ -282,11 +433,17 @@ impl AgentPanel {
         }
         self.kind = kind;
         self.answering_model.clear();
-        // Conversations belong to one CLI.
+        // Conversations belong to one CLI: the next message starts a new session that is told
+        // what was said so far.
         if !self.session.is_empty() {
             self.session.clear();
-            self.notice(format!("Ahora con {}: esto empieza una conversación nueva.", kind.name()), Tone::Muted);
+            self.checkpoint.clear();
+            self.seed = history::transcript_seed(&self.entries, 40 * 1024);
+            self.usage.cost_base += self.usage.session_cost;
+            self.usage.session_cost = 0.0;
+            self.notice(format!("Ahora con {}: sigue la conversación en una sesión nueva, con lo hablado hasta aquí.", kind.name()), Tone::Muted);
         }
+        self.usage.window = 0;
         self.list_tried = false;
         self.locate();
         self.save_cfg();
@@ -321,6 +478,14 @@ impl AgentPanel {
 
     fn model_name(&self, id: &str) -> String {
         self.available_models().into_iter().find(|m| m.id == id).map(|m| m.name).unwrap_or_else(|| id.to_string())
+    }
+
+    /// The context window of the chosen model when the CLI listed it (Codex).
+    fn listed_window(&self) -> u64 {
+        let id = self.model();
+        let models = self.available_models();
+        let m = if id.is_empty() { models.first() } else { models.iter().find(|m| m.id == id) };
+        m.map(|m| m.context).unwrap_or(0)
     }
 
     /// Asks the CLI for its models in the background (`codex debug models`, `agy models`).
@@ -371,7 +536,8 @@ impl AgentPanel {
         self.entries.push(Entry::Notice(text.into().trim().to_string(), tone));
     }
 
-    pub fn new_conversation(&mut self) {
+    /// Forgets the conversation on screen (it stays in the history) and stops the agent.
+    fn clear_conversation(&mut self) {
         if let Some(mut r) = self.run.take() {
             hard_kill(&mut r.child);
             let _ = std::fs::remove_file(&r.context_file);
@@ -379,25 +545,289 @@ impl AgentPanel {
         self.entries.clear();
         self.open_text = None;
         self.session.clear();
-        self.session_root = None;
         self.answering_model.clear();
         self.status.clear();
+        self.conv_id.clear();
+        self.title.clear();
+        self.renamed = false;
+        self.created = 0;
+        self.turns.clear();
+        self.next_turn = 1;
+        self.checkpoint.clear();
+        self.seed.clear();
+        self.usage = Usage::default();
+        self.warned_full = false;
+        self.queue.clear();
+        self.queue_paused = false;
+        self.outgoing = None;
+        self.auto_send = None;
+        self.editing = None;
+        self.compact_requested = false;
+        self.snaps.clear();
+        self.diff = None;
+        self.unfolded.clear();
     }
 
-    /// The project closes: stop the agent and forget the conversation.
+    /// ＋ Nueva, `/nueva`: the current conversation stays in the history.
+    pub fn new_conversation(&mut self) {
+        self.save_conversation();
+        self.clear_conversation();
+        self.view = View::Chat;
+        self.save_state();
+    }
+
+    /// The project closes: stop the agent, keep the conversation in its history.
     pub fn close_project(&mut self) {
-        self.new_conversation();
+        self.save_conversation();
+        self.clear_conversation();
+        self.project = None;
+        self.store = None;
+        self.history.clear();
+        self.view = View::Chat;
     }
 
-    // ------------------------------------------------------------ running
+    // ------------------------------------------------------------ history
+
+    /// The panel is now about `root`: loads that project's settings and reopens the
+    /// conversation that was open in it.
+    pub fn enter_project(&mut self, root: &Path, name: &str) {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        if self.project.as_ref().is_some_and(|(r, _)| *r == root) {
+            if let Some((_, n)) = &mut self.project {
+                *n = name.to_string();
+            }
+            return;
+        }
+        if self.project.is_some() {
+            // Another project: its own conversations (this one stays in the old one's history).
+            self.close_project();
+        }
+        self.project = Some((root.clone(), name.to_string()));
+        if self.demo {
+            return;
+        }
+        self.store = self.history_root.as_ref().map(|h| Store::new(h, &root));
+        let Some(store) = &self.store else { return };
+        let st = store.state();
+        self.autocompact = st.autocompact;
+        if let Some(k) = Kind::from_id(&st.agent) {
+            self.kind = k;
+            self.locate();
+        }
+        if let Some(p) = Permission::from_key(&st.permission) {
+            self.permission = p;
+        }
+        if !st.last.is_empty() {
+            self.open_conversation(&st.last);
+        }
+    }
+
+    fn save_state(&mut self) {
+        if self.demo {
+            return;
+        }
+        if let Some(store) = &self.store {
+            store.save_state(&history::ProjectState {
+                last: self.conv_id.clone(),
+                agent: self.kind.id().into(),
+                permission: self.permission.key().into(),
+                autocompact: self.autocompact,
+            });
+        }
+    }
+
+    /// The conversation as it is saved.
+    pub fn conversation(&self) -> Conversation {
+        Conversation {
+            id: self.conv_id.clone(),
+            title: self.title.clone(),
+            renamed: self.renamed,
+            project: self.project.as_ref().map(|(r, _)| r.clone()).unwrap_or_default(),
+            agent: self.kind.id().into(),
+            model: if self.answering_model.is_empty() { self.model() } else { self.answering_model.clone() },
+            session: self.session.clone(),
+            checkpoint: self.checkpoint.clone(),
+            seed: self.seed.clone(),
+            created: self.created,
+            updated: history::now(),
+            entries: self.entries.clone(),
+            turns: self.turns.clone(),
+            usage: self.usage.clone(),
+        }
+    }
+
+    /// Writes the conversation to the history (titled after its first message) and remembers
+    /// it as the project's open one.
+    pub fn save_conversation(&mut self) {
+        if self.entries.is_empty() || self.demo {
+            return;
+        }
+        if self.conv_id.is_empty() {
+            self.conv_id = history::new_id();
+            self.created = history::now();
+        }
+        if !self.renamed {
+            if let Some(first) = self.entries.iter().find_map(|e| if let Entry::User(t) = e { Some(t.clone()) } else { None }) {
+                self.title = history::title_from(&first);
+            } else if self.title.is_empty() {
+                self.title = "Conversación".into();
+            }
+        }
+        let c = self.conversation();
+        if let Some(store) = &self.store {
+            if let Err(e) = store.save(&c) {
+                self.status = format!("No se pudo guardar el historial: {e}");
+            }
+        }
+        self.save_state();
+    }
+
+    /// Reopens a saved conversation; the next message resumes its CLI session.
+    pub fn open_conversation(&mut self, id: &str) -> bool {
+        if self.running() {
+            return false;
+        }
+        let Some(c) = self.store.as_ref().and_then(|s| s.load(id)) else { return false };
+        if self.conv_id != c.id {
+            self.save_conversation();
+        }
+        self.clear_conversation();
+        if let Some(k) = Kind::from_id(&c.agent) {
+            self.kind = k;
+            self.locate();
+            self.list_tried = false;
+        }
+        self.conv_id = c.id;
+        self.title = c.title;
+        self.renamed = c.renamed;
+        self.created = c.created;
+        self.session = c.session;
+        self.checkpoint = c.checkpoint;
+        self.seed = c.seed;
+        self.entries = c.entries;
+        self.next_turn = c.turns.iter().map(|t| t.id + 1).max().unwrap_or(1);
+        self.turns = c.turns;
+        self.usage = c.usage;
+        self.answering_model = c.model;
+        self.status = if self.session.is_empty() { "Conversación abierta".into() } else { format!("Conversación abierta: sigue la sesión de {}", self.kind.name()) };
+        self.view = View::Chat;
+        self.save_state();
+        true
+    }
+
+    /// Re-reads the history list (opening it, after changes).
+    pub fn refresh_history(&mut self) {
+        self.history = self.store.as_ref().map(Store::list).unwrap_or_default();
+    }
+
+    pub fn show_history(&mut self, query: &str) {
+        self.save_conversation();
+        self.refresh_history();
+        self.history_query = query.to_string();
+        self.view = View::History;
+    }
+
+    pub fn rename(&mut self, id: &str, title: &str) {
+        let title = title.trim();
+        if title.is_empty() {
+            return;
+        }
+        if id == self.conv_id || id.is_empty() {
+            self.title = title.to_string();
+            self.renamed = true;
+            self.save_conversation();
+        } else if let Some(store) = &self.store {
+            if let Some(mut c) = store.load(id) {
+                c.title = title.to_string();
+                c.renamed = true;
+                let _ = store.save(&c);
+            }
+        }
+        self.refresh_history();
+    }
+
+    pub fn delete_conversation(&mut self, id: &str) {
+        if let Some(store) = &self.store {
+            store.delete(id);
+        }
+        if id == self.conv_id && !self.running() {
+            self.clear_conversation();
+            self.save_state();
+        }
+        self.refresh_history();
+    }
+
+    /// The Markdown of a conversation (the open one when `id` is it or empty).
+    pub fn markdown(&self, id: &str) -> Option<String> {
+        if id.is_empty() || id == self.conv_id {
+            let mut c = self.conversation();
+            if c.title.is_empty() {
+                c.title = self.entries.iter().find_map(|e| if let Entry::User(t) = e { Some(history::title_from(t)) } else { None }).unwrap_or_else(|| "Conversación".into());
+            }
+            return Some(history::to_markdown(&c));
+        }
+        self.store.as_ref().and_then(|s| s.load(id)).map(|c| history::to_markdown(&c))
+    }
+
+    /// Saves a conversation as Markdown in Descargas (or the home folder); returns the file.
+    pub fn export(&mut self, id: &str, dir: Option<&Path>) -> Option<PathBuf> {
+        let md = self.markdown(id)?;
+        let title = md.lines().next().unwrap_or("").trim_start_matches("# ").to_string();
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ["Descargas", "Downloads"].iter().map(|d| home.join(d)).find(|d| d.is_dir()).unwrap_or(home));
+        let stem: String = title.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).take(50).collect();
+        let mut path = dir.join(format!("agente-{stem}.md"));
+        let mut n = 2;
+        while path.exists() {
+            path = dir.join(format!("agente-{stem}-{n}.md"));
+            n += 1;
+        }
+        match std::fs::write(&path, md) {
+            Ok(()) => Some(path),
+            Err(e) => {
+                self.notice(format!("No se pudo exportar: {e}"), Tone::Error);
+                None
+            }
+        }
+    }
 
     // ------------------------------------------------------------ attachments
 
     /// Adds `a` to the next message (again: replaces the old one, which may be out of date).
     pub fn attach(&mut self, a: Attachment) {
         self.attachments.retain(|x| !x.same(&a));
+        self.remember_recent(&a);
         self.attachments.push(a);
         self.attach_error = None;
+    }
+
+    /// Things from outside the project are offered again under "Recientes".
+    fn remember_recent(&mut self, a: &Attachment) {
+        let root = self.project.as_ref().map(|(r, _)| r.clone());
+        let changed = match a.kind {
+            AttachKind::Url => {
+                self.cfg.recent_urls.retain(|u| *u != a.text);
+                self.cfg.recent_urls.insert(0, a.text.clone());
+                self.cfg.recent_urls.truncate(8);
+                true
+            }
+            _ if a.on_disk() && !root.as_ref().is_some_and(|r| agent::inside(r, &a.path)) => {
+                self.cfg.recent_paths.retain(|p| *p != a.path);
+                self.cfg.recent_paths.insert(0, a.path.clone());
+                self.cfg.recent_paths.truncate(12);
+                let dir = if a.path.is_dir() { Some(a.path.clone()) } else { a.path.parent().map(Path::to_path_buf) };
+                if let Some(d) = dir {
+                    self.cfg.recent_dirs.retain(|p| *p != d);
+                    self.cfg.recent_dirs.insert(0, d);
+                    self.cfg.recent_dirs.truncate(8);
+                }
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.save_cfg();
+        }
     }
 
     /// A file or folder the user picked; says why when it does not exist.
@@ -407,6 +837,38 @@ impl AgentPanel {
             return false;
         }
         self.attach(Attachment::file(path));
+        true
+    }
+
+    /// A web page; false when it is not an http(s) URL.
+    pub fn attach_url(&mut self, url: &str) -> bool {
+        let u = url.trim();
+        if !(u.starts_with("http://") || u.starts_with("https://")) || u.contains(char::is_whitespace) || u.len() < 10 {
+            self.attach_error = Some("Escribe una dirección que empiece por http:// o https://".into());
+            return false;
+        }
+        self.attach(Attachment::url(u));
+        true
+    }
+
+    /// Pasted text that is only paths or `file://` URIs (one per line) is attached instead of
+    /// typed; returns whether it was.
+    pub fn attach_pasted(&mut self, text: &str) -> bool {
+        let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        if lines.is_empty() || lines.len() > 50 {
+            return false;
+        }
+        let paths: Vec<PathBuf> = lines
+            .iter()
+            .filter(|l| l.starts_with("file://") || l.starts_with('/') || l.starts_with("~/") || (l.len() > 2 && l.as_bytes()[1] == b':' && l.as_bytes()[2] == b'\\'))
+            .map(|l| crate::import::expand(l))
+            .collect();
+        if paths.len() != lines.len() || !paths.iter().all(|p| p.exists()) {
+            return false;
+        }
+        for p in paths {
+            self.attach_path(&p);
+        }
         true
     }
 
@@ -471,51 +933,211 @@ impl AgentPanel {
         self.attach(a);
     }
 
-    /// Starts the agent on `prompt` (and the attachments) in `root`. The app saves everything first.
-    pub fn send(&mut self, prompt: &str, root: &Path, name: &str) {
-        let text = prompt.trim();
-        if (text.is_empty() && self.attachments.is_empty()) || self.running() {
+    // ------------------------------------------------------------ queue, retry, edit
+
+    /// Puts a message (and the attachments) in the queue; it is sent when the agent finishes.
+    pub fn enqueue(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() && self.attachments.is_empty() {
             return;
         }
-        let Some(program) = self.program.clone() else { return };
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        if !self.session.is_empty() && self.session_root.as_deref() != Some(&root) {
-            self.session.clear();
-            self.notice("El proyecto cambió: esto empieza una conversación nueva.", Tone::Muted);
+        self.queue.push(Queued { text: text.to_string(), attachments: std::mem::take(&mut self.attachments) });
+        self.input.clear();
+    }
+
+    /// Takes the next message the panel wants sent (queued or retried); the app saves and calls
+    /// [`AgentPanel::send`] with it. Also called by `ui`.
+    pub fn next_to_send(&mut self) -> Option<String> {
+        if self.running() || self.program.is_none() {
+            return None;
         }
+        if let Some(t) = self.auto_send.take() {
+            return Some(t);
+        }
+        if self.queue_paused || self.queue.is_empty() || self.compact_requested {
+            return None;
+        }
+        let q = self.queue.remove(0);
+        self.outgoing = Some(Outgoing { attachments: q.attachments, fork: None });
+        Some(q.text)
+    }
+
+    /// Queued message `i` goes back into the message box to be edited.
+    pub fn unqueue(&mut self, i: usize) {
+        if i < self.queue.len() {
+            let q = self.queue.remove(i);
+            if !self.input.trim().is_empty() {
+                self.input.push('\n');
+            }
+            self.input += &q.text;
+            for a in q.attachments {
+                self.attach(a);
+            }
+        }
+    }
+
+    /// Index into `turns` of the last message, when it can be retried or edited.
+    fn last_turn(&self) -> Option<usize> {
+        (!self.turns.is_empty() && !self.running()).then(|| self.turns.len() - 1)
+    }
+
+    /// `/reintentar`: sends the last message again from before its answer.
+    pub fn retry(&mut self) -> Option<String> {
+        let i = self.last_turn()?;
+        let t = &self.turns[i];
+        self.outgoing = Some(Outgoing { attachments: t.attachments.clone(), fork: Some(i) });
+        self.queue_paused = false;
+        self.auto_send = Some(t.prompt.clone());
+        self.auto_send.clone()
+    }
+
+    /// ✎ on the last message, `/editar`: puts it back in the message box; sending it continues
+    /// the conversation from before it.
+    pub fn edit_last(&mut self) -> bool {
+        let Some(i) = self.last_turn() else { return false };
+        let t = self.turns[i].clone();
+        self.input = t.prompt;
+        self.attachments = t.attachments;
+        self.editing = Some(i);
+        true
+    }
+
+    pub fn cancel_edit(&mut self) {
+        if self.editing.take().is_some() {
+            self.input.clear();
+            self.attachments.clear();
+        }
+    }
+
+    /// Drops turn `i` and what came after it, and sets the session up to continue from before
+    /// it: Claude Code forks its session at that point; the other CLIs start a new session told
+    /// the conversation so far.
+    fn rewind_to(&mut self, i: usize) {
+        let Some(t) = self.turns.get(i).cloned() else { return };
+        self.entries.truncate(t.entry.min(self.entries.len()));
+        self.turns.truncate(i);
+        self.open_text = None;
+        self.session = t.session_before;
+        self.checkpoint = t.checkpoint_before;
+        self.seed = t.seed_before;
+        let fork = self.kind == Kind::Claude && !self.session.is_empty() && !self.checkpoint.is_empty();
+        if !self.session.is_empty() && !fork {
+            self.session.clear();
+            self.checkpoint.clear();
+            let before = history::transcript_seed(&self.entries, 40 * 1024);
+            self.seed = if self.seed.is_empty() { before } else { format!("{}\n\n{before}", self.seed) };
+        }
+    }
+
+    // ------------------------------------------------------------ running
+
+    /// Starts the agent on `prompt` (and the attachments) in `root`. The app saves everything
+    /// first. While the agent works, the message is queued instead.
+    pub fn send(&mut self, prompt: &str, root: &Path, name: &str) {
+        let text = prompt.trim().to_string();
+        self.enter_project(root, name);
+        let out = self.outgoing.take();
+        let fork = out.as_ref().and_then(|o| o.fork).or(self.editing.take());
+        let attachments = match out {
+            Some(o) => o.attachments,
+            None => std::mem::take(&mut self.attachments),
+        };
+        if text.is_empty() && attachments.is_empty() {
+            return;
+        }
+        if self.running() {
+            self.queue.push(Queued { text, attachments });
+            self.input.clear();
+            return;
+        }
+        if self.program.is_none() {
+            self.attachments = attachments;
+            return;
+        }
+        if let Some(i) = fork {
+            self.rewind_to(i);
+        }
+        let turn = Turn {
+            id: self.next_turn,
+            entry: self.entries.len(),
+            prompt: text.clone(),
+            attachments: attachments.clone(),
+            session_before: self.session.clone(),
+            checkpoint_before: self.checkpoint.clone(),
+            seed_before: self.seed.clone(),
+        };
+        let fork_at = if fork.is_some() && self.kind == Kind::Claude && !self.session.is_empty() { self.checkpoint.clone() } else { String::new() };
+        if !text.is_empty() {
+            self.entries.push(Entry::User(text.clone()));
+        }
+        if !attachments.is_empty() {
+            self.entries.push(Entry::Attached(attachments.clone()));
+        }
+        let root = self.project.as_ref().map(|(r, _)| r.clone()).unwrap_or_else(|| root.to_path_buf());
+        let before = Snapshot::take(&root);
+        if self.start(&text, attachments.clone(), Purpose::Chat(turn.id), false, fork_at, Some(before), turn.entry) {
+            self.next_turn += 1;
+            self.turns.push(turn);
+            self.input.clear();
+            self.mention_closed = None;
+        } else {
+            // Not sent: give the message back.
+            self.entries.truncate(turn.entry);
+            self.attachments = attachments;
+        }
+    }
+
+    /// `/compactar`: the CLI's own `/compact` (Claude Code, Antigravity) or a summary that seeds a
+    /// new session (Codex). Returns false when there is nothing to compact or it cannot run now.
+    pub fn compact(&mut self) -> bool {
+        self.compact_requested = false;
+        if self.running() || self.program.is_none() || self.project.is_none() {
+            return false;
+        }
+        if self.session.is_empty() {
+            self.notice("No hay ninguna sesión que compactar todavía.", Tone::Muted);
+            return false;
+        }
+        let first = self.entries.len();
+        match self.kind {
+            Kind::Claude | Kind::Antigravity => self.start("/compact", vec![], Purpose::CompactNative, true, String::new(), None, first),
+            Kind::Codex => self.start(SUMMARY_PROMPT, vec![], Purpose::CompactSummary, false, String::new(), None, first),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start(&mut self, prompt: &str, attachments: Vec<Attachment>, purpose: Purpose, raw: bool, fork_at: String, before: Option<Snapshot>, first_entry: usize) -> bool {
+        let Some(program) = self.program.clone() else { return false };
+        let Some((root, name)) = self.project.clone() else { return false };
         let docs = docs_dir();
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let context_file = std::env::temp_dir().join(format!("modengine-agent-{}-{n}.md", std::process::id()));
-        if let Err(e) = std::fs::write(&context_file, agent::engine_context(name, docs.as_deref())) {
+        if let Err(e) = std::fs::write(&context_file, agent::engine_context(&name, docs.as_deref())) {
             self.notice(format!("No se pudo escribir un fichero temporal: {e}"), Tone::Error);
-            return;
+            return false;
         }
         let run = Run {
-            prompt: text.to_string(),
+            prompt: prompt.to_string(),
             session: self.session.clone(),
             model: self.model(),
             permission: self.permission,
             root: root.clone(),
             context_file: context_file.clone(),
             docs,
-            name: name.to_string(),
-            attachments: self.attachments.clone(),
+            name,
+            attachments,
+            raw,
+            fork_at,
+            seed: if self.session.is_empty() { self.seed.clone() } else { String::new() },
         };
-        if !text.is_empty() {
-            self.entries.push(Entry::User(text.to_string()));
-        }
-        if !self.attachments.is_empty() {
-            self.entries.push(Entry::Attached(self.attachments.clone()));
-        }
         self.open_text = None;
         match self.spawn(&program, &run) {
             Ok((child, rx)) => {
-                self.input.clear();
-                self.attachments.clear();
-                self.mention_closed = None;
-                self.session_root = Some(root.clone());
-                self.status = "Trabajando…".into();
+                self.status = match purpose {
+                    Purpose::Chat(_) => "Trabajando…".into(),
+                    _ => "Compactando la conversación…".into(),
+                };
                 self.run = Some(Running {
                     child,
                     rx,
@@ -526,17 +1148,24 @@ impl AgentPanel {
                     exited_at: None,
                     stdout_done: false,
                     got_result: false,
+                    failed: false,
+                    compacted: false,
                     stderr: String::new(),
                     changed: BTreeSet::new(),
                     blocked: 0,
                     context_file,
                     root,
+                    purpose,
+                    before,
+                    first_entry,
                 });
+                true
             }
             Err(e) => {
                 let _ = std::fs::remove_file(&context_file);
                 self.notice(format!("No se pudo lanzar {}: {e}", program.display()), Tone::Error);
                 self.status = "Falló".into();
+                false
             }
         }
     }
@@ -591,7 +1220,7 @@ impl AgentPanel {
 
     /// Reads what the agent printed since the last frame. Call every frame.
     pub fn poll(&mut self, ctx: &egui::Context) -> Polled {
-        let mut out = Polled::default();
+        let mut out = Polled { reload: std::mem::take(&mut self.pending_reload), ..Default::default() };
         if let Some(l) = &self.lister {
             if let Ok(models) = l.rx.try_recv() {
                 let kind = l.kind;
@@ -605,7 +1234,15 @@ impl AgentPanel {
                 ctx.request_repaint_after(Duration::from_millis(200));
             }
         }
-        let Some(mut r) = self.run.take() else { return out };
+        let Some(mut r) = self.run.take() else {
+            if self.compact_requested {
+                self.compact();
+            }
+            if !self.queue.is_empty() || self.auto_send.is_some() {
+                ctx.request_repaint();
+            }
+            return out;
+        };
         let mut events = vec![];
         for m in r.rx.try_iter() {
             match m {
@@ -656,6 +1293,10 @@ impl AgentPanel {
                 self.finish(r, st);
                 out.reload = true;
                 out.finished = true;
+                if self.compact_requested {
+                    self.compact();
+                }
+                ctx.request_repaint();
                 return out;
             }
         }
@@ -675,6 +1316,7 @@ impl AgentPanel {
         let _ = std::fs::remove_file(&r.context_file);
         self.open_text = None;
         let name = r.kind.name();
+        let mut ok = false;
         if r.stop_at.is_some() {
             self.notice("Detenido.", Tone::Muted);
             self.status = "Detenido".into();
@@ -689,20 +1331,95 @@ impl AgentPanel {
             self.notice(if details.trim().is_empty() { format!("{what}.") } else { format!("{what}:\n{details}") }, Tone::Error);
             self.status = "Falló".into();
         } else {
+            ok = !r.failed;
             // Fallbacks such as a mode the account cannot use only show up as warnings on stderr.
-            for l in r.stderr.lines().filter(|l| l.to_lowercase().starts_with("warning:")) {
+            for l in r.stderr.lines().filter(|l| l.to_lowercase().starts_with("warning:") && !l.contains("no output and no recorded error")) {
                 self.notice(l, Tone::Warning);
             }
         }
         if r.blocked > 0 && r.stop_at.is_none() {
             self.notice("Algunas acciones se bloquearon. Elige qué puede hacer el agente en el menú de permisos.", Tone::Muted);
         }
+        match r.purpose {
+            Purpose::Chat(turn) => {
+                if let Some(before) = r.before.take() {
+                    let after = Snapshot::take(&before.root);
+                    let files = snapshot::changes(&before, &after);
+                    if !files.is_empty() {
+                        self.entries.push(Entry::Changes { turn, files });
+                        self.snaps.push((turn, before));
+                        if self.snaps.len() > 12 {
+                            self.snaps.remove(0);
+                        }
+                    }
+                }
+                if ok && !self.session.is_empty() {
+                    self.seed.clear();
+                }
+                if !ok && !self.queue.is_empty() {
+                    self.queue_paused = true;
+                }
+                if ok {
+                    self.check_context();
+                }
+            }
+            Purpose::CompactNative => {
+                if ok {
+                    if !r.compacted {
+                        self.entries.push(Entry::Divider("Conversación compactada".into()));
+                    }
+                    self.status = "Conversación compactada".into();
+                    self.warned_full = false;
+                }
+            }
+            Purpose::CompactSummary => {
+                let summary: Vec<String> = self.entries[r.first_entry.min(self.entries.len())..]
+                    .iter()
+                    .filter_map(|e| if let Entry::Text(t) = e { Some(t.clone()) } else { None })
+                    .collect();
+                let summary = summary.join("\n\n");
+                if ok && !summary.trim().is_empty() {
+                    self.entries.truncate(r.first_entry);
+                    self.entries.push(Entry::Divider("Conversación compactada".into()));
+                    self.entries.push(Entry::Summary(summary.clone()));
+                    self.usage.cost_base += self.usage.session_cost;
+                    self.usage.session_cost = 0.0;
+                    self.usage.context = (summary.len() / 4) as u64;
+                    self.session.clear();
+                    self.checkpoint.clear();
+                    self.seed = summary;
+                    self.status = "Conversación compactada: el siguiente mensaje sigue con el resumen".into();
+                    self.warned_full = false;
+                }
+            }
+        }
+        self.save_conversation();
+    }
+
+    /// After a turn: warns when the context is filling up and compacts when set to.
+    fn check_context(&mut self) {
+        let Some(f) = self.usage.fraction() else { return };
+        if self.autocompact > 0 && f * 100.0 >= self.autocompact as f32 {
+            self.notice(format!("El contexto va por el {:.0} %: compactando la conversación (autocompactar al {} %).", f * 100.0, self.autocompact), Tone::Muted);
+            self.compact_requested = true;
+        } else if f >= WARN_AT && !self.warned_full {
+            self.warned_full = true;
+            self.notice(format!("El contexto va por el {:.0} %. /compactar lo resume y libera sitio.", f * 100.0), Tone::Warning);
+        }
     }
 
     /// Applies one event; true when the project should be reloaded from disk now.
     fn handle(&mut self, r: &mut Running, e: Event) -> bool {
+        let compacting = !matches!(r.purpose, Purpose::Chat(_));
         match e {
-            Event::Session(s) => self.session = s,
+            Event::Session(s) => {
+                if !self.session.is_empty() && !s.is_empty() && s != self.session {
+                    // A forked or new session: what the old one cost stays counted.
+                    self.usage.cost_base += self.usage.session_cost;
+                    self.usage.session_cost = 0.0;
+                }
+                self.session = s;
+            }
             Event::TextBegin => {
                 self.entries.push(Entry::Text(String::new()));
                 self.open_text = Some(self.entries.len() - 1);
@@ -733,7 +1450,9 @@ impl AgentPanel {
             }
             Event::Model(m) => {
                 if m != self.answering_model {
-                    self.notice(format!("Modelo: {m}"), Tone::Muted);
+                    if !compacting {
+                        self.notice(format!("Modelo: {m}"), Tone::Muted);
+                    }
                     self.answering_model = m;
                 }
             }
@@ -745,12 +1464,40 @@ impl AgentPanel {
             }
             Event::CommandRan => return true,
             Event::Notice(s) => self.notice(s, Tone::Muted),
+            Event::Usage(u) => {
+                if let Some(c) = u.context {
+                    self.usage.context = c;
+                }
+                if let Some(w) = u.window {
+                    self.usage.window = w;
+                }
+                if let Some(c) = u.cost {
+                    self.usage.session_cost = c;
+                }
+                if let Some(o) = u.output {
+                    self.usage.output += o;
+                }
+                self.usage.approx = r.kind != Kind::Claude;
+                if self.usage.window == 0 {
+                    self.usage.window = self.listed_window();
+                }
+            }
+            Event::Compacted(post) => {
+                r.compacted = true;
+                self.open_text = None;
+                self.entries.push(Entry::Divider("Conversación compactada".into()));
+                if let Some(t) = post {
+                    self.usage.context = t;
+                }
+            }
+            Event::Checkpoint(c) => self.checkpoint = c,
             Event::Finished => {
                 r.got_result = true;
                 self.status = format!("Hecho en {:.1} s", r.started.elapsed().as_secs_f32());
             }
             Event::Failed(s) => {
                 r.got_result = true;
+                r.failed = true;
                 self.notice(s, Tone::Error);
                 self.status = "Falló".into();
             }
@@ -758,18 +1505,210 @@ impl AgentPanel {
         false
     }
 
+    // ------------------------------------------------------------ changes
+
+    fn snapshot_of(&self, turn: u64) -> Option<&Snapshot> {
+        self.snaps.iter().find(|(t, _)| *t == turn).map(|(_, s)| s)
+    }
+
+    /// Revertir on one file of a turn.
+    pub fn revert_file(&mut self, turn: u64, rel: &str) -> Result<(), String> {
+        let snap = self.snapshot_of(turn).ok_or("Ya no se guarda cómo estaba antes (solo los últimos turnos de esta sesión del editor)")?;
+        snap.revert(Path::new(rel))?;
+        for e in &mut self.entries {
+            if let Entry::Changes { turn: t, files } = e {
+                if *t == turn {
+                    for f in files.iter_mut().filter(|f| f.rel == rel) {
+                        f.reverted = true;
+                    }
+                }
+            }
+        }
+        self.pending_reload = true;
+        self.save_conversation();
+        Ok(())
+    }
+
+    /// `/deshacer`: puts back every file the last turn that changed files changed. Returns how
+    /// many it reverted.
+    pub fn undo_last_turn(&mut self) -> usize {
+        if self.running() {
+            return 0;
+        }
+        let found = self.entries.iter().rev().find_map(|e| match e {
+            Entry::Changes { turn, files } if files.iter().any(|f| !f.reverted) => Some((*turn, files.iter().filter(|f| !f.reverted).map(|f| f.rel.clone()).collect::<Vec<_>>())),
+            _ => None,
+        });
+        let Some((turn, files)) = found else {
+            self.notice("No hay cambios del agente que deshacer.", Tone::Muted);
+            return 0;
+        };
+        let mut done = vec![];
+        let mut errors = vec![];
+        for f in files {
+            match self.revert_file(turn, &f) {
+                Ok(()) => done.push(f),
+                Err(e) => errors.push(e),
+            }
+        }
+        if !done.is_empty() {
+            self.notice(format!("Deshecho: {} vuelve{} a como estaba{} antes del turno.", done.join(", "), if done.len() > 1 { "n" } else { "" }, if done.len() > 1 { "n" } else { "" }), Tone::Muted);
+        }
+        if !errors.is_empty() {
+            self.notice(errors.join("\n"), Tone::Error);
+        }
+        done.len()
+    }
+
+    /// Opens the diff window for one file of a turn (before the turn vs. now).
+    pub fn open_diff(&mut self, turn: u64, rel: &str) {
+        let now = self.project.as_ref().map(|(r, _)| r.join(rel)).and_then(|p| std::fs::read(p).ok());
+        let (lines, note) = match self.snapshot_of(turn) {
+            Some(s) => {
+                let before = s.bytes(Path::new(rel)).map(|b| String::from_utf8_lossy(b).into_owned());
+                let existed = s.files.contains_key(Path::new(rel));
+                match (before, now) {
+                    (Some(b), Some(n)) if !n.contains(&0) => (snapshot::unified(&b, &String::from_utf8_lossy(&n), 3), None),
+                    (None, Some(n)) if !existed && !n.contains(&0) => (snapshot::unified("", &String::from_utf8_lossy(&n), 3), Some("Fichero nuevo".to_string())),
+                    (Some(b), None) => (snapshot::unified(&b, "", 3), Some("Borrado".to_string())),
+                    _ => (vec![], Some("Fichero binario o demasiado grande para compararlo".to_string())),
+                }
+            }
+            None => (vec![], Some("Ya no se guarda cómo estaba antes del turno (solo los últimos turnos de esta sesión del editor)".to_string())),
+        };
+        let note = if lines.is_empty() && note.is_none() { Some("Sin diferencias con el disco (¿ya revertido?)".to_string()) } else { note };
+        self.diff = Some(DiffView { turn, rel: rel.to_string(), lines, note });
+    }
+
+    // ------------------------------------------------------------ commands
+
+    /// Runs a slash command typed in the message box. Returns a message to send (the app saves
+    /// first), e.g. for /reintentar.
+    pub fn command(&mut self, cmd: Slash, ctx: Option<&egui::Context>) -> Option<String> {
+        self.input.clear();
+        match cmd {
+            Slash::New => self.new_conversation(),
+            Slash::History(q) => self.show_history(&q),
+            Slash::Compact => {
+                if self.running() {
+                    self.compact_requested = true;
+                    self.status = "Se compactará al terminar".into();
+                } else {
+                    self.compact();
+                }
+            }
+            Slash::Model(None) => {
+                let m = self.model();
+                let shown = if m.is_empty() { "el de por defecto".to_string() } else { self.model_name(&m) };
+                self.notice(format!("Modelo: {shown}. Cámbialo con /modelo <nombre> o /modelo defecto."), Tone::Muted);
+            }
+            Slash::Model(Some(m)) => {
+                self.set_model(&m);
+                self.notice(if m.is_empty() { "Modelo: el de por defecto.".to_string() } else { format!("Modelo: {}.", self.model_name(&m)) }, Tone::Muted);
+            }
+            Slash::Permission(Some(p)) => {
+                self.set_permission(p);
+                self.notice(format!("Permisos: {}.", p.label()), Tone::Muted);
+            }
+            Slash::Permission(None) => self.notice("Usa /permisos plan, /permisos editar o /permisos auto.", Tone::Muted),
+            Slash::Agent(Some(k)) => {
+                if self.running() {
+                    self.notice("Espera a que termine el agente para cambiarlo.", Tone::Warning);
+                } else {
+                    self.set_kind(k);
+                    self.notice(format!("Agente: {}.", k.name()), Tone::Muted);
+                }
+            }
+            Slash::Agent(None) => self.notice("Usa /agente claude, /agente codex o /agente agy.", Tone::Muted),
+            Slash::Retry => {
+                if self.retry().is_none() {
+                    self.notice("No hay ningún mensaje que reintentar ahora.", Tone::Muted);
+                }
+                return self.auto_send.take();
+            }
+            Slash::Edit => {
+                if !self.edit_last() {
+                    self.notice("No hay ningún mensaje que editar ahora.", Tone::Muted);
+                }
+                return None;
+            }
+            Slash::Undo => {
+                self.undo_last_turn();
+            }
+            Slash::Export => {
+                if self.entries.is_empty() {
+                    self.notice("La conversación está vacía.", Tone::Muted);
+                } else if let Some(path) = self.export("", None) {
+                    if let (Some(ctx), Some(md)) = (ctx, self.markdown("")) {
+                        ctx.copy_text(md);
+                    }
+                    self.notice(format!("Exportada a {} (y copiada).", path.display()), Tone::Muted);
+                }
+            }
+            Slash::Rename(t) => {
+                if t.trim().is_empty() {
+                    self.notice("Usa /renombrar <título>.", Tone::Muted);
+                } else {
+                    self.rename("", &t);
+                    self.notice(format!("Título: {}", t.trim()), Tone::Muted);
+                }
+            }
+            Slash::AutoCompact(Some(n)) => {
+                self.autocompact = n;
+                self.save_state();
+                self.notice(if n == 0 { "Autocompactar: no.".to_string() } else { format!("Autocompactar al {n} % del contexto.") }, Tone::Muted);
+            }
+            Slash::AutoCompact(None) => {
+                let now = if self.autocompact == 0 { "no".to_string() } else { format!("al {} %", self.autocompact) };
+                self.notice(format!("Autocompactar: {now}. Usa /autocompactar 85 o /autocompactar no."), Tone::Muted);
+            }
+            Slash::Cost => {
+                let t = self.usage_text(true);
+                self.notice(if t.is_empty() { "Todavía no hay datos de uso.".to_string() } else { t }, Tone::Muted);
+            }
+            Slash::Help => self.notice(slash::help(), Tone::Muted),
+            Slash::Unknown(n) => self.notice(format!("No conozco /{n}. /ayuda lista los comandos (// envía un mensaje que empieza por /)."), Tone::Warning),
+        }
+        None
+    }
+
+    /// "31,1k / 1M (3 %) · 0,12 $", or the long form for /coste.
+    pub fn usage_text(&self, long: bool) -> String {
+        let u = &self.usage;
+        let mut parts = vec![];
+        if u.context > 0 {
+            let approx = if u.approx { "≈" } else { "" };
+            parts.push(match u.fraction() {
+                Some(f) if long => format!("Contexto: {approx}{} de {} tokens ({:.0} %)", history::tokens(u.context), history::tokens(u.window), f * 100.0),
+                Some(f) => format!("{approx}{} / {} ({:.0} %)", history::tokens(u.context), history::tokens(u.window), f * 100.0),
+                None if long => format!("Contexto: {approx}{} tokens", history::tokens(u.context)),
+                None => format!("{approx}{} tokens", history::tokens(u.context)),
+            });
+        }
+        if long && u.output > 0 {
+            parts.push(format!("{} tokens escritos", history::tokens(u.output)));
+        }
+        if u.cost() > 0.0 {
+            parts.push(if long { format!("Coste: {}", history::money(u.cost())) } else { history::money(u.cost()) });
+        }
+        parts.join(" · ")
+    }
+
     // ------------------------------------------------------------ ui
 
     /// Draws the dock. Returns a message to send: the app saves everything, then calls [`AgentPanel::send`].
     /// `src` is what can be attached from the rest of the editor.
     pub fn ui(&mut self, ui: &mut egui::Ui, src: &Sources) -> Option<String> {
+        if let Some(p) = src.project {
+            self.enter_project(&p.dir, &p.game.game.name);
+        }
         let has_project = src.project.is_some();
         let panel_rect = ui.max_rect();
         let pal = crate::theme::colors(ui.ctx());
         let running = self.running();
-        let mut send = None;
+        let mut send = if has_project { self.next_to_send() } else { None };
 
-        // Toolbar: agent, new conversation, stop, status.
+        // Toolbar: agent, history, new conversation, stop, more.
         ui.horizontal(|ui| {
             ui.strong("Agente");
             ui.add_enabled_ui(!running, |ui| {
@@ -784,16 +1723,20 @@ impl AgentPanel {
                 self.set_kind(kind);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(running, egui::Button::new("■ Detener")).on_hover_text("Detiene el agente").clicked() {
+                ui.menu_button("⋯", |ui| self.more_menu(ui)).response.on_hover_text("Compactar, exportar, deshacer, autocompactar…");
+                if ui.add_enabled(running, egui::Button::new("■")).on_hover_text("Detener el agente").clicked() {
                     self.stop();
                 }
-                if ui.add_enabled(self.program.is_some(), egui::Button::new("＋ Nueva")).on_hover_text("Nueva conversación").clicked() {
+                if ui.add_enabled(self.program.is_some(), egui::Button::new("＋")).on_hover_text("Nueva conversación (la actual queda en el historial) — /nueva").clicked() {
                     self.new_conversation();
                 }
-                if !self.session.is_empty()
-                    && ui.small_button("⧉").on_hover_text("Copiar la orden para seguir esta conversación en un terminal abierto en la carpeta del proyecto").clicked()
-                {
-                    ui.ctx().copy_text(self.kind.resume_command(&self.session));
+                let hist = self.view == View::History;
+                if ui.selectable_label(hist, "🕘").on_hover_text("Historial: conversaciones anteriores de este proyecto — /historial").clicked() {
+                    if hist {
+                        self.view = View::Chat;
+                    } else {
+                        self.show_history("");
+                    }
                 }
             });
         });
@@ -802,8 +1745,15 @@ impl AgentPanel {
                 ui.spinner();
             }
             let status = if self.program.is_none() { format!("{} no encontrado", self.kind.name()) } else { self.status.clone() };
-            ui.add(egui::Label::new(RichText::new(status).weak()).truncate());
+            let meter_w = if self.usage.context > 0 || self.usage.cost() > 0.0 { 190.0f32.min(ui.available_width() * 0.6) } else { 0.0 };
+            ui.add_sized([(ui.available_width() - meter_w - 8.0).max(40.0), 18.0], egui::Label::new(RichText::new(status).weak()).truncate());
+            if meter_w > 0.0 {
+                self.meter(ui, meter_w);
+            }
         });
+        if !self.title.is_empty() && self.view == View::Chat {
+            ui.add(egui::Label::new(RichText::new(&self.title).strong().small()).truncate()).on_hover_text("Título de la conversación (/renombrar)");
+        }
         ui.separator();
 
         let Some(_) = self.program.clone() else {
@@ -811,10 +1761,25 @@ impl AgentPanel {
             return None;
         };
 
+        if self.view == View::History {
+            self.history_ui(ui);
+            self.windows(ui.ctx());
+            return send;
+        }
+
         // Message box and its footer (model, permissions, send) at the bottom.
         let input_id = ui.make_persistent_id("agent_input");
         egui::Panel::bottom("agent_input_area").frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 6))).show(ui, |ui| {
             let focused = ui.memory(|m| m.has_focus(input_id));
+            self.queue_ui(ui);
+            if self.editing.is_some() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("✎ Editando tu último mensaje: al enviarlo, la conversación sigue desde antes de él.").color(pal.info).small());
+                    if ui.small_button("Cancelar").clicked() {
+                        self.cancel_edit();
+                    }
+                });
+            }
             // Attachments of the next message, each with its ×.
             if !self.attachments.is_empty() {
                 let mut remove = None;
@@ -831,31 +1796,53 @@ impl AgentPanel {
                 }
                 ui.add_space(2.0);
             }
-            // `@` suggestions for the word being typed; arrows move, Tab or Intro pick, Esc closes.
-            let cands = self.mention_candidates(src);
+            // Pasting paths or file:// URIs attaches them.
+            if focused {
+                let pasted: Vec<String> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None }).collect());
+                for t in pasted {
+                    if self.attach_pasted(&t) {
+                        ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Paste(x) if *x == t)));
+                    }
+                }
+            }
+            // `/` suggestions while typing a command, `@` suggestions for the word being typed;
+            // arrows move, Tab or Intro pick, Esc closes.
+            let cmds = slash::suggestions(&self.input);
+            let cands = if cmds.is_empty() { self.mention_candidates(src) } else { vec![] };
             let mut picked = None;
-            if !cands.is_empty() {
-                self.mention_sel = self.mention_sel.min(cands.len() - 1);
+            let mut picked_cmd: Option<&'static slash::Spec> = None;
+            let n = if cmds.is_empty() { cands.len() } else { cmds.len() };
+            if n > 0 {
+                let sel = if cmds.is_empty() { &mut self.mention_sel } else { &mut self.slash_sel };
+                *sel = (*sel).min(n - 1);
                 if focused {
                     let (down, up, pick, esc) = ui.input_mut(|i| {
                         (
                             i.consume_key(Modifiers::NONE, Key::ArrowDown),
                             i.consume_key(Modifiers::NONE, Key::ArrowUp),
-                            i.consume_key(Modifiers::NONE, Key::Tab) || i.consume_key(Modifiers::NONE, Key::Enter),
+                            i.consume_key(Modifiers::NONE, Key::Tab) || (cmds.is_empty() && i.consume_key(Modifiers::NONE, Key::Enter)),
                             i.consume_key(Modifiers::NONE, Key::Escape),
                         )
                     });
                     if down {
-                        self.mention_sel = (self.mention_sel + 1) % cands.len();
+                        *sel = (*sel + 1) % n;
                     }
                     if up {
-                        self.mention_sel = (self.mention_sel + cands.len() - 1) % cands.len();
+                        *sel = (*sel + n - 1) % n;
                     }
                     if pick {
-                        picked = Some(self.mention_sel);
+                        if cmds.is_empty() {
+                            picked = Some(*sel);
+                        } else {
+                            picked_cmd = Some(cmds[*sel]);
+                        }
                     }
                     if esc {
-                        self.mention_closed = Some(self.input.clone());
+                        if cmds.is_empty() {
+                            self.mention_closed = Some(self.input.clone());
+                        } else {
+                            self.input.clear();
+                        }
                     }
                 }
                 egui::Frame::new()
@@ -865,12 +1852,28 @@ impl AgentPanel {
                     .inner_margin(4)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new("Adjuntar (Tab o Intro; Esc cierra)").weak().small());
-                        for (i, (label, a)) in cands.iter().enumerate() {
-                            let tip = a.path.display().to_string();
-                            if ui.selectable_label(i == self.mention_sel, label).on_hover_text(tip).clicked() {
-                                picked = Some(i);
+                        if cmds.is_empty() {
+                            ui.label(RichText::new("Adjuntar (Tab o Intro; Esc cierra)").weak().small());
+                            for (i, (label, a)) in cands.iter().enumerate() {
+                                let tip = a.path.display().to_string();
+                                if ui.selectable_label(i == self.mention_sel, label).on_hover_text(tip).clicked() {
+                                    picked = Some(i);
+                                }
                             }
+                        } else {
+                            ui.label(RichText::new("Comandos (Tab completa, Intro ejecuta, Esc cierra)").weak().small());
+                            egui::ScrollArea::vertical().id_salt("agent_slash").max_height(220.0).show(ui, |ui| {
+                                for (i, c) in cmds.iter().enumerate() {
+                                    let arg = if c.arg.is_empty() { String::new() } else { format!(" {}", c.arg) };
+                                    let r = ui.selectable_label(i == self.slash_sel, RichText::new(format!("/{}{arg}", c.name)).monospace()).on_hover_text(c.help);
+                                    if r.clicked() {
+                                        picked_cmd = Some(c);
+                                    }
+                                    if i == self.slash_sel {
+                                        ui.label(RichText::new(c.help).weak().small());
+                                    }
+                                }
+                            });
                         }
                     });
             }
@@ -881,18 +1884,23 @@ impl AgentPanel {
                     ui.memory_mut(|m| m.request_focus(input_id));
                 }
             }
-            let enter = picked.is_none() && focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-            ui.add(
-                egui::TextEdit::multiline(&mut self.input)
-                    .id(input_id)
-                        .hint_text(format!("Mensaje para {} (Mayús+Intro: nueva línea; @ adjunta)", self.kind.name()))
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            );
+            if let Some(c) = picked_cmd {
+                self.input = format!("/{}{}", c.name, if c.arg.is_empty() { "" } else { " " });
+                self.slash_sel = 0;
+                move_cursor_to_end(ui.ctx(), input_id, &self.input);
+                ui.memory_mut(|m| m.request_focus(input_id));
+            }
+            let enter = picked.is_none() && picked_cmd.is_none() && focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+            let hint = if running {
+                "El agente está trabajando: lo que escribas se envía cuando termine".to_string()
+            } else {
+                format!("Mensaje para {} (Mayús+Intro: nueva línea; @ adjunta; / comandos)", self.kind.name())
+            };
+            ui.add(egui::TextEdit::multiline(&mut self.input).id(input_id).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY));
             ui.horizontal_wrapped(|ui| {
                 ui.menu_button("📎 Adjuntar", |ui| self.attach_menu(ui, src))
                     .response
-                    .on_hover_text("Adjunta contexto al siguiente mensaje: assets, ficheros, la selección de la room, la Salida o imágenes. También puedes soltar aquí assets y ficheros, o escribir @");
+                    .on_hover_text("Adjunta contexto al siguiente mensaje: assets, ficheros del proyecto o de cualquier parte del disco, URLs, texto, la selección de la room o la Salida. También puedes soltar aquí assets y ficheros, pegar rutas o escribir @");
                 ui.add_enabled_ui(!running, |ui| {
                     self.model_combo(ui);
                     let mut perm = self.permission;
@@ -906,10 +1914,29 @@ impl AgentPanel {
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let can = !running && has_project && (!self.input.trim().is_empty() || !self.attachments.is_empty());
-                    let b = ui.add_enabled(can, crate::theme::primary_button(ui, "Enviar")).on_hover_text("Intro: guarda todo y envía el mensaje");
-                    if b.clicked() || (enter && can) {
-                        send = Some(self.input.clone());
+                    let has_text = !self.input.trim().is_empty() || !self.attachments.is_empty();
+                    let is_cmd = slash::parse(&self.input).is_some() && self.attachments.is_empty();
+                    let can = has_project && has_text;
+                    let label = if is_cmd {
+                        "Ejecutar"
+                    } else if running {
+                        "Poner en cola"
+                    } else {
+                        "Enviar"
+                    };
+                    let tip = if running { "Intro: se envía cuando el agente termine" } else { "Intro: guarda todo y envía el mensaje" };
+                    let b = ui.add_enabled(can || is_cmd, crate::theme::primary_button(ui, label)).on_hover_text(tip);
+                    if b.clicked() || (enter && (can || is_cmd)) {
+                        if let Some(cmd) = slash::parse(&self.input).filter(|_| self.attachments.is_empty()) {
+                            send = self.command(cmd, Some(ui.ctx())).or(send.take());
+                        } else if running {
+                            let t = self.input.clone();
+                            self.enqueue(&t);
+                        } else {
+                            // `//text` sends "/text".
+                            let t = self.input.trim_start();
+                            send = Some(t.strip_prefix("//").map(|r| format!("/{r}")).unwrap_or_else(|| self.input.clone()));
+                        }
                     }
                 });
             });
@@ -919,11 +1946,15 @@ impl AgentPanel {
         });
 
         // Transcript.
+        let mut action: Option<Action> = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             if self.entries.is_empty() {
-                ui.label(RichText::new("Pide al agente que cambie objetos, rooms, sprites o scripts del proyecto.").weak());
+                ui.label(RichText::new("Pide al agente que cambie objetos, rooms, sprites o scripts del proyecto. Escribe / para ver los comandos.").weak());
             }
-            for e in &self.entries {
+            let last_user = self.last_turn().map(|i| self.turns[i].entry);
+            let last_error = self.entries.iter().rposition(|e| matches!(e, Entry::Notice(_, Tone::Error)));
+            let last_error = last_error.filter(|i| *i + 1 >= self.entries.len() && !running && !self.turns.is_empty());
+            for (i, e) in self.entries.iter().enumerate() {
                 match e {
                     Entry::Attached(list) => {
                         ui.horizontal_wrapped(|ui| {
@@ -936,7 +1967,7 @@ impl AgentPanel {
                     }
                     Entry::User(t) => {
                         ui.add_space(8.0);
-                        egui::Frame::new()
+                        let r = egui::Frame::new()
                             .fill(ui.visuals().faint_bg_color)
                             .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
                             .corner_radius(crate::theme::RADIUS)
@@ -944,11 +1975,32 @@ impl AgentPanel {
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.label(t);
+                            })
+                            .response;
+                        let last = last_user == Some(i);
+                        if ui.rect_contains_pointer(r.rect) && overlay_button(ui, r.rect, ("agent_copy_user", i), "⧉", "Copiar el mensaje") {
+                            ui.ctx().copy_text(t.clone());
+                        }
+                        if last {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                {
+                                    if ui.add(egui::Button::new(RichText::new("✎ Editar").small()).frame(false)).on_hover_text("Edita el mensaje y reenvíalo: la conversación sigue desde antes de él").clicked() {
+                                        action = Some(Action::Edit);
+                                    }
+                                    if ui.add(egui::Button::new(RichText::new("↻ Reintentar").small()).frame(false)).on_hover_text("Vuelve a enviarlo desde antes de la respuesta").clicked() {
+                                        action = Some(Action::Retry);
+                                    }
+                                }
                             });
+                        }
                     }
                     Entry::Text(t) => {
                         ui.add_space(4.0);
-                        text_ui(ui, t);
+                        let r = ui.scope(|ui| crate::agent_markdown::show(ui, t)).response;
+                        if ui.rect_contains_pointer(r.rect) && !t.is_empty() && overlay_button(ui, r.rect, ("agent_copy_text", i), "⧉", "Copiar la respuesta") {
+                            ui.ctx().copy_text(t.clone());
+                        }
                     }
                     Entry::Tool(t) => {
                         ui.horizontal_wrapped(|ui| {
@@ -967,15 +2019,425 @@ impl AgentPanel {
                             Tone::Error => ("⛔", pal.error),
                         };
                         ui.label(RichText::new(format!("{icon} {t}")).color(c));
+                        if last_error == Some(i) && ui.button("↻ Reintentar").on_hover_text("Vuelve a enviar el último mensaje").clicked() {
+                            action = Some(Action::Retry);
+                        }
+                    }
+                    Entry::Divider(t) => {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let w = ((ui.available_width() - 180.0) / 2.0).max(10.0);
+                            ui.add_sized([w, 10.0], egui::Separator::default().horizontal());
+                            ui.label(RichText::new(format!("✂ {t}")).color(pal.info).small());
+                            ui.add(egui::Separator::default().horizontal());
+                        });
+                        ui.add_space(4.0);
+                    }
+                    Entry::Summary(t) => {
+                        let open = self.unfolded.contains(&i);
+                        if ui.selectable_label(open, RichText::new(if open { "▾ Resumen" } else { "▸ Resumen de lo anterior" }).weak()).clicked() {
+                            action = Some(Action::Fold(i));
+                        }
+                        if open {
+                            egui::Frame::new().fill(ui.visuals().faint_bg_color).corner_radius(crate::theme::RADIUS).inner_margin(6).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                crate::agent_markdown::show(ui, t);
+                            });
+                        }
+                    }
+                    Entry::Changes { turn, files } => {
+                        let can_revert = self.snaps.iter().any(|(t, _)| t == turn);
+                        changes_ui(ui, *turn, files, can_revert, &mut action);
                     }
                 }
             }
         });
+        match action {
+            Some(Action::Edit) => {
+                self.edit_last();
+                ui.memory_mut(|m| m.request_focus(input_id));
+                move_cursor_to_end(ui.ctx(), input_id, &self.input);
+            }
+            Some(Action::Retry) => send = self.retry().or(send),
+            Some(Action::Fold(i)) => {
+                if !self.unfolded.remove(&i) {
+                    self.unfolded.insert(i);
+                }
+            }
+            Some(Action::Diff(turn, rel)) => self.open_diff(turn, &rel),
+            Some(Action::Revert(turn, rel)) => {
+                if let Err(e) = self.revert_file(turn, &rel) {
+                    self.notice(e, Tone::Error);
+                }
+            }
+            Some(Action::RevertAll(turn)) => {
+                let files: Vec<String> = self
+                    .entries
+                    .iter()
+                    .find_map(|e| match e {
+                        Entry::Changes { turn: t, files } if *t == turn => Some(files.iter().filter(|f| !f.reverted).map(|f| f.rel.clone()).collect()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                for f in files {
+                    if let Err(e) = self.revert_file(turn, &f) {
+                        self.notice(e, Tone::Error);
+                    }
+                }
+            }
+            None => {}
+        }
+        if send.is_some() {
+            self.auto_send = None;
+        }
         if !self.list_tried && self.lister.is_none() {
             self.list_models();
         }
         self.drop_zone(ui, panel_rect, src);
+        self.windows(ui.ctx());
         send
+    }
+
+    /// The context meter: tokens in context against the window, and the cost.
+    fn meter(&self, ui: &mut egui::Ui, width: f32) {
+        let pal = crate::theme::colors(ui.ctx());
+        let text = self.usage_text(false);
+        let tip = format!("{}\n/compactar resume la conversación; /coste da el detalle.{}", self.usage_text(true), if self.usage.approx { "\n≈: estimado con lo que informa el programa" } else { "" });
+        match self.usage.fraction() {
+            Some(f) => {
+                let color = if f >= 0.95 {
+                    pal.error
+                } else if f >= WARN_AT {
+                    Color32::from_rgb(0xc0, 0x85, 0x32)
+                } else {
+                    ui.visuals().selection.bg_fill
+                };
+                let ink = if f >= WARN_AT { Color32::WHITE } else { ui.visuals().strong_text_color() };
+                ui.add(egui::ProgressBar::new(f).desired_width(width).desired_height(16.0).fill(color).text(RichText::new(text).small().color(ink))).on_hover_text(tip);
+            }
+            None => {
+                ui.add_sized([width, 16.0], egui::Label::new(RichText::new(text).small().weak()).truncate()).on_hover_text(tip);
+            }
+        }
+    }
+
+    fn more_menu(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(240.0);
+        let running = self.running();
+        let has_session = !self.session.is_empty();
+        if ui.add_enabled(has_session, egui::Button::new("✂ Compactar conversación")).on_hover_text("Resume la conversación para liberar contexto (/compactar)").clicked() {
+            self.command(Slash::Compact, None);
+            ui.close();
+        }
+        let undoable = self.entries.iter().any(|e| matches!(e, Entry::Changes { turn, files } if files.iter().any(|f| !f.reverted) && self.snaps.iter().any(|(t, _)| t == turn)));
+        if ui.add_enabled(undoable && !running, egui::Button::new("↶ Deshacer cambios del último turno")).on_hover_text("/deshacer").clicked() {
+            self.undo_last_turn();
+            ui.close();
+        }
+        if ui.add_enabled(!self.entries.is_empty(), egui::Button::new("⤓ Exportar a Markdown")).on_hover_text("La guarda en Descargas y la copia (/exportar)").clicked() {
+            self.command(Slash::Export, Some(ui.ctx()));
+            ui.close();
+        }
+        if ui.add_enabled(!self.entries.is_empty(), egui::Button::new("⧉ Copiar como Markdown")).clicked() {
+            if let Some(md) = self.markdown("") {
+                ui.ctx().copy_text(md);
+            }
+            ui.close();
+        }
+        if ui.add_enabled(has_session, egui::Button::new("⧉ Copiar la orden para seguir en un terminal")).on_hover_text("Para seguir esta conversación en un terminal abierto en la carpeta del proyecto").clicked() {
+            ui.ctx().copy_text(self.kind.resume_command(&self.session));
+            ui.close();
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Autocompactar al");
+            let mut v = self.autocompact as f32;
+            let mut on = self.autocompact > 0;
+            if ui.checkbox(&mut on, "").on_hover_text("Compacta sola al pasar este % del contexto").changed() {
+                self.autocompact = if on { 85 } else { 0 };
+                self.save_state();
+            }
+            if on && ui.add(egui::Slider::new(&mut v, 50.0..=98.0).suffix(" %").integer()).changed() {
+                self.autocompact = v as u8;
+                self.save_state();
+            }
+        });
+        ui.separator();
+        if ui.button("? Comandos").clicked() {
+            self.command(Slash::Help, None);
+            ui.close();
+        }
+    }
+
+    fn queue_ui(&mut self, ui: &mut egui::Ui) {
+        if self.queue.is_empty() {
+            return;
+        }
+        let pal = crate::theme::colors(ui.ctx());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("En cola ({})", self.queue.len())).small().strong());
+            if self.queue_paused {
+                ui.label(RichText::new("en pausa: el último turno no terminó bien").small().color(pal.error));
+                if ui.small_button("▶ Seguir").clicked() {
+                    self.queue_paused = false;
+                }
+            } else {
+                ui.label(RichText::new("se envían al terminar el agente").small().weak());
+            }
+        });
+        let mut edit = None;
+        let mut remove = None;
+        for (i, q) in self.queue.iter().enumerate() {
+            egui::Frame::new()
+                .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                .corner_radius(crate::theme::RADIUS)
+                .inner_margin(egui::Margin::symmetric(6, 3))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("⏳").weak());
+                        let extra = if q.attachments.is_empty() { String::new() } else { format!("  📎{}", q.attachments.len()) };
+                        ui.add(egui::Label::new(RichText::new(format!("{}{extra}", agent::one_line(&q.text, 80))).italics()).truncate()).on_hover_text(&q.text);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(egui::Button::new("×").frame(false).small()).on_hover_text("Quitar de la cola").clicked() {
+                                remove = Some(i);
+                            }
+                            if ui.add(egui::Button::new("✎").frame(false).small()).on_hover_text("Editar (vuelve al cuadro de mensaje)").clicked() {
+                                edit = Some(i);
+                            }
+                        });
+                    });
+                });
+        }
+        if let Some(i) = edit {
+            self.unqueue(i);
+        } else if let Some(i) = remove {
+            self.queue.remove(i);
+        }
+        ui.add_space(2.0);
+    }
+
+    fn history_ui(&mut self, ui: &mut egui::Ui) {
+        let pal = crate::theme::colors(ui.ctx());
+        ui.horizontal(|ui| {
+            if ui.button("← Volver").clicked() {
+                self.view = View::Chat;
+            }
+            ui.add(egui::TextEdit::singleline(&mut self.history_query).hint_text("🔍 Buscar en títulos y mensajes…").desired_width(f32::INFINITY));
+        });
+        if self.store.is_none() {
+            ui.label(RichText::new("Abre un proyecto para ver su historial.").weak());
+            return;
+        }
+        let shown: Vec<Summary> = self.history.iter().filter(|s| s.matches(&self.history_query)).cloned().collect();
+        ui.label(RichText::new(format!("{} conversaciones · clic para abrirla y seguirla", shown.len())).weak().small());
+        let now = history::now();
+        let mut open = None;
+        let mut rename = None;
+        let mut delete = None;
+        let mut export = None;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("agent_history_list").show(ui, |ui| {
+            if shown.is_empty() {
+                ui.label(RichText::new(if self.history.is_empty() { "Todavía no hay conversaciones guardadas." } else { "Nada coincide." }).weak());
+            }
+            for s in &shown {
+                let current = s.id == self.conv_id;
+                let fill = if current { ui.visuals().selection.bg_fill.gamma_multiply(0.25) } else { ui.visuals().faint_bg_color };
+                let r = egui::Frame::new()
+                    .fill(fill)
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .corner_radius(crate::theme::RADIUS)
+                    .inner_margin(6)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if let Some((id, text)) = &mut self.renaming {
+                            if *id == s.id {
+                                let r = ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
+                                r.request_focus();
+                                if r.lost_focus() {
+                                    if ui.input(|i| i.key_pressed(Key::Enter)) {
+                                        rename = Some((id.clone(), text.clone()));
+                                    } else {
+                                        rename = Some((String::new(), String::new()));
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(RichText::new(&s.title).strong()).truncate());
+                            if current {
+                                ui.label(RichText::new("abierta").small().color(pal.info));
+                            }
+                        });
+                        let agent = Kind::from_id(&s.agent).map(|k| k.name()).unwrap_or("?");
+                        let cost = if s.cost > 0.0 { format!(" · {}", history::money(s.cost)) } else { String::new() };
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("{} · {agent} · {} mensajes{cost}", history::when(s.updated, now), s.messages)).weak().small());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let confirm = self.confirm_delete.as_deref() == Some(s.id.as_str());
+                                let del = if confirm { RichText::new("¿Borrar?").color(pal.error).small() } else { RichText::new("🗑").small() };
+                                if ui.add(egui::Button::new(del).frame(false)).on_hover_text("Borrar del historial").clicked() {
+                                    delete = Some((s.id.clone(), confirm));
+                                }
+                                if ui.add(egui::Button::new(RichText::new("⤓").small()).frame(false)).on_hover_text("Exportar a Markdown (Descargas) y copiar").clicked() {
+                                    export = Some(s.id.clone());
+                                }
+                                if ui.add(egui::Button::new(RichText::new("✎").small()).frame(false)).on_hover_text("Renombrar").clicked() {
+                                    rename = Some((format!("\u{0}{}", s.id), s.title.clone()));
+                                }
+                            });
+                        });
+                    })
+                    .response;
+                let click = ui.interact(r.rect, ui.scope_id().with(("agent_hist_row", &s.id)), egui::Sense::click());
+                if click.clicked() && self.renaming.is_none() {
+                    open = Some(s.id.clone());
+                }
+                ui.add_space(4.0);
+            }
+        });
+        if let Some((id, title)) = rename {
+            if let Some(id) = id.strip_prefix('\u{0}') {
+                self.renaming = Some((id.to_string(), title));
+            } else {
+                if !id.is_empty() {
+                    self.rename(&id, &title);
+                }
+                self.renaming = None;
+            }
+        } else if let Some((id, confirmed)) = delete {
+            if confirmed {
+                self.delete_conversation(&id);
+                self.confirm_delete = None;
+            } else {
+                self.confirm_delete = Some(id);
+            }
+        } else if let Some(id) = export {
+            if let Some(path) = self.export(&id, None) {
+                if let Some(md) = self.markdown(&id) {
+                    ui.ctx().copy_text(md);
+                }
+                self.status = format!("Exportada a {}", path.display());
+            }
+        } else if let Some(id) = open {
+            if self.running() {
+                self.status = "Espera a que termine el agente para abrir otra conversación".into();
+            } else {
+                self.open_conversation(&id);
+            }
+        }
+    }
+
+    /// Floating windows: the diff, the disk browser and the text snippet.
+    fn windows(&mut self, ctx: &egui::Context) {
+        // Diff.
+        let mut close = false;
+        let mut revert = None;
+        if let Some(d) = &self.diff {
+            let pal = crate::theme::colors(ctx);
+            let can = self.snaps.iter().any(|(t, _)| *t == d.turn);
+            let mut open = true;
+            egui::Window::new(format!("Cambios: {}", d.rel))
+                .id(egui::Id::unique("agent_diff"))
+                .open(&mut open)
+                .default_size([640.0, 480.0])
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
+                .resizable(true)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let add = d.lines.iter().filter(|l| l.op == snapshot::Op::Add).count();
+                        let del = d.lines.iter().filter(|l| l.op == snapshot::Op::Del).count();
+                        ui.label(RichText::new(format!("+{add}")).color(crate::theme::GREEN).strong());
+                        ui.label(RichText::new(format!("−{del}")).color(crate::theme::RED).strong());
+                        ui.label(RichText::new("antes del turno → ahora").weak().small());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add_enabled(can, egui::Button::new("↶ Revertir")).on_hover_text("Devuelve el fichero a como estaba antes del turno").clicked() {
+                                revert = Some((d.turn, d.rel.clone()));
+                            }
+                        });
+                    });
+                    if let Some(n) = &d.note {
+                        ui.label(RichText::new(n).weak());
+                    }
+                    ui.separator();
+                    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                        let font = egui::TextStyle::Monospace.resolve(ui.style());
+                        for l in &d.lines {
+                            let (bg, sign, color) = if l.header {
+                                (Color32::TRANSPARENT, "", pal.info)
+                            } else {
+                                match l.op {
+                                    snapshot::Op::Add => (crate::theme::GREEN.gamma_multiply(0.15), "+", ui.visuals().text_color()),
+                                    snapshot::Op::Del => (crate::theme::RED.gamma_multiply(0.15), "-", ui.visuals().text_color()),
+                                    snapshot::Op::Same => (Color32::TRANSPARENT, " ", ui.visuals().weak_text_color()),
+                                }
+                            };
+                            let num = |n: Option<usize>| n.map(|n| format!("{n:>4}")).unwrap_or_else(|| "    ".into());
+                            let text = if l.header { l.text.clone() } else { format!("{} {} {sign} {}", num(l.old_no), num(l.new_no), l.text) };
+                            egui::Frame::new().fill(bg).show(ui, |ui| {
+                                ui.add(egui::Label::new(RichText::new(text).font(font.clone()).color(color)).extend());
+                            });
+                        }
+                    });
+                });
+            close = !open;
+        }
+        if let Some((turn, rel)) = revert {
+            match self.revert_file(turn, &rel) {
+                Ok(()) => self.open_diff(turn, &rel),
+                Err(e) => self.notice(e, Tone::Error),
+            }
+        }
+        if close {
+            self.diff = None;
+        }
+        // Disk browser.
+        let mut favorites = std::mem::take(&mut self.cfg.favorites);
+        let before = favorites.clone();
+        let recent = self.cfg.recent_dirs.clone();
+        if let crate::agent_browser::Picked::Attach(paths) = self.browser.show(ctx, &mut favorites, &recent) {
+            for p in paths {
+                self.attach_path(&p);
+            }
+        }
+        let fav_changed = favorites != before;
+        self.cfg.favorites = favorites;
+        if fav_changed {
+            self.save_cfg();
+        }
+        // Text snippet.
+        let mut done = None;
+        if let Some((title, text)) = &mut self.text_modal {
+            let mut open = true;
+            egui::Window::new("Adjuntar texto").id(egui::Id::unique("agent_text_modal")).open(&mut open).collapsible(false).default_size([440.0, 300.0]).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
+                ui.add(egui::TextEdit::singleline(title).hint_text("Título (p. ej. «Notas de diseño»)").desired_width(f32::INFINITY));
+                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    ui.add(egui::TextEdit::multiline(text).hint_text("Pega o escribe aquí el texto: va dentro del mensaje").desired_rows(10).desired_width(f32::INFINITY).code_editor());
+                });
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!text.trim().is_empty(), crate::theme::primary_button(ui, "Adjuntar")).clicked() {
+                        done = Some(true);
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        done = Some(false);
+                    }
+                });
+            });
+            if !open {
+                done = Some(false);
+            }
+        }
+        if let Some(ok) = done {
+            if let Some((title, text)) = self.text_modal.take() {
+                if ok {
+                    let title = if title.trim().is_empty() { "Texto".to_string() } else { title.trim().to_string() };
+                    self.attach(Attachment::text("📝", title, text));
+                }
+            }
+        }
     }
 
     /// Assets dragged from the browser and files dropped from the file manager onto the dock
@@ -1010,7 +2472,7 @@ impl AgentPanel {
     }
 
     fn attach_menu(&mut self, ui: &mut egui::Ui, src: &Sources) {
-        ui.set_min_width(280.0);
+        ui.set_min_width(300.0);
         let add = |ui: &mut egui::Ui, title: &str, item: Option<(String, Attachment)>, missing: &str| -> Option<Attachment> {
             match item {
                 Some((what, a)) => ui.button(format!("{title}: {what}")).on_hover_text(attachment_tip(&a)).clicked().then_some(a),
@@ -1065,16 +2527,53 @@ impl AgentPanel {
             });
         }
         ui.separator();
-        ui.label("Otra ruta (fichero, carpeta o imagen):");
+        if ui.button("💽 Desde el disco…").on_hover_text("Cualquier fichero, carpeta o imagen del ordenador (varios a la vez)").clicked() {
+            let start = self.cfg.recent_dirs.first().cloned();
+            self.browser.open_at(start.as_deref());
+            ui.close();
+        }
+        if ui.button("📝 Texto…").on_hover_text("Un texto que escribes o pegas: va dentro del mensaje").clicked() {
+            self.text_modal = Some((String::new(), String::new()));
+            ui.close();
+        }
+        if !self.cfg.recent_paths.is_empty() || !self.cfg.recent_urls.is_empty() {
+            ui.menu_button("🕘 Recientes de fuera del proyecto", |ui| {
+                for p in self.cfg.recent_paths.clone() {
+                    let icon = if p.is_dir() { "📁" } else { "📄" };
+                    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
+                    let r = ui.add_enabled(p.exists(), egui::Button::new(format!("{icon} {name}"))).on_hover_text(p.display().to_string());
+                    if r.clicked() {
+                        chosen.push(Attachment::file(&p));
+                    }
+                }
+                for u in self.cfg.recent_urls.clone() {
+                    if ui.button(format!("🔗 {}", agent::one_line(&u, 50))).on_hover_text(&u).clicked() {
+                        chosen.push(Attachment::url(&u));
+                    }
+                }
+            });
+        }
+        ui.label("Ruta o URL:");
         let mut go = false;
         ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut self.attach_path).hint_text("~/captura.png o rooms/level1.toml").desired_width(200.0));
+            let r = ui.add(egui::TextEdit::singleline(&mut self.attach_path).hint_text("~/notas.md, /mnt/…, file://… o https://…").desired_width(220.0));
             go = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             go |= ui.add_enabled(!self.attach_path.trim().is_empty(), egui::Button::new("Adjuntar")).clicked();
         });
         if go && !self.attach_path.trim().is_empty() {
-            let path = attach::resolve_path(src.project.map(|p| p.dir.as_path()), &self.attach_path);
-            if self.attach_path(&path) {
+            let typed = self.attach_path.trim().to_string();
+            let ok = if typed.starts_with("http://") || typed.starts_with("https://") {
+                self.attach_url(&typed)
+            } else if typed.starts_with("file://") || typed.lines().count() > 1 {
+                self.attach_pasted(&typed) || {
+                    self.attach_error = Some(format!("No existe: {typed}"));
+                    false
+                }
+            } else {
+                let path = attach::resolve_path(src.project.map(|p| p.dir.as_path()), &typed);
+                self.attach_path(&path)
+            };
+            if ok {
                 self.attach_path.clear();
                 ui.close();
             }
@@ -1083,9 +2582,12 @@ impl AgentPanel {
             ui.label(RichText::new(e).color(crate::theme::colors(ui.ctx()).error));
         }
         ui.label(
-            RichText::new("Las imágenes llegan a Codex con --image; Claude Code y Antigravity reciben su ruta. También puedes arrastrar assets o ficheros al panel, o escribir @ en el mensaje.")
-                .weak()
-                .small(),
+            RichText::new(
+                "De fuera del proyecto el agente solo puede leer lo adjuntado (las carpetas, todo lo de dentro). Las imágenes llegan a Codex con --image; \
+                 Claude Code y Antigravity reciben su ruta. Las URLs las descarga el agente. También puedes arrastrar, pegar rutas en el mensaje o escribir @.",
+            )
+            .weak()
+            .small(),
         );
         if !chosen.is_empty() {
             for a in chosen {
@@ -1165,12 +2667,201 @@ impl AgentPanel {
             }
         });
     }
+
+    // ------------------------------------------------------------ screenshots
+
+    /// Sample state for `modeditor --agent-demo <what>` screenshots: `history` (the history list
+    /// over a sample conversation), `queue` (a running agent with queued messages and the
+    /// context meter), `diff` (a turn's changes and the diff window) or `browser` (the disk
+    /// browser). Nothing is written to the real history.
+    pub fn demo(&mut self, what: &str, root: &Path, name: &str) {
+        self.demo = true;
+        self.enter_project(root, name);
+        let dir = std::env::temp_dir().join(format!("modeditor-agent-demo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store { dir };
+        let now = history::now();
+        let titles = [
+            ("Haz que el jugador salte más alto", "claude", 3, 0.42, 600),
+            ("Añade un enemigo que patrulle entre dos paredes", "claude", 7, 1.37, 7_000),
+            ("¿Por qué no suena la moneda al recogerla?", "codex", 2, 0.0, 90_000),
+            ("Room del nivel 2 con plataformas móviles", "agy", 5, 0.0, 200_000),
+            ("Revisa el sprite del jugador (adjunto referencia)", "claude", 4, 0.88, 3_000_000),
+        ];
+        for (i, (t, a, msgs, cost, ago)) in titles.iter().enumerate() {
+            let mut c = Conversation { id: format!("demo{i}"), title: t.to_string(), agent: a.to_string(), created: now - ago - 60, updated: now - ago, ..Default::default() };
+            for m in 0..*msgs {
+                c.entries.push(Entry::User(format!("{t} ({m})")));
+            }
+            c.usage.session_cost = *cost;
+            let _ = store.save(&c);
+        }
+        self.store = Some(store);
+        self.clear_conversation();
+        self.kind = Kind::Claude;
+        self.locate();
+        self.conv_id = "demo0".into();
+        self.title = titles[0].0.into();
+        self.session = "4f9c2d1e-demo".into();
+        let player = root.join("objects/player.ms");
+        self.entries = vec![
+            Entry::User("Haz que el jugador salte más alto y que el doble salto sea opcional".into()),
+            Entry::Attached(vec![Attachment::file(&player), Attachment::url("https://manual.gamemaker.io/monthly/en/GameMaker_Language/GML_Reference/Movement_And_Collisions/Movement/motion_add.htm")]),
+            Entry::Notice("Modelo: claude-opus".into(), Tone::Muted),
+            Entry::Tool(ToolLine { icon: "👁", verb: "Leer".into(), detail: "objects/player.ms".into() }),
+            Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/player.ms".into() }),
+            Entry::Text(
+                "## Hecho\nHe subido **jump_speed** de `9` a `12` y añadido la variable `double_jump`:\n\n- `true`: puede saltar otra vez en el aire\n- `false`: *solo un salto*\n\n```ms\nif keyboard_check_pressed(vk_space) and (on_ground or (double_jump and jumps < 2)) {\n    vspeed = -jump_speed\n    jumps += 1\n}\n```\nPruébalo en `level1` con Espacio. Más en [la guía](https://example.com/guia)."
+                    .into(),
+            ),
+            Entry::Changes {
+                turn: 1,
+                files: vec![
+                    snapshot::FileChange { rel: "objects/player.ms".into(), kind: ChangeKind::Modified, added: 6, removed: 2, binary: false, reverted: false },
+                    snapshot::FileChange { rel: "rooms/level1.toml".into(), kind: ChangeKind::Modified, added: 1, removed: 1, binary: false, reverted: false },
+                ],
+            },
+            Entry::Divider("Conversación compactada".into()),
+            Entry::User("Ahora que el enemigo rebote al pisarlo".into()),
+        ];
+        self.turns = vec![Turn { id: 1, entry: 0, prompt: "Haz que el jugador salte más alto".into(), ..Default::default() }];
+        self.usage = Usage { context: 168_400, window: 200_000, session_cost: 0.42, output: 5_200, ..Default::default() };
+        self.status = "Hecho en 18,4 s".into();
+        match what {
+            "history" => self.show_history(""),
+            "queue" => {
+                self.entries.push(Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/enemy.ms".into() }));
+                #[cfg(unix)]
+                {
+                    let child = Command::new("sleep").arg("120").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+                    if let Ok(child) = child {
+                        let (_tx, rx) = mpsc::channel();
+                        std::mem::forget(_tx);
+                        self.run = Some(Running {
+                            child,
+                            rx,
+                            parser: Parser::new(Kind::Claude, root),
+                            kind: Kind::Claude,
+                            started: Instant::now(),
+                            stop_at: None,
+                            exited_at: None,
+                            stdout_done: false,
+                            got_result: false,
+                            failed: false,
+                            compacted: false,
+                            stderr: String::new(),
+                            changed: BTreeSet::new(),
+                            blocked: 0,
+                            context_file: PathBuf::new(),
+                            root: root.to_path_buf(),
+                            purpose: Purpose::Chat(2),
+                            before: None,
+                            first_entry: 0,
+                        });
+                    }
+                }
+                self.status = "Editar objects/enemy.ms…".into();
+                self.queue = vec![
+                    Queued { text: "Después, añade un sonido al rebotar".into(), attachments: vec![] },
+                    Queued { text: "Y comprueba el proyecto con modengine check".into(), attachments: vec![Attachment::text("📝", "Notas", "rebote = 0.6")] },
+                ];
+                self.input = "/comp".into();
+            }
+            "diff" => {
+                let before = "object Player {\n    jump_speed = 9\n    on step {\n        if keyboard_check_pressed(vk_space) and on_ground {\n            vspeed = -jump_speed\n        }\n    }\n}\n";
+                let after = "object Player {\n    jump_speed = 12\n    double_jump = true\n    jumps = 0\n    on step {\n        if on_ground { jumps = 0 }\n        if keyboard_check_pressed(vk_space) and (on_ground or (double_jump and jumps < 2)) {\n            vspeed = -jump_speed\n            jumps += 1\n        }\n    }\n}\n";
+                self.diff = Some(DiffView { turn: 1, rel: "objects/player.ms".into(), lines: snapshot::unified(before, after, 3), note: None });
+            }
+            "browser" => {
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                self.browser.open_at(home.as_deref());
+                let first: Vec<PathBuf> = self.browser.rows().iter().filter(|r| r.is_dir).take(2).map(|r| r.path.clone()).collect();
+                self.browser.selected = first.into_iter().collect();
+                self.attachments = vec![Attachment::file(&std::env::temp_dir()), Attachment::url("https://lospec.com/palette-list/pear36")];
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What a click in the transcript asks for (applied after drawing it).
+enum Action {
+    Edit,
+    Retry,
+    Fold(usize),
+    Diff(u64, String),
+    Revert(u64, String),
+    RevertAll(u64),
+}
+
+/// The files a turn changed: +/- counts, click for the diff, Revertir per file and for all.
+fn changes_ui(ui: &mut egui::Ui, turn: u64, files: &[snapshot::FileChange], can_revert: bool, action: &mut Option<Action>) {
+    ui.add_space(4.0);
+    egui::Frame::new()
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(crate::theme::RADIUS)
+        .inner_margin(6)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let pending = files.iter().filter(|f| !f.reverted).count();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Archivos cambiados ({})", files.len())).strong().small());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let tip = if can_revert { "Devuelve todos a como estaban antes del turno (/deshacer)" } else { "Solo se pueden revertir los turnos de esta sesión del editor" };
+                    if ui.add_enabled(can_revert && pending > 0, egui::Button::new(RichText::new("↶ Revertir todo").small())).on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
+                        *action = Some(Action::RevertAll(turn));
+                    }
+                });
+            });
+            for f in files {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (icon, tip) = match f.kind {
+                        ChangeKind::Added => ("＋", "Nuevo"),
+                        ChangeKind::Modified => ("✎", "Modificado"),
+                        ChangeKind::Deleted => ("🗑", "Borrado"),
+                    };
+                    ui.label(RichText::new(icon).weak()).on_hover_text(tip);
+                    let name = if f.reverted { RichText::new(&f.rel).monospace().strikethrough().weak() } else { RichText::new(&f.rel).monospace() };
+                    if ui.add(egui::Button::new(name).frame(false)).on_hover_text("Ver los cambios").clicked() {
+                        *action = Some(Action::Diff(turn, f.rel.clone()));
+                    }
+                    if f.binary {
+                        ui.label(RichText::new("binario").weak().small());
+                    } else {
+                        ui.label(RichText::new(format!("+{}", f.added)).color(crate::theme::GREEN).small());
+                        ui.label(RichText::new(format!("−{}", f.removed)).color(crate::theme::RED).small());
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if f.reverted {
+                            ui.label(RichText::new("revertido").weak().small());
+                        } else if ui.add_enabled(can_revert, egui::Button::new(RichText::new("Revertir").small())).clicked() {
+                            *action = Some(Action::Revert(turn, f.rel.clone()));
+                        }
+                    });
+                });
+            }
+        });
+}
+
+/// A small button drawn over the top-right corner of `rect` without taking layout space
+/// (shown while the pointer is over `rect`). True when clicked.
+fn overlay_button(ui: &mut egui::Ui, rect: egui::Rect, id: impl std::hash::Hash + std::fmt::Debug, icon: &str, tip: &str) -> bool {
+    let at = egui::Rect::from_min_size(egui::pos2(rect.right() - 24.0, rect.top() + 2.0), egui::vec2(22.0, 20.0));
+    let r = ui.interact(at, ui.scope_id().with(id), egui::Sense::click()).on_hover_text(tip);
+    let v = ui.visuals();
+    let (fill, stroke) = if r.hovered() { (v.widgets.hovered.bg_fill, v.widgets.hovered.bg_stroke) } else { (v.window_fill, v.widgets.noninteractive.bg_stroke) };
+    let p = ui.painter();
+    p.rect(at, crate::theme::RADIUS, fill, stroke, egui::StrokeKind::Inside);
+    p.text(at.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(12.0), v.text_color());
+    r.clicked()
 }
 
 /// What a chip shows on hover: the path, or the start of the text.
 fn attachment_tip(a: &Attachment) -> String {
     let mut t = match a.kind {
         AttachKind::Text => agent::clip(&a.text, 600),
+        AttachKind::Url => format!("{}\nEl agente la descarga y la lee", a.text),
         _ => a.path.display().to_string(),
     };
     if a.kind == AttachKind::Image {
@@ -1209,50 +2900,9 @@ fn move_cursor_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
     }
 }
 
-/// A reply: plain text with fenced code blocks in monospace and `#` headings in bold.
-fn text_ui(ui: &mut egui::Ui, text: &str) {
-    let mut in_code = false;
-    let mut block = String::new();
-    let flush = |ui: &mut egui::Ui, block: &mut String, code: bool| {
-        let t = block.trim_end_matches('\n');
-        if !t.is_empty() {
-            if code {
-                egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(crate::theme::RADIUS).inner_margin(4).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(RichText::new(t).monospace());
-                });
-            } else {
-                for line in t.lines() {
-                    let h = line.trim_start_matches('#');
-                    if h.len() < line.len() && h.starts_with(' ') {
-                        ui.label(RichText::new(h.trim()).strong());
-                    } else {
-                        let l = line.replace("**", "");
-                        let l = match l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")) {
-                            Some(rest) => format!("• {rest}"),
-                            None => l,
-                        };
-                        ui.label(l);
-                    }
-                }
-            }
-        }
-        block.clear();
-    };
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            flush(ui, &mut block, in_code);
-            in_code = !in_code;
-            continue;
-        }
-        block.push_str(line);
-        block.push('\n');
-    }
-    flush(ui, &mut block, in_code);
-}
-
 impl Drop for AgentPanel {
     fn drop(&mut self) {
+        self.save_conversation();
         if let Some(mut r) = self.run.take() {
             hard_kill(&mut r.child);
             let _ = std::fs::remove_file(&r.context_file);
@@ -1278,6 +2928,13 @@ mod tests {
         std::fs::write(&exe, script).unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         (dir, exe)
+    }
+
+    /// An empty project folder next to the fake CLI (which writes its files in its own folder).
+    fn empty_project(dir: &Path) -> PathBuf {
+        let p = dir.join("project");
+        std::fs::create_dir_all(&p).unwrap();
+        p
     }
 
     fn panel(exe: &Path) -> AgentPanel {
@@ -1352,6 +3009,10 @@ echo '{{"type":"result","subtype":"success","session_id":"S-fake","result":"Hay 
                 Entry::Text("Hay objetos.".into()),
                 Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/world.ms".into() }),
                 Entry::Notice("not json".into(), Tone::Muted),
+                Entry::Changes {
+                    turn: 1,
+                    files: vec![snapshot::FileChange { rel: "objects/world.ms".into(), kind: ChangeKind::Modified, added: 1, removed: 0, binary: false, reverted: false }]
+                },
             ]
         );
         assert!(p.status.starts_with("Hecho en"), "{}", p.status);
@@ -1378,7 +3039,7 @@ echo '{{"type":"result","subtype":"success","session_id":"S-fake","result":"Hay 
     fn reports_failures_from_stderr() {
         let (dir, exe) = fake_cli("fail", "echo 'error: not logged in' >&2\nexit 3");
         let mut p = panel(&exe);
-        p.send("hola", &dir, "x");
+        p.send("hola", &empty_project(&dir), "x");
         let (_, finished) = wait(&mut p);
         assert!(finished);
         assert!(
@@ -1393,7 +3054,7 @@ echo '{{"type":"result","subtype":"success","session_id":"S-fake","result":"Hay 
     fn stop_kills_the_agent_and_its_commands() {
         let (dir, exe) = fake_cli("stop", "echo '{\"type\":\"system\",\"session_id\":\"S2\"}'\nsleep 30 &\nsleep 30");
         let mut p = panel(&exe);
-        p.send("hola", &dir, "x");
+        p.send("hola", &empty_project(&dir), "x");
         let ctx = egui::Context::default();
         let start = Instant::now();
         while p.session.is_empty() && start.elapsed() < Duration::from_secs(5) {
@@ -1419,7 +3080,8 @@ echo '{"type":"turn.completed"}'"#,
         let mut p = panel(&exe);
         p.set_kind(Kind::Codex);
         p.set_permission(Permission::Edit);
-        p.send("hola", &dir, "x");
+        let project = empty_project(&dir);
+        p.send("hola", &project, "x");
         wait(&mut p);
         assert_eq!(lines(&dir.join("args.txt")), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-"]);
         assert!(std::fs::read_to_string(dir.join("stdin.txt")).unwrap().starts_with("<modengine-editor-context>"));
@@ -1429,7 +3091,7 @@ echo '{"type":"turn.completed"}'"#,
         // Switching agent starts a new conversation.
         p.set_kind(Kind::Antigravity);
         assert!(p.session.is_empty());
-        p.send("hola", &dir, "x");
+        p.send("hola", &project, "x");
         wait(&mut p);
         let args = lines(&dir.join("args.txt"));
         assert_eq!(&args[..4], ["--output-format", "stream-json", "--mode", "accept-edits"]);
@@ -1475,6 +3137,15 @@ echo '{"type":"turn.completed"}'"#,
         // The reply itself is up to the model (Antigravity may end its turn on a permission block).
         assert!(!p.running() && !p.session.is_empty() && p.status.starts_with("Hecho"), "{}", p.status);
         assert!(p.entries.iter().any(|e| matches!(e, Entry::Text(t) if t.contains("PELICAN-42"))), "the agent did not see the attached note");
+        // Compacting: the CLI's own /compact (Claude Code, Antigravity) or a summary (Codex).
+        assert!(p.compact(), "compaction did not start");
+        let start = Instant::now();
+        while p.running() && start.elapsed() < Duration::from_secs(240) {
+            p.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        println!("after compact: session={} status={} usage={:?}", p.session, p.status, p.usage);
+        assert!(p.entries.iter().any(|e| matches!(e, Entry::Divider(_))), "{:?}", p.entries.last());
         let _ = std::fs::remove_dir_all(&project);
         let _ = std::fs::remove_dir_all(&outside);
     }
@@ -1587,7 +3258,7 @@ echo '{"type":"turn.completed"}'"#,
             p.set_kind(Kind::Codex);
             p.set_model("gpt-x");
             p.set_permission(Permission::Plan);
-            p.cfg.models.insert("codex".into(), vec![Model { id: "gpt-x".into(), name: "GPT X".into(), description: String::new() }]);
+            p.cfg.models.insert("codex".into(), vec![Model { id: "gpt-x".into(), name: "GPT X".into(), description: String::new(), context: 0 }]);
             p.save_cfg();
         }
         let p = AgentPanel::with_config(Some(path.clone()));
@@ -1614,7 +3285,7 @@ echo '{"type":"turn.completed"}'"#,
         );
         h.run();
         h.get_by_label("Editar");
-        h.get_by_label("• uno");
+        h.get_by_label("uno");
         h.get_by_label("Enviar");
         // Without the CLI the panel says how to install it.
         h.state_mut().program_override = None;
@@ -1622,5 +3293,353 @@ echo '{"type":"turn.completed"}'"#,
         h.run();
         h.get_by_label("Comprobar de nuevo");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A panel that keeps its history in a temp folder.
+    fn panel_with_history(exe: &Path, tag: &str) -> (AgentPanel, PathBuf) {
+        let cfg = std::env::temp_dir().join(format!("modeditor_agent_hist_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cfg);
+        let mut p = AgentPanel::with_config(Some(cfg.join("agent.toml")));
+        p.program_override = Some(exe.to_path_buf());
+        p.locate();
+        p.list_tried = true;
+        (p, cfg)
+    }
+
+    const CLAUDE_TURN: &str = r#"echo '{"type":"system","subtype":"init","session_id":"S-h"}'
+echo '{"type":"assistant","session_id":"S-h","uuid":"U-'$$'","message":{"model":"m","content":[{"type":"text","text":"Vale."}],"usage":{"input_tokens":10,"cache_creation_input_tokens":100,"cache_read_input_tokens":1890,"output_tokens":5}}}'
+echo '{"type":"result","subtype":"success","session_id":"S-h","total_cost_usd":0.25,"usage":{"output_tokens":5},"modelUsage":{"m":{"contextWindow":10000}}}'"#;
+
+    #[test]
+    fn history_saves_restores_and_resumes() {
+        let project = crate::room::tests::temp_project("agent_hist").canonicalize().unwrap();
+        let (dir, exe) = fake_cli("hist", CLAUDE_TURN);
+        let (mut p, cfg) = panel_with_history(&exe, "a");
+        p.send("Haz que el jugador salte más", &project, "Coin Climber");
+        wait(&mut p);
+        assert_eq!(p.session, "S-h");
+        assert_eq!(p.title, "Haz que el jugador salte más");
+        assert_eq!((p.usage.context, p.usage.window, p.usage.cost()), (2005, 10000, 0.25));
+        let id = p.conv_id.clone();
+        assert!(!id.is_empty());
+        drop(p);
+        // Opening the project again brings the conversation back and resumes its session.
+        let (mut p, _) = (AgentPanel::with_config(Some(cfg.join("agent.toml"))), ());
+        p.program_override = Some(exe.clone());
+        p.locate();
+        p.list_tried = true;
+        p.enter_project(&project, "Coin Climber");
+        assert_eq!((p.conv_id.as_str(), p.session.as_str()), (id.as_str(), "S-h"));
+        assert_eq!(p.entries[0], Entry::User("Haz que el jugador salte más".into()));
+        p.send("y más rápido", &project, "Coin Climber");
+        wait(&mut p);
+        assert!(lines(&dir.join("args.txt")).windows(2).any(|w| w == ["--resume", "S-h"]));
+        // A second conversation; the list has both, newest first; rename, export and delete.
+        p.new_conversation();
+        p.send("Otra cosa", &project, "Coin Climber");
+        wait(&mut p);
+        p.show_history("");
+        assert_eq!(p.view, View::History);
+        assert_eq!(p.history.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Otra cosa", "Haz que el jugador salte más"]);
+        p.rename(&id, "Salto");
+        assert!(p.history.iter().any(|s| s.title == "Salto"));
+        let out = p.export(&id, Some(&cfg)).unwrap();
+        assert!(std::fs::read_to_string(&out).unwrap().starts_with("# Salto\n"));
+        assert!(p.open_conversation(&id));
+        assert_eq!(p.title, "Salto");
+        p.delete_conversation(&id);
+        assert!(p.entries.is_empty() && p.history.len() == 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn queues_messages_while_running() {
+        let project = crate::room::tests::temp_project("agent_queue").canonicalize().unwrap();
+        let (dir, exe) = fake_cli("queue", &format!("sleep 0.4\n{CLAUDE_TURN}"));
+        let mut p = panel(&exe);
+        p.send("primero", &project, "x");
+        assert!(p.running());
+        p.attach(Attachment::text("📝", "Nota", "abc"));
+        p.input = "segundo".into();
+        p.send("segundo", &project, "x");
+        p.enqueue("tercero");
+        assert_eq!(p.queue.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["segundo", "tercero"]);
+        assert_eq!(p.queue[0].attachments.len(), 1, "the attachments go with the queued message");
+        assert!(p.next_to_send().is_none(), "nothing is sent while the agent works");
+        // Editing one puts it back in the box.
+        p.unqueue(1);
+        assert_eq!((p.input.as_str(), p.queue.len()), ("tercero", 1));
+        wait(&mut p);
+        let next = p.next_to_send().unwrap();
+        assert_eq!(next, "segundo");
+        p.send(&next, &project, "x");
+        wait(&mut p);
+        assert!(std::fs::read_to_string(dir.join("stdin.txt")).unwrap().contains("- Nota:\n```\nabc"));
+        assert!(p.queue.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn failed_turn_pauses_the_queue_and_retry_resends() {
+        let project = crate::room::tests::temp_project("agent_retry").canonicalize().unwrap();
+        let (dir, exe) = fake_cli(
+            "retry",
+            r#"if [ -f "$(dirname "$0")/ok" ]; then
+echo '{"type":"result","subtype":"success","session_id":"S-r"}'
+else
+sleep 0.3; echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"S-r","errors":["se cayó"]}'
+fi"#,
+        );
+        let mut p = panel(&exe);
+        p.send("hazlo", &project, "x");
+        p.enqueue("luego esto");
+        wait(&mut p);
+        assert!(p.queue_paused && p.next_to_send().is_none());
+        assert!(matches!(p.entries.last(), Some(Entry::Notice(t, Tone::Error)) if t.contains("se cayó")));
+        std::fs::write(dir.join("ok"), "").unwrap();
+        let again = p.retry().unwrap();
+        assert_eq!(p.next_to_send().as_deref(), Some("hazlo"));
+        p.send(&again, &project, "x");
+        wait(&mut p);
+        // The failed attempt is gone from the transcript; the turn is there once.
+        assert_eq!(p.entries.iter().filter(|e| matches!(e, Entry::User(_))).count(), 1, "{:?}", p.entries);
+        assert!(!p.entries.iter().any(|e| matches!(e, Entry::Notice(_, Tone::Error))));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn compact_uses_claude_slash_command() {
+        let project = crate::room::tests::temp_project("agent_compact").canonicalize().unwrap();
+        let (dir, exe) = fake_cli(
+            "compact",
+            &format!(
+                r#"if grep -q '^/compact' "$(dirname "$0")/stdin.txt"; then
+echo '{{"type":"system","subtype":"status","status":"compacting","session_id":"S-h"}}'
+echo '{{"type":"system","subtype":"compact_boundary","session_id":"S-h","compact_metadata":{{"trigger":"manual","pre_tokens":2005,"post_tokens":300}}}}'
+echo '{{"type":"result","subtype":"success","session_id":"S-h","total_cost_usd":0.3}}'
+else
+{CLAUDE_TURN}
+fi"#
+            ),
+        );
+        let mut p = panel(&exe);
+        assert!(!p.compact(), "nothing to compact without a session");
+        p.send("hola", &project, "x");
+        wait(&mut p);
+        assert_eq!(p.command(Slash::Compact, None), None);
+        assert!(p.running());
+        wait(&mut p);
+        let args = lines(&dir.join("args.txt"));
+        assert!(args.windows(2).any(|w| w == ["--resume", "S-h"]), "{args:?}");
+        assert_eq!(std::fs::read_to_string(dir.join("stdin.txt")).unwrap(), "/compact");
+        assert_eq!(p.entries.iter().filter(|e| matches!(e, Entry::Divider(_))).count(), 1, "{:?}", p.entries);
+        assert_eq!(p.usage.context, 300);
+        assert_eq!(p.session, "S-h", "Claude keeps the same session");
+        assert!((p.usage.cost() - 0.3).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn compact_codex_seeds_a_new_session_with_a_summary() {
+        let project = crate::room::tests::temp_project("agent_compact_cx").canonicalize().unwrap();
+        let (dir, exe) = fake_cli(
+            "compact_cx",
+            r#"if grep -q 'Summarise our conversation' "$(dirname "$0")/stdin.txt"; then
+echo '{"type":"thread.started","thread_id":"T1"}'
+echo '{"type":"item.completed","item":{"id":"s","type":"agent_message","text":"- RESUMEN: salto a 12"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":900,"output_tokens":40}}'
+else
+echo '{"type":"thread.started","thread_id":"T1"}'
+echo '{"type":"item.completed","item":{"id":"m","type":"agent_message","text":"Hecho"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":5000,"cached_input_tokens":4000,"output_tokens":50}}'
+fi"#,
+        );
+        let mut p = panel(&exe);
+        p.set_kind(Kind::Codex);
+        p.send("sube el salto", &project, "x");
+        wait(&mut p);
+        assert_eq!((p.session.as_str(), p.usage.context, p.usage.approx), ("T1", 5050, true));
+        assert!(p.compact());
+        wait(&mut p);
+        assert!(p.session.is_empty() && p.seed.contains("RESUMEN"), "{:?}", p.entries);
+        assert!(matches!(&p.entries[p.entries.len() - 2..], [Entry::Divider(_), Entry::Summary(s)] if s.contains("RESUMEN")), "{:?}", p.entries);
+        p.send("sigue", &project, "x");
+        wait(&mut p);
+        let args = lines(&dir.join("args.txt"));
+        assert!(!args.contains(&"resume".to_string()), "{args:?}");
+        let stdin = std::fs::read_to_string(dir.join("stdin.txt")).unwrap();
+        assert!(stdin.contains("<earlier-conversation>") && stdin.contains("RESUMEN: salto a 12") && stdin.contains("sigue"), "{stdin}");
+        assert!(p.seed.is_empty(), "the seed is used once");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn changes_are_listed_diffed_and_undone() {
+        let project = crate::room::tests::temp_project("agent_undo").canonicalize().unwrap();
+        let target = project.join("objects/world.ms");
+        let original = std::fs::read_to_string(&target).unwrap();
+        let (dir, exe) = fake_cli(
+            "undo",
+            &format!(
+                "echo '// agent line' >> '{t}'\necho 'nuevo' > '{n}'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"S-u\"}}'",
+                t = target.display(),
+                n = project.join("notes.txt").display()
+            ),
+        );
+        let mut p = panel(&exe);
+        p.send("cambia cosas", &project, "x");
+        wait(&mut p);
+        let Some(Entry::Changes { turn, files }) = p.entries.last().cloned() else { panic!("{:?}", p.entries) };
+        let summary: Vec<(&str, ChangeKind, usize, usize)> = files.iter().map(|f| (f.rel.as_str(), f.kind, f.added, f.removed)).collect();
+        assert_eq!(summary, [("notes.txt", ChangeKind::Added, 1, 0), ("objects/world.ms", ChangeKind::Modified, 1, 0)]);
+        p.open_diff(turn, "objects/world.ms");
+        let d = p.diff.as_ref().unwrap();
+        assert!(d.lines.iter().any(|l| l.op == snapshot::Op::Add && l.text == "// agent line"), "{:?}", d.lines);
+        // Revertir one file, then /deshacer the rest.
+        p.revert_file(turn, "notes.txt").unwrap();
+        assert!(!project.join("notes.txt").exists());
+        assert_eq!(p.command(Slash::Undo, None), None);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+        assert!(matches!(p.entries.iter().find(|e| matches!(e, Entry::Changes { .. })), Some(Entry::Changes { files, .. }) if files.iter().all(|f| f.reverted)));
+        assert!(p.poll(&egui::Context::default()).reload, "the app reloads what was reverted");
+        assert_eq!(p.undo_last_turn(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn editing_the_last_message_forks_the_claude_session() {
+        let project = crate::room::tests::temp_project("agent_fork").canonicalize().unwrap();
+        let (dir, exe) = fake_cli("fork", CLAUDE_TURN);
+        let mut p = panel(&exe);
+        p.send("uno", &project, "x");
+        wait(&mut p);
+        let first_checkpoint = p.checkpoint.clone();
+        assert!(first_checkpoint.starts_with("U-"));
+        p.send("dos", &project, "x");
+        wait(&mut p);
+        assert!(p.edit_last());
+        assert_eq!(p.input, "dos");
+        p.input = "dos, mejor así".into();
+        p.send("dos, mejor así", &project, "x");
+        wait(&mut p);
+        let args = lines(&dir.join("args.txt"));
+        assert!(args.windows(2).any(|w| w == ["--resume", "S-h"]), "{args:?}");
+        assert!(args.contains(&"--fork-session".to_string()));
+        assert!(args.windows(2).any(|w| w[0] == "--resume-session-at" && w[1] == first_checkpoint), "{args:?}");
+        let users: Vec<&str> = p.entries.iter().filter_map(|e| if let Entry::User(t) = e { Some(t.as_str()) } else { None }).collect();
+        assert_eq!(users, ["uno", "dos, mejor así"]);
+        // Codex cannot fork: editing starts a new session told the conversation so far.
+        p.set_kind(Kind::Codex);
+        p.session = "T-x".into();
+        p.turns.last_mut().unwrap().session_before = "T-x".into();
+        assert!(p.edit_last());
+        p.send("dos, otra vez", &project, "x");
+        wait(&mut p);
+        let stdin = std::fs::read_to_string(dir.join("stdin.txt")).unwrap();
+        assert!(!lines(&dir.join("args.txt")).contains(&"resume".to_string()));
+        assert!(stdin.contains("User: uno") && !stdin.contains("User: dos, mejor así") && stdin.ends_with("dos, otra vez"), "{stdin}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn slash_commands_and_pasted_paths() {
+        let (dir, exe) = fake_cli("slash", "true");
+        let mut p = panel(&exe);
+        p.command(Slash::Model(Some("opus".into())), None);
+        assert_eq!(p.model(), "opus");
+        p.command(Slash::Permission(Some(Permission::Plan)), None);
+        assert_eq!(p.permission, Permission::Plan);
+        p.command(Slash::Agent(Some(Kind::Codex)), None);
+        assert_eq!(p.kind, Kind::Codex);
+        p.command(Slash::AutoCompact(Some(80)), None);
+        assert_eq!(p.autocompact, 80);
+        p.command(Slash::Help, None);
+        assert!(matches!(p.entries.last(), Some(Entry::Notice(t, _)) if t.contains("/compactar")));
+        p.command(Slash::Unknown("xyz".into()), None);
+        assert!(matches!(p.entries.last(), Some(Entry::Notice(t, Tone::Warning)) if t.contains("/xyz")));
+        // Pasted paths and file:// URIs attach; other text does not.
+        let f = dir.join("args dir");
+        std::fs::create_dir_all(&f).unwrap();
+        assert!(p.attach_pasted(&format!("file://{}\n{}", f.display().to_string().replace(' ', "%20"), dir.join("claude").display())));
+        assert_eq!(p.attachments.len(), 2);
+        assert!(!p.attach_pasted("hola mundo"));
+        assert!(!p.attach_pasted("/no/existe"));
+        assert!(p.attach_url("https://example.com/a?b=1"));
+        assert!(!p.attach_url("example.com"));
+        assert_eq!(p.attachments[2].kind, AttachKind::Url);
+        // Recent outside attachments are remembered.
+        assert!(p.cfg.recent_paths.contains(&f.canonicalize().unwrap()) && p.cfg.recent_urls[0] == "https://example.com/a?b=1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn autocompacts_past_the_threshold() {
+        let project = crate::room::tests::temp_project("agent_auto").canonicalize().unwrap();
+        let (dir, exe) = fake_cli(
+            "auto",
+            &format!(
+                r#"if grep -q '^/compact' "$(dirname "$0")/stdin.txt"; then
+echo '{{"type":"system","subtype":"compact_boundary","session_id":"S-h","compact_metadata":{{"post_tokens":100}}}}'
+echo '{{"type":"result","subtype":"success","session_id":"S-h"}}'
+else
+{CLAUDE_TURN}
+fi"#
+            ),
+        );
+        let mut p = panel(&exe);
+        p.autocompact = 15; // 2005 of 10000 tokens is past it
+        p.send("hola", &project, "x");
+        // The compaction starts right after the turn (wait() waits for both).
+        wait(&mut p);
+        assert_eq!(p.usage.context, 100);
+        assert!(p.entries.iter().any(|e| matches!(e, Entry::Divider(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn history_queue_and_meter_render() {
+        use egui_kittest::{kittest::Queryable, Harness};
+        let (dir, exe) = fake_cli("render", "true");
+        let project = crate::room::tests::temp_project("agent_render").canonicalize().unwrap();
+        let proj = crate::project::Project::open(&project).unwrap();
+        let mut p = panel(&exe);
+        p.demo("history", &project, "Coin Climber");
+        let mut h = Harness::builder().with_size([420.0, 760.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, (p, proj): &mut (AgentPanel, crate::project::Project)| {
+                let src = Sources { project: Some(proj), ..Default::default() };
+                p.ui(ui, &src);
+            },
+            (p, proj),
+        );
+        h.run();
+        h.get_by_label("Haz que el jugador salte más alto");
+        h.get_by_label("Room del nivel 2 con plataformas móviles");
+        h.get_by_label("← Volver").click();
+        h.run();
+        assert_eq!(h.state().0.view, View::Chat);
+        h.get_by_label("Archivos cambiados (2)");
+        h.get_by_label("✂ Conversación compactada");
+        h.get_by_label("jump_speed");
+        // The queue.
+        h.state_mut().0.queue = vec![Queued { text: "luego esto".into(), attachments: vec![] }];
+        h.state_mut().0.queue_paused = true;
+        h.run();
+        h.get_by_label("En cola (1)");
+        h.get_by_label("luego esto");
+        // Typing / lists the commands.
+        h.state_mut().0.input = "/comp".into();
+        h.run();
+        h.get_by_label("/compactar");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
     }
 }

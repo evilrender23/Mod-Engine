@@ -38,6 +38,7 @@ pub enum Ev {
     OutsideRoom,
     Boundary,
     AnimationEnd,
+    PathEnded,
     User(u8),
 }
 
@@ -90,6 +91,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "outside_room",
     "boundary",
     "animation_end",
+    "path_ended",
     "user(n)",
 ];
 
@@ -153,6 +155,7 @@ pub fn parse_event(name: &str, arg: Option<Value>) -> Result<Ev, String> {
         "outside_room" => Ev::OutsideRoom,
         "boundary" => Ev::Boundary,
         "animation_end" => Ev::AnimationEnd,
+        "path_ended" => Ev::PathEnded,
         "user" => Ev::User(small_int(&arg, 16, "user events")?),
         other => {
             return Err(format!("unknown event '{other}'. Valid events: {}", EVENT_NAMES.join(", ")));

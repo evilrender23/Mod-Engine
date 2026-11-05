@@ -1,0 +1,15 @@
+# A lamp that blinks and drops a coin every second.
+[[moment]]
+step = 0
+code = "frame = 0"
+
+[[moment]]
+step = 30
+code = "frame = 1"
+
+[[moment]]
+step = 59
+code = '''
+// a coin falls from the lamp
+spawn(Drop, x, y + 6)
+'''

@@ -105,11 +105,8 @@ pub struct SoundAsset {
     pub volume: f64,
 }
 
-pub struct FontAsset {
-    pub name: String,
-    pub data: Vec<u8>,
-    pub size: f32,
-}
+pub use crate::font::FontAsset;
+pub use crate::tileset::TileSetAsset;
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
@@ -130,13 +127,6 @@ struct SoundToml {
     file: Option<String>,
     synth: Option<SynthDef>,
     volume: Option<f64>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct FontToml {
-    file: Option<String>,
-    size: Option<f32>,
 }
 
 // ------------------------------------------------------------------ rooms (raw)
@@ -198,6 +188,9 @@ pub struct LayerToml {
     pub cell: Option<[u32; 2]>,
     pub legend: BTreeMap<String, toml::Value>,
     pub map: Option<String>,
+    /// Tile layers: rows of tile data separated by spaces (`-1` or `.` = empty), an
+    /// alternative to `legend` + `map` for big tile sets.
+    pub data: Option<String>,
     // instances
     pub instances: Vec<InstToml>,
 }
@@ -224,6 +217,7 @@ impl Default for LayerToml {
             cell: None,
             legend: BTreeMap::new(),
             map: None,
+            data: None,
             instances: vec![],
         }
     }
@@ -246,6 +240,7 @@ pub struct Project {
     pub sprites: Vec<Sprite>,
     pub sounds: Vec<SoundAsset>,
     pub fonts: Vec<FontAsset>,
+    pub tilesets: Vec<TileSetAsset>,
     pub rooms: Vec<(String, PathBuf, RoomToml)>,
     pub scripts: Vec<(String, String)>,
 }
@@ -326,16 +321,15 @@ impl Project {
         }
 
         let mut fonts = Vec::new();
-        for (name, path, is_toml) in asset_files(&dir.join("fonts"), &["ttf", "otf"]) {
-            let (file, size) = if is_toml {
-                let t: FontToml = read_toml(&path)?;
-                let f = t.file.ok_or_else(|| format!("{}: needs `file = \"font.ttf\"`", path.display()))?;
-                (path.parent().unwrap().join(f), t.size.unwrap_or(16.0))
-            } else {
-                (path.clone(), 16.0)
-            };
-            let data = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-            fonts.push(FontAsset { name, data, size });
+        let mut tilesets = Vec::new();
+        {
+            let find_sprite = |n: &str| sprites.iter().find(|s| s.name == n);
+            for (name, path, is_toml) in asset_files(&dir.join("fonts"), &["ttf", "otf"]) {
+                fonts.push(crate::font::load_font(&name, &path, is_toml, &find_sprite)?);
+            }
+            for (name, path, _) in asset_files(&dir.join("tilesets"), &[]) {
+                tilesets.push(crate::tileset::load_tileset(&name, &path, &find_sprite)?);
+            }
         }
 
         let mut rooms = Vec::new();
@@ -351,8 +345,10 @@ impl Project {
         let mut scripts = Vec::new();
         collect_scripts(dir, dir, &mut scripts)?;
         scripts.sort();
+        // extension libraries load first; disabled ones not at all
+        crate::extension::order_scripts(&mut scripts, &crate::extension::load_all(dir)?);
 
-        Ok(Project { dir: dir.to_path_buf(), config, sprites, sounds, fonts, rooms, scripts })
+        Ok(Project { dir: dir.to_path_buf(), config, sprites, sounds, fonts, tilesets, rooms, scripts })
     }
 }
 

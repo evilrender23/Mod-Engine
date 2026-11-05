@@ -1,0 +1,24 @@
+# Showcase S2 — paths, timelines, animation curves and sequences
+[game]
+name = "Showcase: trayectorias, timelines, curvas y secuencias"
+start_room = "main"
+
+[display]
+width = 320
+height = 180
+scale = 4
+step_rate = 60
+letterbox = "#1a1c2c"
+
+[palette]
+"k" = "#1a1c2c"
+"w" = "#f4f4f4"
+"r" = "#b13e53"
+"o" = "#ef7d57"
+"y" = "#ffcd75"
+"g" = "#a7f070"
+"G" = "#38b764"
+"b" = "#3b5dc9"
+"c" = "#41a6f6"
+"p" = "#5d275d"
+"s" = "#c2d3e8"

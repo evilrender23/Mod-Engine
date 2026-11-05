@@ -1,0 +1,5 @@
+# A sprite font: frame i of spr_digits is character i of `chars`
+sprite = "spr_digits"
+chars = "0123456789"
+proportional = true
+spacing = 1

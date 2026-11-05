@@ -22,6 +22,9 @@ struct LayerM {
     tiles: Vec<Vec<i32>>,
     /// Characters already used for each legend value, reused when saving.
     legend: Vec<(String, char)>,
+    /// Tile layer saved as `data` rows (tile set assets: any number of tiles, transform bits)
+    /// instead of `legend` + `map`.
+    data_fmt: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -144,11 +147,17 @@ impl LayerM {
 fn load_model(rt: RoomToml, project: &Project) -> RoomModel {
     let mut layers = Vec::new();
     for l in rt.layers {
-        let mut m = LayerM { cell: [16, 16], objs: vec![], tiles: vec![], legend: vec![], t: l.clone() };
+        let mut m = LayerM { cell: [16, 16], objs: vec![], tiles: vec![], legend: vec![], data_fmt: false, t: l.clone() };
         match l.kind.as_str() {
             "tiles" => {
+                let set = l.tileset.as_deref().and_then(|t| project.tileset(t));
                 let ts = l.tileset.as_deref().and_then(|t| project.sprite(t));
-                m.cell = l.cell.unwrap_or(ts.map(|s| [s.fw, s.fh]).unwrap_or([16, 16]));
+                m.data_fmt = set.is_some() || l.data.is_some();
+                let size = set.map(|s| [s.tile_w, s.tile_h]).or(ts.map(|s| [s.fw, s.fh]));
+                m.cell = l.cell.unwrap_or(size.unwrap_or([16, 16]));
+                if let Some(d) = &l.data {
+                    m.tiles = modengine::natives::tilemap::parse_data(d).unwrap_or_default();
+                }
                 let mut lookup: HashMap<char, i32> = HashMap::new();
                 for (k, v) in &l.legend {
                     if let (Some(c), Some(i)) = (k.chars().next(), v.as_integer()) {
@@ -157,7 +166,7 @@ fn load_model(rt: RoomToml, project: &Project) -> RoomModel {
                     }
                 }
                 if let Some(map) = &l.map {
-                    m.tiles = map_rows(map).iter().map(|row| row.chars().map(|c| *lookup.get(&c).unwrap_or(&-1)).collect()).collect();
+                    m.tiles.extend(map_rows(map).iter().map(|row| row.chars().map(|c| *lookup.get(&c).unwrap_or(&-1)).collect::<Vec<i32>>()));
                 }
             }
             _ => {
@@ -180,6 +189,7 @@ fn load_model(rt: RoomToml, project: &Project) -> RoomModel {
             }
         }
         m.t.map = None;
+        m.t.data = None;
         m.t.legend = BTreeMap::new();
         m.normalize();
         layers.push(m);
@@ -364,7 +374,13 @@ fn write_room(m: &RoomModel) -> String {
         if t.y != 0.0 {
             s += &format!("y = {}\n", num(t.y));
         }
-        if t.kind != "background" {
+        if t.kind == "tiles" && l.data_fmt {
+            s += &format!("cell = [{}, {}]\n", l.cell[0], l.cell[1]);
+            let data = modengine::natives::tilemap::write_data(&l.tiles);
+            if !data.is_empty() {
+                s += &format!("data = '''\n{data}\n'''\n");
+            }
+        } else if t.kind != "background" {
             s += &format!("cell = [{}, {}]\n", l.cell[0], l.cell[1]);
             if let Some((legend, map)) = map_text(l) {
                 s += &format!("legend = {legend}\nmap = '''\n{map}\n'''\n");
@@ -411,6 +427,9 @@ pub struct RoomEditor {
     pub(crate) tool: Tool,
     pub(crate) brush: Option<String>,
     brush_tile: i32,
+    /// Tile layers: stamp / auto tile brush and the palette drag in progress.
+    tbrush: crate::tileset::TileBrush,
+    tdrag: Option<u32>,
     snap: bool,
     show_grid: bool,
     show_view: bool,
@@ -424,6 +443,7 @@ pub struct RoomEditor {
     drafts: HashMap<String, String>,
     new_var: String,
     want_select: bool,
+    want_layer: Option<String>,
     palette_filter: String,
     /// Screen rectangle of the canvas in the last frame.
     pub(crate) canvas_rect: Rect,
@@ -457,6 +477,8 @@ impl RoomEditor {
             tool: Tool::Paint,
             brush: None,
             brush_tile: 0,
+            tbrush: Default::default(),
+            tdrag: None,
             snap: true,
             show_grid: true,
             show_view: true,
@@ -470,6 +492,7 @@ impl RoomEditor {
             drafts: HashMap::new(),
             new_var: String::new(),
             want_select: false,
+            want_layer: None,
             palette_filter: String::new(),
             canvas_rect: Rect::NOTHING,
         })
@@ -515,6 +538,9 @@ impl RoomEditor {
             self.layer = self.m.layers.iter().position(|l| l.kind() == "instances").unwrap_or(0);
             if std::mem::take(&mut self.want_select) {
                 self.auto_select();
+            }
+            if let Some(l) = self.want_layer.take() {
+                self.select_layer(&l);
             }
         }
         let before = self.m.clone();
@@ -570,11 +596,21 @@ impl RoomEditor {
                                 t.depth = 1000.0;
                                 t.color = Some("#29366f".into());
                             }
+                            let mut cell = [16, 16];
+                            let mut data_fmt = false;
                             if kind == "tiles" {
                                 t.depth = 100.0;
-                                t.tileset = cx.project.sprite_names().first().cloned();
+                                // a tile set if there is one, else (older style) a sprite's frames
+                                match cx.project.tilesets.iter().find_map(|s| s.data.as_ref().ok()) {
+                                    Some(ts) => {
+                                        t.tileset = Some(ts.name.clone());
+                                        cell = [ts.tile_w, ts.tile_h];
+                                        data_fmt = true;
+                                    }
+                                    None => t.tileset = cx.project.sprite_names().first().cloned(),
+                                }
                             }
-                            self.m.layers.push(LayerM { t, cell: [16, 16], objs: vec![], tiles: vec![], legend: vec![] });
+                            self.m.layers.push(LayerM { t, cell, objs: vec![], tiles: vec![], legend: vec![], data_fmt });
                             self.layer = self.m.layers.len() - 1;
                             ui.close();
                         }
@@ -669,8 +705,25 @@ impl RoomEditor {
                     ui.end_row();
                 }
                 if l.t.kind == "tiles" {
-                    ui.label("Tileset");
-                    sprite_combo(ui, "tileset", &mut l.t.tileset, &sprites, false);
+                    ui.label("Tile set");
+                    let sets: Vec<(String, [u32; 2])> = cx.project.tilesets.iter().filter_map(|s| s.data.as_ref().ok()).map(|s| (s.name.clone(), [s.tile_w, s.tile_h])).collect();
+                    let before = l.t.tileset.clone();
+                    egui::ComboBox::from_id_salt("tileset").selected_text(l.t.tileset.clone().unwrap_or_else(|| "(ninguno)".into())).show_ui(ui, |ui| {
+                        for (s, _) in &sets {
+                            ui.selectable_value(&mut l.t.tileset, Some(s.clone()), format!("▩ {s}"));
+                        }
+                        ui.separator();
+                        ui.label(RichText::new("frames de un sprite:").weak());
+                        for s in &sprites {
+                            ui.selectable_value(&mut l.t.tileset, Some(s.clone()), format!("▣ {s}"));
+                        }
+                    });
+                    if l.t.tileset != before {
+                        if let Some((_, size)) = sets.iter().find(|(s, _)| Some(s) == l.t.tileset.as_ref()) {
+                            l.cell = *size;
+                            l.data_fmt = true;
+                        }
+                    }
                     ui.end_row();
                 }
                 if l.t.kind == "background" {
@@ -820,9 +873,18 @@ impl RoomEditor {
                 ui.strong("Tiles");
                 let ts = self.m.layers[self.layer].t.tileset.clone();
                 let Some(ts) = ts else {
-                    ui.label("Elige un tileset en las propiedades de la capa.");
+                    ui.label("Elige un tile set en las propiedades de la capa.");
                     return;
                 };
+                // a tile set asset: its image with the grid, stamps, transforms and auto tiles
+                if let (Some(set), Some(t)) = (cx.project.tileset(&ts), cx.tex.get_tileset(ui.ctx(), cx.project, &ts)) {
+                    ui.label(RichText::new(format!("{} tiles de {ts}", set.count())).weak());
+                    if crate::tileset::palette_ui(ui, t.id, set, &mut self.tbrush, &mut self.tdrag) && matches!(self.tool, Tool::Erase | Tool::Pick | Tool::Select) {
+                        self.tool = Tool::Paint;
+                    }
+                    self.brush_tile = self.tbrush.at(0, 0);
+                    return;
+                }
                 let Some(t) = cx.tex.get(ui.ctx(), cx.project, &ts) else {
                     ui.label(format!("El sprite '{ts}' no se pudo cargar."));
                     return;
@@ -839,6 +901,7 @@ impl RoomEditor {
                             }
                             if resp.on_hover_text(format!("tile {f}")).clicked() {
                                 self.brush_tile = f as i32;
+                                self.tbrush = crate::tileset::TileBrush::single(f as i32);
                                 if matches!(self.tool, Tool::Erase | Tool::Pick | Tool::Select) {
                                     self.tool = Tool::Paint;
                                 }
@@ -867,6 +930,18 @@ impl RoomEditor {
             format!(", vars = {{ {} }}", v.join(", "))
         };
         Some(format!("# layer {}, instance {} of its instances list\n{{ object = {}, x = {}, y = {}{vars} }}", q(&l.t.name), self.sel? + 1, q(&i.object), num(i.x), num(i.y)))
+    }
+
+    /// Selects a layer by name (used by `--layer`), once the room is loaded.
+    pub fn select_layer(&mut self, name: &str) {
+        if self.loaded.is_some() {
+            self.want_layer = Some(name.to_string());
+            return;
+        }
+        if let Some(i) = self.m.layers.iter().position(|l| l.t.name == name) {
+            self.layer = i;
+            self.tool = Tool::Paint;
+        }
     }
 
     /// Selects the first free instance with the move tool (used by `--select`).
@@ -1075,14 +1150,22 @@ impl RoomEditor {
                     }
                 }
                 "tiles" => {
-                    if let Some(t) = l.t.tileset.as_deref().and_then(|s| cx.tex.get(ui.ctx(), project, s)) {
+                    let set = l.t.tileset.as_deref().and_then(|s| project.tileset(s));
+                    let time = ui.input(|i| i.time);
+                    if let Some(t) = l.t.tileset.as_deref().and_then(|s| cx.tex.get_tiles(ui.ctx(), project, s)) {
                         for (r, row) in l.tiles.iter().enumerate() {
                             for (c, &tile) in row.iter().enumerate() {
-                                if tile >= 0 && (tile as usize) < t.spr.frames.len() {
+                                let idx = modengine::tileset::index(tile);
+                                if idx >= 0 && (idx as usize) < t.spr.frames.len() {
                                     let p = off + Vec2::new(c as f32 * cw, r as f32 * ch);
-                                    painter.image(t.id, Rect::from_min_size(to_s(p), Vec2::new(cw, ch) * z), t.uv(tile as usize), tint);
+                                    // animated tiles move in the editor too
+                                    let frame = set.map(|s| s.frame_at(idx as u32, time)).unwrap_or(idx as u32);
+                                    crate::tileset::paint_tile(&painter, t.id, t.spr, tile, frame as usize, Rect::from_min_size(to_s(p), Vec2::new(cw, ch) * z), tint);
                                 }
                             }
+                        }
+                        if set.is_some_and(|s| !s.anims.is_empty()) {
+                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
                         }
                     }
                 }
@@ -1178,6 +1261,17 @@ impl RoomEditor {
         let (cw, ch) = (l.cell[0] as f32, l.cell[1] as f32);
         let off = Vec2::new(l.t.x as f32, l.t.y as f32);
         let tiles = l.t.kind == "tiles";
+        let autos = l.t.tileset.as_deref().and_then(|s| project.tileset(s)).map(|s| s.autotiles.clone()).unwrap_or_default();
+        let tb = self.tbrush.clone();
+        // X / Y / Z: mirror, flip and rotate the tile brush (as in GameMaker)
+        if tiles && cx.active && ui.memory(|m| m.focused().is_none()) {
+            let (x, y, zk) = ui.input(|i| (i.key_pressed(egui::Key::X), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::Z) && !i.modifiers.command));
+            for (pressed, bit) in [(x, modengine::tileset::MIRROR), (y, modengine::tileset::FLIP), (zk, modengine::tileset::ROTATE)] {
+                if pressed {
+                    self.tbrush.toggle(bit);
+                }
+            }
+        }
 
         if let Some(p) = pointer {
             let w = to_w(p);
@@ -1187,8 +1281,16 @@ impl RoomEditor {
                 // brush preview
                 if self.tool == Tool::Paint && !secondary {
                     if tiles {
-                        if let Some(t) = l.t.tileset.as_deref().and_then(|s| cx.tex.get(ui.ctx(), project, s)) {
-                            painter.image(t.id, Rect::from_min_max(to_s(cell_rect.min.to_vec2()), to_s(cell_rect.max.to_vec2())), t.uv(self.brush_tile.max(0) as usize), Color32::from_white_alpha(150));
+                        if let Some(t) = l.t.tileset.as_deref().and_then(|s| cx.tex.get_tiles(ui.ctx(), project, s)) {
+                            // the whole stamp, transformed, under the cursor
+                            let (bw, bh) = if self.tbrush.auto.is_some() { (1, 1) } else { self.tbrush.size() };
+                            for dr in 0..bh {
+                                for dc in 0..bw {
+                                    let d = if self.tbrush.auto.is_some() { self.brush_tile } else { self.tbrush.at(dc, dr) };
+                                    let r = Rect::from_min_size(to_s(cell_rect.min.to_vec2() + Vec2::new(dc as f32 * cw, dr as f32 * ch)), Vec2::new(cw, ch) * z);
+                                    crate::tileset::paint_tile(&painter, t.id, t.spr, d, modengine::tileset::index(d).max(0) as usize, r, Color32::from_white_alpha(150));
+                                }
+                            }
                         }
                     } else if let Some(b) = &self.brush {
                         let at = if self.snap { None } else { Some(Pos2::new(w.x.round(), w.y.round())) };
@@ -1239,7 +1341,7 @@ impl RoomEditor {
                 let layer = &mut self.m.layers[self.layer];
                 if secondary {
                     if tiles {
-                        layer.set_tile(cell.0, cell.1, -1);
+                        crate::tileset::erase(&mut layer.tiles, cell.0, cell.1, &tb, &autos);
                     } else {
                         layer.set_obj(cell.0, cell.1, vec![]);
                         let hit = hit_free_in(layer, project, w);
@@ -1251,7 +1353,7 @@ impl RoomEditor {
                 } else if primary {
                     match self.tool {
                         Tool::Paint if tiles => {
-                            layer.set_tile(cell.0, cell.1, self.brush_tile);
+                            crate::tileset::stamp(&mut layer.tiles, cell.0, cell.1, &tb, &autos);
                         }
                         Tool::Paint if self.snap => {
                             if let Some(b) = &self.brush {
@@ -1260,7 +1362,7 @@ impl RoomEditor {
                         }
                         Tool::Erase => {
                             if tiles {
-                                layer.set_tile(cell.0, cell.1, -1);
+                                crate::tileset::erase(&mut layer.tiles, cell.0, cell.1, &tb, &autos);
                             } else {
                                 layer.set_obj(cell.0, cell.1, vec![]);
                                 if let Some(i) = hit_free_in(layer, project, w) {
@@ -1288,10 +1390,13 @@ impl RoomEditor {
             if released {
                 if let Some(a) = self.rect_from.take() {
                     let layer = &mut self.m.layers[self.layer];
+                    if tiles {
+                        crate::tileset::fill_rect(&mut layer.tiles, a, cell, &tb, &autos);
+                    }
                     for r in a.1.min(cell.1)..=a.1.max(cell.1) {
                         for c in a.0.min(cell.0)..=a.0.max(cell.0) {
                             if tiles {
-                                layer.set_tile(c, r, self.brush_tile);
+                                continue;
                             } else if let Some(b) = &self.brush {
                                 layer.set_obj(c, r, vec![b.clone()]);
                             }
@@ -1342,7 +1447,7 @@ impl RoomEditor {
     }
 
     fn fill(&mut self, cell: (i32, i32)) {
-        let brush_tile = self.brush_tile;
+        let brush_tile = self.tbrush.at(0, 0);
         let brush = self.brush.clone();
         let layer = &mut self.m.layers[self.layer];
         let tiles = layer.kind() == "tiles";
@@ -1382,7 +1487,10 @@ impl RoomEditor {
         if layer.kind() == "tiles" {
             let t = layer.get_tile(cell.0, cell.1);
             if t >= 0 {
+                // the tile and its transform become the brush
                 self.brush_tile = t;
+                let bits = modengine::tileset::MIRROR | modengine::tileset::FLIP | modengine::tileset::ROTATE;
+                self.tbrush = crate::tileset::TileBrush { tiles: vec![vec![modengine::tileset::index(t)]], flags: t & bits, auto: None };
                 self.tool = Tool::Paint;
             }
         } else if let Some(i) = hit_free_in(layer, p, w) {
@@ -1645,6 +1753,62 @@ pub(crate) mod tests {
         assert_eq!(ed.undo.len(), 1);
         h.state_mut().ed.undo();
         assert_eq!(kinds(&h), ["background", "background", "instances"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn paint_with_a_tile_set_stamp_and_save_as_data() {
+        let (dir, mut project) = crate::tileset::tests::project_with_sheet("room_ts");
+        crate::tileset::create(&mut project, "ts_x", "spr_sheet").unwrap();
+        let path = dir.join("rooms/tiled.toml");
+        std::fs::write(&path, "width = 160\nheight = 96\n\n[[layer]]\nname = \"T\"\ntype = \"tiles\"\ntileset = \"ts_x\"\ndata = '''\n.\n'''\n").unwrap();
+        project.reload_lists();
+        let ed = RoomEditor::open("tiled", &path).unwrap();
+        let st = St { ed, project, tex: TexCache::default(), log: vec![], open: vec![] };
+        let mut h = Harness::builder().with_size([1300.0, 820.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut St| {
+                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+                s.ed.ui(ui, &mut cx);
+            },
+            st,
+        );
+        h.run_steps(3);
+        {
+            let s = h.state_mut();
+            assert_eq!(s.ed.m.layers[0].cell, [16, 16], "cells follow the tile set");
+            assert!(s.ed.m.layers[0].data_fmt);
+            s.ed.layer = 0;
+            s.ed.tool = Tool::Paint;
+            // a 2×1 stamp, mirrored: it lands as [2, 1], both with the mirror bit
+            s.ed.tbrush = crate::tileset::TileBrush { tiles: vec![vec![1, 2]], flags: modengine::tileset::MIRROR, auto: None };
+        }
+        let a = h.state().ed.screen_of(3.0 * 16.0 + 8.0, 2.0 * 16.0 + 8.0);
+        press(&h, a, PointerButton::Primary, true);
+        h.run_steps(2);
+        press(&h, a, PointerButton::Primary, false);
+        h.run_steps(2);
+        let m = modengine::tileset::MIRROR;
+        {
+            let l = &h.state().ed.m.layers[0];
+            assert_eq!((l.get_tile(3, 2), l.get_tile(4, 2)), (2 | m, 1 | m));
+            assert_eq!(h.state().ed.undo.len(), 1);
+        }
+        {
+            let s = h.state_mut();
+            let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+            s.ed.save(&mut cx).unwrap();
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("data = '''") && !text.contains("legend"), "{text}");
+        let e = modengine::Engine::load(&dir).unwrap();
+        let r = e.rooms.iter().find(|r| r.name == "tiled").unwrap();
+        match &r.layers[0].kind {
+            modengine::engine::LayerKind::Tiles { grid, set, .. } => {
+                assert_eq!(*set, Some(0));
+                assert_eq!(grid[2][3..5], [2 | m, 1 | m]);
+            }
+            _ => panic!("not a tile layer"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

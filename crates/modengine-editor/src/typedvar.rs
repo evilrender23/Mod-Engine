@@ -184,6 +184,13 @@ pub fn asset_names(p: &Project, k: AssetKind) -> Vec<String> {
         AssetKind::Sound => p.sounds.iter().map(|s| s.name.clone()).collect(),
         AssetKind::Room => p.room_names(),
         AssetKind::Font => p.fonts.iter().map(|s| s.name.clone()).collect(),
+        AssetKind::Path => p.motion.names(crate::motion::AnimKind::Path),
+        AssetKind::Timeline => p.motion.names(crate::motion::AnimKind::Timeline),
+        AssetKind::AnimCurve => p.motion.names(crate::motion::AnimKind::Curve),
+        AssetKind::Sequence => p.motion.names(crate::motion::AnimKind::Sequence),
+        AssetKind::TileSet => p.tilesets.iter().map(|s| s.name.clone()).collect(),
+        AssetKind::ParticleSystem => p.fx.names(crate::fx::FxKind::Particles),
+        AssetKind::Shader => p.fx.names(crate::fx::FxKind::Shader),
     }
 }
 

@@ -1,0 +1,40 @@
+# A one-shot explosion (used with part_particles_burst).
+[[type]]
+name = "ring"
+shape = "ring"
+size = [0.1, 0.1]
+size_incr = 0.04
+colors = ["#a7f070", "#38b764"]
+alphas = [1.0, 0.0]
+additive = true
+life = 25
+speed = 0
+
+[[type]]
+name = "bit"
+shape = "star"
+size = [0.08, 0.16]
+speed = [1, 3]
+speed_incr = -0.04
+direction = [0, 360]
+orientation = [0, 360]
+orientation_incr = 5
+colors = ["#a7f070", "#41a6f6"]
+color_mode = "mix"
+alphas = [1.0, 0.0]
+life = [30, 50]
+
+[[emitter]]
+name = "ring"
+type = "ring"
+region = [0, 0, 0, 0]
+mode = "burst"
+count = 1
+
+[[emitter]]
+name = "bits"
+type = "bit"
+shape = "ellipse"
+region = [-4, -4, 4, 4]
+mode = "burst"
+count = 24

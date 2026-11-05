@@ -35,6 +35,14 @@ pub enum DrawCmd {
     Line { x1: f32, y1: f32, x2: f32, y2: f32, width: f32, color: Rgba },
     Tri { pts: [f32; 6], color: Rgba, outline: bool },
     Text { x: f32, y: f32, text: String, font: Option<u32>, scale: f32, color: Rgba, halign: u8, valign: u8 },
+    /// Following commands use this shader (None = the default one). See `shader.rs`.
+    Shader(Option<u32>),
+    /// Sets uniform `name` of a shader (floats, or ints for int uniforms).
+    Uniform { shader: u32, name: String, vals: Vec<f32> },
+    /// Binds sprite `spr`'s texture to sampler uniform `name` of a shader.
+    Sampler { shader: u32, name: String, spr: u32 },
+    /// Blend mode of following commands: 0 normal, 1 add, 2 subtract, 3 max.
+    Blend(u8),
 }
 
 /// Current drawing settings (`set_color`, `set_alpha`, `set_font`, `set_align`).

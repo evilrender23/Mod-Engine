@@ -139,6 +139,11 @@ pub fn default_size(open: &Open) -> Vec2 {
         Open::Sound(_) => Vec2::new(440.0, 420.0),
         Open::Script(_) => Vec2::new(600.0, 400.0),
         Open::Settings => Vec2::new(560.0, 500.0),
+        Open::Anim(k, _) => crate::motion::AnimTab::window_size(*k),
+        Open::Fx(k, _) => crate::fx::window_size(*k),
+        Open::Font(_) => Vec2::new(900.0, 560.0),
+        Open::Note(_) => Vec2::new(720.0, 480.0),
+        Open::TileSet(_) => Vec2::new(960.0, 600.0),
     }
 }
 

@@ -32,7 +32,10 @@ pub enum LayerKind {
         oy: f64,
     },
     Tiles {
+        /// Sprite whose frames are the tiles.
         tileset: u32,
+        /// Tile set asset (animated tiles, `tilemap_get_tileset`); None for a plain sprite.
+        set: Option<u32>,
         cw: u32,
         ch: u32,
         grid: Vec<Vec<i32>>,
@@ -120,17 +123,24 @@ pub struct Engine {
     pub sprites: Vec<Sprite>,
     pub sounds: Vec<SoundAsset>,
     pub fonts: Vec<FontAsset>,
+    pub tilesets: Vec<crate::tileset::TileSetAsset>,
+    pub paths: Vec<crate::path::PathDef>,
+    pub timelines: Vec<crate::timeline::TimelineDef>,
+    pub curves: Vec<crate::animcurve::AnimCurve>,
+    pub sequences: Vec<crate::sequence::SequenceDef>,
+    /// Sequences playing in the current room.
+    pub seqs: crate::sequence::SeqRuntime,
     pub objects: Vec<ObjectDef>,
     pub rooms: Vec<RoomDef>,
     pub room_order: Vec<usize>,
     pub start_room: usize,
-    assets: HashMap<Sym, Value>,
-    functions: HashMap<Sym, Rc<FuncDef>>,
+    pub(crate) assets: HashMap<Sym, Value>,
+    pub(crate) functions: HashMap<Sym, Rc<FuncDef>>,
     pub(crate) natives: HashMap<Sym, NativeFn>,
-    consts: HashMap<Sym, Value>,
+    pub(crate) consts: HashMap<Sym, Value>,
     bv: Vec<Option<Bv>>,
     dyn_syms: DynSyms,
-    init_code: Vec<(Rc<str>, Rc<Vec<Stmt>>)>,
+    pub(crate) init_code: Vec<(Rc<str>, Rc<Vec<Stmt>>)>,
     startup_code: Option<Rc<Vec<Stmt>>>,
 
     pub globals: HashMap<Sym, Value>,
@@ -165,6 +175,12 @@ pub struct Engine {
     pub debug: bool,
     /// Text measuring provided by the backend: (font, text, scale) -> (w, h).
     pub measure: MeasureFn,
+    /// Particle systems (see `effects.rs`).
+    pub parts: crate::effects::EngineParts,
+    /// Shaders and the blend mode.
+    pub shaders: crate::shader::Shaders,
+    /// `extensions/` of the project.
+    pub extensions: Vec<crate::extension::Extension>,
 }
 
 fn overlap(a: [f64; 4], b: [f64; 4]) -> bool {
@@ -198,8 +214,15 @@ impl Engine {
         for (i, f) in p.fonts.iter().enumerate() {
             register(&f.name, Value::Asset(AssetKind::Font, i as u32), &mut errors);
         }
+        for (i, t) in p.tilesets.iter().enumerate() {
+            register(&t.name, Value::Asset(AssetKind::TileSet, i as u32), &mut errors);
+        }
         for (i, (name, _, _)) in p.rooms.iter().enumerate() {
             register(name, Value::Asset(AssetKind::Room, i as u32), &mut errors);
+        }
+        let motion = crate::anim_assets::load(&p.dir, &mut errors);
+        for (name, v) in crate::anim_assets::names(&motion) {
+            register(&name, v, &mut errors);
         }
 
         // ---- scripts
@@ -264,6 +287,12 @@ impl Engine {
             sprites: p.sprites,
             sounds: p.sounds,
             fonts: p.fonts,
+            tilesets: vec![],
+            paths: motion.paths,
+            timelines: motion.timelines,
+            curves: motion.curves,
+            sequences: vec![],
+            seqs: Default::default(),
             objects,
             rooms: vec![],
             room_order: vec![],
@@ -322,7 +351,21 @@ impl Engine {
                 let longest = text.split('\n').map(|l| l.chars().count()).max().unwrap_or(0) as f32;
                 (longest * 8.0 * scale, lines * 16.0 * scale)
             }),
+            parts: Default::default(),
+            shaders: Default::default(),
+            extensions: vec![],
         };
+        // particle systems, shaders and extensions
+        crate::effects::link(&mut e, &mut errors);
+        // fonts measure with their baked atlases, also without a window
+        e.measure = crate::font::headless_measure(&e.fonts);
+        // tile sets: their tiles become frames of a sprite drawn like any other
+        for mut t in p.tilesets {
+            t.sprite_index = e.sprites.len() as u32;
+            let s = t.take_sprite();
+            e.sprites.push(s);
+            e.tilesets.push(t);
+        }
 
         // ---- objects: parents, events
         for (i, d) in decls.into_iter().enumerate() {
@@ -410,6 +453,8 @@ impl Engine {
                 }
             }
         }
+
+        crate::anim_assets::resolve_sequences(&mut e, motion.sequences, &mut errors);
 
         // ---- rooms
         for (name, path, rt) in &p.rooms {
@@ -536,12 +581,24 @@ impl Engine {
                     oy: l.y,
                 },
                 "tiles" => {
-                    let ts = l.tileset.as_deref().ok_or("tile layers need `tileset = \"sprite\"`")?;
-                    let tileset = self.sprite_by_name(ts)?;
+                    let ts = l.tileset.as_deref().ok_or("tile layers need `tileset = \"tile set or sprite\"`")?;
+                    // a tile set asset, or (older projects) a sprite whose frames are the tiles
+                    let set = self.tilesets.iter().position(|t| t.name == ts).map(|i| i as u32);
+                    let tileset = match set {
+                        Some(i) => self.tilesets[i as usize].sprite_index,
+                        None => self.sprite_by_name(ts).map_err(|_| format!("tile set or sprite '{ts}' does not exist"))?,
+                    };
                     let spr = &self.sprites[tileset as usize];
                     let [cw, ch] = l.cell.unwrap_or([spr.fw, spr.fh]);
-                    let map = l.map.as_deref().ok_or("tile layers need a `map`")?;
                     let mut grid = Vec::new();
+                    if let Some(data) = &l.data {
+                        grid = crate::natives::tilemap::parse_data(data).map_err(|e| format!("layer '{lname}': {e}"))?;
+                    }
+                    let map = match (&l.map, &l.data) {
+                        (Some(m), _) => m.as_str(),
+                        (None, Some(_)) => "",
+                        (None, None) => return Err("tile layers need a `map` or `data`".into()),
+                    };
                     for row in map_rows(map) {
                         let mut r = Vec::new();
                         for c in row.chars() {
@@ -557,7 +614,7 @@ impl Engine {
                     }
                     max_w = max_w.max(grid.iter().map(|r| r.len()).max().unwrap_or(0) as f64 * cw as f64 + l.x);
                     max_h = max_h.max(grid.len() as f64 * ch as f64 + l.y);
-                    LayerKind::Tiles { tileset, cw, ch, grid, ox: l.x, oy: l.y }
+                    LayerKind::Tiles { tileset, set, cw, ch, grid, ox: l.x, oy: l.y }
                 }
                 "instances" => {
                     for it in &l.instances {
@@ -668,6 +725,7 @@ impl Engine {
     pub fn shutdown(&mut self) {
         let ids = self.ids();
         self.dispatch(&ids, Ev::GameEnd);
+        self.extensions_final();
     }
 
     pub fn step_rate(&self) -> f64 {
@@ -723,6 +781,7 @@ impl Engine {
     fn leave_room(&mut self) {
         let ids = self.ids();
         self.dispatch(&ids, Ev::RoomEnd);
+        self.seqs.list.clear();
         let all = std::mem::take(&mut self.insts);
         let (keep, gone): (Vec<Instance>, Vec<Instance>) = all.into_iter().filter(|i| i.alive).partition(|i| i.persistent);
         if self.rooms[self.room].persistent {
@@ -736,6 +795,9 @@ impl Engine {
         self.audio.push(AudioCmd::StopAll);
         self.insts.clear();
         self.index.clear();
+        self.seqs.list.clear();
+        self.parts.world.types.clear();
+        self.parts.world.systems.clear();
         self.globals.clear();
         self.saved_rooms.clear();
         self.start();
@@ -976,13 +1038,17 @@ impl Engine {
         let ids = self.ids();
 
         self.dispatch(&ids, Ev::StepBegin);
+        crate::timeline::step(self, &ids);
         self.alarms(&ids);
         self.input_events(&ids);
         self.dispatch(&ids, Ev::Step);
         self.motion();
+        crate::anim_assets::step_paths(self, &ids);
         self.collisions(&ids);
         self.bounds(&ids);
         self.dispatch(&ids, Ev::StepEnd);
+        crate::sequence::step(self);
+        self.step_particles();
 
         for l in &mut self.layers {
             if let LayerKind::Background { hspeed, vspeed, ox, oy, .. } = &mut l.kind {
@@ -1199,6 +1265,9 @@ impl Engine {
     pub fn render(&mut self) {
         self.cmds.clear();
         self.draw = DrawState::default();
+        // the backend starts every frame with the default shader and blend mode
+        self.shaders.current = None;
+        self.shaders.blend = 0;
         let (mut vx, mut vy) = (self.cam.x, self.cam.y);
         if self.cam.shake_steps > 0 {
             vx += (natives::rand01(&mut self.rng) * 2.0 - 1.0) * self.cam.shake;
@@ -1224,6 +1293,8 @@ impl Engine {
         enum Item {
             Layer(usize),
             Inst(u32),
+            Seq(u32),
+            Parts(usize),
         }
         let mut items: Vec<(f64, Item)> = Vec::new();
         for (li, l) in self.layers.iter().enumerate() {
@@ -1234,10 +1305,18 @@ impl Engine {
         for o in &order {
             items.push((o.0, Item::Inst(o.2)));
         }
+        for s in &self.seqs.list {
+            items.push((s.depth, Item::Seq(s.id)));
+        }
+        for (d, ps) in self.particle_draw_items() {
+            items.push((d, Item::Parts(ps)));
+        }
         items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         for (_, item) in items {
             match item {
                 Item::Layer(li) => self.draw_layer(li, vx, vy),
+                Item::Seq(id) => crate::sequence::draw(self, id),
+                Item::Parts(ps) => self.draw_particles(ps),
                 Item::Inst(id) => {
                     let Some(i) = self.idx(id) else { continue };
                     if !self.insts[i].alive || !self.insts[i].visible {
@@ -1303,6 +1382,11 @@ impl Engine {
     fn draw_layer(&mut self, li: usize, vx: f64, vy: f64) {
         let (vw, vh) = (self.cam.w, self.cam.h);
         let alpha = self.layers[li].alpha;
+        // tile layers draw straight from the grid (no per-frame copy of the map)
+        if let LayerKind::Tiles { ox, oy, .. } = self.layers[li].kind {
+            let col = Rgba::from_rgb(0xFFFFFF, alpha);
+            return crate::natives::tilemap::draw_tiles(self, li, ox, oy, (vx, vy, vw, vh), col);
+        }
         match self.layers[li].kind.clone() {
             LayerKind::Background { sprite, color, tile_x, tile_y, stretch, parallax, ox, oy, .. } => {
                 if let Some(c) = color {
@@ -1353,34 +1437,7 @@ impl Engine {
                     }
                 }
             }
-            LayerKind::Tiles { tileset, cw, ch, grid, ox, oy } => {
-                let spr = &self.sprites[tileset as usize];
-                let (gx, gy) = spr.origin;
-                let nframes = spr.frames.len() as i32;
-                let (cw, ch) = (cw as f64, ch as f64);
-                let c0 = ((vx - ox) / cw).floor().max(0.0) as usize;
-                let r0 = ((vy - oy) / ch).floor().max(0.0) as usize;
-                let c1 = ((vx + vw - ox) / cw).ceil().max(0.0) as usize;
-                let r1 = ((vy + vh - oy) / ch).ceil().max(0.0) as usize;
-                let col = Rgba::from_rgb(0xFFFFFF, alpha);
-                for (r, row) in grid.iter().enumerate().take(r1 + 1).skip(r0) {
-                    for (c, &t) in row.iter().enumerate().take(c1 + 1).skip(c0) {
-                        if t < 0 || t >= nframes {
-                            continue;
-                        }
-                        self.cmds.push(DrawCmd::Sprite {
-                            spr: tileset,
-                            frame: t as u32,
-                            x: (ox + c as f64 * cw + gx) as f32,
-                            y: (oy + r as f64 * ch + gy) as f32,
-                            sx: 1.0,
-                            sy: 1.0,
-                            angle: 0.0,
-                            color: col,
-                        });
-                    }
-                }
-            }
+            LayerKind::Tiles { .. } => {}
             LayerKind::Instances => {}
         }
     }
@@ -1440,6 +1497,8 @@ impl Engine {
             }
             Bv::SpriteWidth => n(inst.sprite.map(|s| self.sprites[s as usize].fw as f64 * inst.scale_x.abs()).unwrap_or(0.0)),
             Bv::SpriteHeight => n(inst.sprite.map(|s| self.sprites[s as usize].fh as f64 * inst.scale_y.abs()).unwrap_or(0.0)),
+            Bv::Path(v) => crate::path::get_var(inst, v),
+            Bv::Timeline(v) => crate::timeline::get_var(inst, v),
         }
     }
 
@@ -1490,6 +1549,8 @@ impl Engine {
                 Value::Array(a) => inst.alarms = a,
                 _ => return Err(RtError::new("alarm must stay an array; use alarm[0] = steps")),
             },
+            Bv::Path(pv) => return crate::path::set_var(inst, pv, v),
+            Bv::Timeline(tv) => return crate::timeline::set_var(inst, tv, v),
             _ => return Err(RtError::new(format!("'{name}' is read-only"))),
         }
         Ok(())
@@ -1504,6 +1565,10 @@ impl Engine {
             AssetKind::Sound => self.sounds[i as usize].name.clone(),
             AssetKind::Room => self.rooms[i as usize].name.clone(),
             AssetKind::Font => self.fonts[i as usize].name.clone(),
+            AssetKind::TileSet => self.tilesets[i as usize].name.clone(),
+            AssetKind::Path | AssetKind::Timeline | AssetKind::AnimCurve | AssetKind::Sequence => crate::anim_assets::asset_name(self, kind, i),
+            AssetKind::ParticleSystem => self.parts.world.assets[i as usize].0.clone(),
+            AssetKind::Shader => self.shaders.list[i as usize].name.clone(),
         }
     }
 

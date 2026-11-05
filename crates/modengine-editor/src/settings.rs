@@ -10,6 +10,9 @@ pub struct SettingsEditor {
     game: GameToml,
     pub dirty: bool,
     new_char: String,
+    /// [`crate::palette::generation`] seen last: a palette applied from the Paletas
+    /// dialog reloads the form when it has no unsaved changes.
+    pal_gen: u64,
 }
 
 pub fn write_game_toml(g: &GameToml) -> String {
@@ -43,7 +46,7 @@ pub fn write_game_toml(g: &GameToml) -> String {
 
 impl SettingsEditor {
     pub fn new(p: &crate::project::Project) -> Self {
-        SettingsEditor { game: p.game.clone(), dirty: false, new_char: String::new() }
+        SettingsEditor { game: p.game.clone(), dirty: false, new_char: String::new(), pal_gen: crate::palette::generation() }
     }
 
     pub fn save(&mut self, cx: &mut Cx) -> Result<(), String> {
@@ -57,6 +60,12 @@ impl SettingsEditor {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        if self.pal_gen != crate::palette::generation() {
+            self.pal_gen = crate::palette::generation();
+            if !self.dirty {
+                self.game = cx.project.game.clone();
+            }
+        }
         let before = format!("{:?}", self.game);
         let rooms = cx.project.room_names();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -151,6 +160,15 @@ impl SettingsEditor {
             ui.add_space(8.0);
             ui.heading("Paleta compartida");
             ui.label(RichText::new("Caracteres que pueden usar todos los sprites de pixel art.").weak());
+            ui.horizontal(|ui| {
+                if ui.button("🎨 Paletas (Lospec)…").on_hover_text("Descargar o importar una paleta (Pear36 por defecto) y aplicarla al proyecto").clicked() {
+                    crate::palette::open_dialog();
+                }
+                let cols: Vec<u32> = modengine::palette::ordered(&self.game.palette).into_iter().map(|(_, c)| c).collect();
+                if !cols.is_empty() {
+                    crate::palette::strip(ui, &cols, 240.0, 14.0);
+                }
+            });
             let mut remove = None;
             let keys: Vec<String> = self.game.palette.keys().cloned().collect();
             egui::Grid::new("palette_grid").num_columns(3).show(ui, |ui| {

@@ -1,0 +1,4 @@
+[[channel]]
+name = "t"
+type = "bezier"
+points = [[0, 0, 0, 0, 0.42, 0], [1, 1, -0.42, 0, 0, 0]]
