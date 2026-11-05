@@ -1,5 +1,7 @@
 //! Mod Engine visual editor (`modeditor [project]`).
 
+mod agent;
+mod agent_panel;
 mod app;
 mod highlight;
 mod object;
@@ -49,6 +51,7 @@ fn main() -> eframe::Result {
             "--screenshot" => auto.screenshot = args.next().map(std::path::PathBuf::from),
             "--select" => auto.select = true,
             "--fit" => auto.fit = true,
+            "--agent" => auto.agent = true,
             _ => path = Some(std::path::PathBuf::from(a)),
         }
     }

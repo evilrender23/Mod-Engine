@@ -55,6 +55,19 @@ pub struct Project {
     pub scripts: Vec<Script>,
     pub objects: Vec<ObjEntry>,
     gen: u64,
+    /// game.toml as last read, to notice when something else changes it.
+    game_text: String,
+}
+
+/// What [`Project::sync_from_disk`] found.
+#[derive(Default, Debug, PartialEq)]
+pub struct Synced {
+    /// Scripts reloaded, added or removed (relative paths).
+    pub scripts: Vec<String>,
+    /// Scripts changed on disk while they had unsaved edits here: the edits are kept.
+    pub conflicts: Vec<String>,
+    /// game.toml changed and was read again.
+    pub game: bool,
 }
 
 fn entries(dir: &Path, exts: &[&str]) -> Vec<FileEntry> {
@@ -80,6 +93,7 @@ impl Project {
             scripts: vec![],
             objects: vec![],
             gen: 0,
+            game_text: text,
         };
         p.reload_sprites();
         let mut raw = Vec::new();
@@ -91,6 +105,71 @@ impl Project {
             .collect();
         p.rescan_objects();
         Ok(p)
+    }
+
+    /// Picks up changes another program (the Agente panel's CLI, git, a text editor) made to the
+    /// scripts and game.toml. Scripts with unsaved edits keep them; their saved copy becomes the
+    /// file's, so saving overwrites it and reverting gets it. Lists and sprites are reloaded by
+    /// [`Project::reload_lists`].
+    pub fn sync_from_disk(&mut self) -> Synced {
+        let mut out = Synced::default();
+        let mut raw = Vec::new();
+        let dir = self.dir.clone();
+        if collect_scripts(&dir, &dir, &mut raw).is_err() {
+            return out;
+        }
+        raw.sort();
+        let on_disk: BTreeSet<String> = raw.iter().map(|(r, _)| r.clone()).collect();
+        for (rel, text) in raw {
+            match self.script_index(&rel) {
+                Some(i) if self.scripts[i].saved == text => {}
+                Some(i) => {
+                    let s = &mut self.scripts[i];
+                    if s.dirty() && s.text != text {
+                        out.conflicts.push(rel);
+                        s.saved = text;
+                    } else {
+                        s.saved = text.clone();
+                        s.text = text;
+                        s.rev += 1;
+                        out.scripts.push(rel);
+                    }
+                }
+                None => {
+                    self.scripts.push(Script { path: dir.join(&rel), rel: rel.clone(), saved: text.clone(), text, rev: 1 });
+                    out.scripts.push(rel);
+                }
+            }
+        }
+        // Deleted on disk (unless they have unsaved edits, such as a script not saved yet).
+        let before = self.scripts.len();
+        let mut gone = vec![];
+        self.scripts.retain(|s| {
+            let keep = on_disk.contains(&s.rel) || s.dirty();
+            if !keep {
+                gone.push(s.rel.clone());
+            }
+            keep
+        });
+        out.scripts.extend(gone);
+        if !out.scripts.is_empty() || self.scripts.len() != before {
+            self.scripts.sort_by(|a, b| a.rel.cmp(&b.rel));
+            self.rescan_objects();
+        }
+        if let Ok(text) = fs::read_to_string(dir.join("game.toml")) {
+            if text != self.game_text {
+                match toml::from_str::<GameToml>(&text) {
+                    Ok(g) => {
+                        self.game = g;
+                        self.game_error = None;
+                    }
+                    Err(e) => self.game_error = Some(e.to_string()),
+                }
+                self.game_text = text;
+                out.game = true;
+            }
+        }
+        out
     }
 
     pub fn reload_sprites(&mut self) {
@@ -223,5 +302,48 @@ impl Project {
             n += 1;
         }
         fs::rename(path, &target).map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_from_disk_keeps_unsaved_edits() {
+        let dir = crate::room::tests::temp_project("sync");
+        let mut p = Project::open(&dir).unwrap();
+        let coin = p.script_index("objects/world.ms").unwrap();
+        let other = (0..p.scripts.len()).find(|&i| i != coin).unwrap();
+        let other_rel = p.scripts[other].rel.clone();
+        // The user is editing one script; the agent changes both, adds one and edits game.toml.
+        let mine = format!("{}// mine\n", p.scripts[other].text);
+        p.set_script_text(other, mine.clone());
+        let coin_new = format!("{}// agent\n", p.scripts[coin].text);
+        fs::write(dir.join("objects/world.ms"), &coin_new).unwrap();
+        fs::write(dir.join(&other_rel), "// agent rewrote it\n").unwrap();
+        fs::write(dir.join("objects/Bat.ms"), "object Bat {\n}\n").unwrap();
+        let game = fs::read_to_string(dir.join("game.toml")).unwrap().replace("Coin Climber", "Bat Climber");
+        fs::write(dir.join("game.toml"), game).unwrap();
+
+        let s = p.sync_from_disk();
+        assert_eq!(s.conflicts, vec![other_rel.clone()]);
+        assert!(s.scripts.contains(&"objects/world.ms".to_string()) && s.scripts.contains(&"objects/Bat.ms".to_string()));
+        assert!(s.game);
+        assert_eq!(p.game.game.name, "Bat Climber");
+        let coin = p.script_index("objects/world.ms").unwrap();
+        assert_eq!(p.scripts[coin].text, coin_new);
+        assert!(!p.scripts[coin].dirty());
+        let other = p.script_index(&other_rel).unwrap();
+        assert_eq!(p.scripts[other].text, mine);
+        assert_eq!(p.scripts[other].saved, "// agent rewrote it\n");
+        assert!(p.object("Bat").is_some());
+
+        // Nothing changed: nothing to report. A deleted file goes away.
+        assert_eq!(p.sync_from_disk(), Synced::default());
+        fs::remove_file(dir.join("objects/Bat.ms")).unwrap();
+        assert_eq!(p.sync_from_disk().scripts, vec!["objects/Bat.ms".to_string()]);
+        assert!(p.object("Bat").is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

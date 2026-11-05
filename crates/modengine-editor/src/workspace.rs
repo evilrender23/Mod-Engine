@@ -588,6 +588,9 @@ pub struct LayoutFile {
     pub active: usize,
     /// Inspector, asset browser, output.
     pub docks: [bool; 3],
+    /// The Agente dock (absent in layouts saved before it existed).
+    #[serde(default)]
+    pub agent: bool,
     #[serde(default, rename = "workspace")]
     pub workspaces: Vec<WsFile>,
 }
@@ -618,11 +621,13 @@ pub struct WinFile {
 }
 
 impl Workspaces {
-    pub fn to_file(&self, dir: &str, docks: [bool; 3]) -> LayoutFile {
+    /// `docks`: inspector, asset browser, output, agent.
+    pub fn to_file(&self, dir: &str, docks: [bool; 4]) -> LayoutFile {
         LayoutFile {
             dir: dir.into(),
             active: self.active,
-            docks,
+            docks: [docks[0], docks[1], docks[2]],
+            agent: docks[3],
             workspaces: self
                 .list
                 .iter()
@@ -739,10 +744,14 @@ mod tests {
         s.add_workspace();
         s.add(tab("c.ms"), None);
         s.list[0].zoom = 0.75;
-        let f = s.to_file("/p", [true, false, true]);
+        let f = s.to_file("/p", [true, false, true, true]);
         let text = toml::to_string(&f).unwrap();
         let back: LayoutFile = toml::from_str(&text).unwrap();
         assert_eq!(back, f);
+        assert!(back.agent);
+        // Layouts saved before the Agente dock still load, with it hidden.
+        let old: LayoutFile = toml::from_str(&text.replace("agent = true\n", "")).unwrap();
+        assert!(!old.agent && old.docks == [true, false, true]);
         let r = Workspaces::from_file(&back, |o| match o {
             Open::Script(rel) if rel != "c.ms" => Some(tab(rel)),
             _ => None, // c.ms was deleted: its window is skipped

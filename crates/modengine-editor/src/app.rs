@@ -79,6 +79,8 @@ pub struct Auto {
     pub select: bool,
     /// Zoom the workspace out so every opened window is visible.
     pub fit: bool,
+    /// Show the Agente dock.
+    pub agent: bool,
     frames: u32,
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -265,8 +267,12 @@ struct Start {
 pub struct EditorApp {
     project: Option<Project>,
     ws: Workspaces,
-    /// Inspector, asset browser and output docks shown.
-    docks: [bool; 3],
+    /// Inspector, asset browser, output and agent docks shown.
+    docks: [bool; 4],
+    agent: crate::agent_panel::AgentPanel,
+    /// Modification times of the project files when the agent last started or the project was
+    /// last reloaded, to tell which open editors to reload.
+    stamps: HashMap<PathBuf, std::time::SystemTime>,
     /// Asset selected in the browser (shown in the inspector).
     selected: Option<Open>,
     tex: TexCache,
@@ -316,7 +322,9 @@ impl EditorApp {
         let mut app = EditorApp {
             project: None,
             ws: Workspaces::default(),
-            docks: [true; 3],
+            docks: [true, true, true, auto.agent],
+            agent: crate::agent_panel::AgentPanel::with_config(crate::agent_panel::config_path()),
+            stamps: HashMap::new(),
             selected: None,
             tex: TexCache::default(),
             log: vec![],
@@ -350,6 +358,7 @@ impl EditorApp {
             Ok(p) => {
                 remember_recent(path);
                 self.save_layout();
+                self.agent.close_project();
                 self.ws = Workspaces::default();
                 self.selected = None;
                 self.tex = TexCache::default();
@@ -417,7 +426,7 @@ impl EditorApp {
             return;
         };
         self.ws = Workspaces::from_file(&f, |o| make_tab(p, o).ok());
-        self.docks = f.docks;
+        self.docks = [f.docks[0], f.docks[1], f.docks[2], f.agent || self.auto.agent];
     }
 
     fn save_layout(&self) {
@@ -510,7 +519,90 @@ impl EditorApp {
         }
     }
 
+    /// Modification time of every project file (hidden folders and saves/ left out).
+    fn file_stamps(dir: &Path) -> HashMap<PathBuf, std::time::SystemTime> {
+        fn walk(d: &Path, out: &mut HashMap<PathBuf, std::time::SystemTime>) {
+            let Ok(rd) = std::fs::read_dir(d) else { return };
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || name == "saves" || name == "target" {
+                    continue;
+                }
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
+                    out.insert(p, t);
+                }
+            }
+        }
+        let mut out = HashMap::new();
+        walk(dir, &mut out);
+        out
+    }
+
+    /// Picks up what the agent changed on disk without clobbering unsaved edits: scripts,
+    /// game.toml, the asset lists and sprites, and the open room/sprite/sound/settings editors
+    /// whose files changed and that have no unsaved changes.
+    fn reload_from_disk(&mut self) {
+        let Some(p) = &mut self.project else { return };
+        let now = Self::file_stamps(&p.dir);
+        let changed: HashSet<PathBuf> = now.iter().filter(|(f, t)| self.stamps.get(*f) != Some(*t)).map(|(f, _)| f.clone()).collect();
+        self.stamps = now;
+        let synced = p.sync_from_disk();
+        if !changed.is_empty() || synced.game {
+            p.reload_lists();
+        }
+        let mut lines = vec![];
+        if !synced.scripts.is_empty() {
+            lines.push(LogLine { kind: LogKind::Info, text: format!("recargado del disco: {}", synced.scripts.join(", ")) });
+        }
+        for c in &synced.conflicts {
+            lines.push(LogLine { kind: LogKind::Error, text: format!("{c} cambió en disco pero tiene cambios sin guardar: se conservan los tuyos (guardar sobrescribe la versión del disco)") });
+        }
+        // A sprite is its .toml and/or its .png: either one counts.
+        let touched = |path: &Path| changed.iter().any(|c| c == path || (c.parent() == path.parent() && c.file_stem() == path.file_stem()));
+        for w in self.ws.wins_mut() {
+            let key = w.tab.open_key();
+            let path = match &key {
+                Open::Room(n) => p.rooms.iter().find(|r| &r.name == n).map(|r| r.path.clone()),
+                Open::Sprite(n) => p.sprite_entry(n).map(|s| s.path.clone()),
+                Open::Sound(n) => p.sounds.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
+                Open::Settings => Some(p.dir.join("game.toml")),
+                Open::Object(_) | Open::Script(_) => None, // they show the project's scripts, synced above
+            };
+            let Some(path) = path.filter(|f| touched(f)) else { continue };
+            if w.tab.dirty(p) {
+                lines.push(LogLine { kind: LogKind::Error, text: format!("{} cambió en disco pero su editor tiene cambios sin guardar: se conservan los tuyos", path.strip_prefix(&p.dir).unwrap_or(&path).display()) });
+            } else if let Ok(tab) = make_tab(p, &key) {
+                w.tab = tab;
+            }
+        }
+        self.log.extend(lines);
+    }
+
+    /// Sends a message to the agent, after saving everything so it sees what the user sees.
+    fn send_to_agent(&mut self, prompt: String) {
+        self.save_all();
+        let Some(p) = &self.project else { return };
+        let (dir, name) = (p.dir.clone(), p.game.game.name.clone());
+        self.stamps = Self::file_stamps(&dir);
+        self.agent.send(&prompt, &dir, &name);
+    }
+
     fn poll(&mut self, ctx: &egui::Context) {
+        let agent = self.agent.poll(ctx);
+        if agent.reload {
+            self.reload_from_disk();
+        }
+        if agent.finished {
+            if !agent.changed.is_empty() {
+                let dir = self.project.as_ref().map(|p| p.dir.clone()).unwrap_or_default();
+                let names: Vec<String> = agent.changed.iter().map(|f| f.strip_prefix(&dir).unwrap_or(f).display().to_string()).collect();
+                self.info(LogKind::Info, format!("el agente cambió: {}", names.join(", ")));
+            }
+            self.check(false);
+        }
         if let Some(r) = &mut self.runner {
             for l in r.rx.try_iter() {
                 let kind = if l.starts_with("[error]") { LogKind::Error } else { LogKind::Game };
@@ -648,6 +740,7 @@ impl EditorApp {
                     }
                     self.stop_game();
                     self.save_layout();
+                    self.agent.close_project();
                     self.project = None;
                     self.ws = Workspaces::default();
                     self.selected = None;
@@ -737,7 +830,7 @@ impl EditorApp {
                 }
             });
             ui.menu_button("Ver", |ui| {
-                for (i, label) in ["Inspector", "Navegador de assets", "Salida"].into_iter().enumerate() {
+                for (i, label) in ["Inspector", "Navegador de assets", "Salida", "Agente"].into_iter().enumerate() {
                     ui.checkbox(&mut self.docks[i], label);
                 }
                 ui.separator();
@@ -776,6 +869,7 @@ impl EditorApp {
             if ui.button("✔ Comprobar").on_hover_text("F6: carga el proyecto y ejecuta 300 pasos sin ventana").clicked() {
                 self.check(true);
             }
+            ui.toggle_value(&mut self.docks[3], "✦ Agente").on_hover_text("Panel del agente de programación (Claude Code, Antigravity o Codex)");
             if let Some(p) = &self.project {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new(p.dir.display().to_string()).weak());
@@ -1548,6 +1642,13 @@ impl eframe::App for EditorApp {
         if self.docks[2] {
             egui::Panel::bottom("output").frame(side).resizable(true).default_size(170.0).show(ui, |ui| self.output(ui));
         }
+        if self.docks[3] {
+            let has_project = self.project.is_some();
+            let send = egui::Panel::right("agent").frame(side).resizable(true).default_size(360.0).min_size(260.0).show(ui, |ui| self.agent.ui(ui, has_project)).inner;
+            if let Some(prompt) = send {
+                self.send_to_agent(prompt);
+            }
+        }
         if self.docks[1] {
             egui::Panel::right("assets").frame(side).resizable(true).default_size(260.0).show(ui, |ui| self.asset_browser(ui));
         }
@@ -1626,5 +1727,6 @@ impl Drop for EditorApp {
         self.upd.al_salir();
         self.save_layout();
         self.stop_game();
+        self.agent.close_project(); // kills a running agent
     }
 }

@@ -122,6 +122,7 @@ map = '''
 ## Documentación
 
 - [docs/editor.md](docs/editor.md): el editor visual (rooms, objetos, sprites, sonidos, scripts).
+- [docs/editor.md#agente](docs/editor.md#agente): el panel **Agente**, que conversa con Claude Code, Antigravity o Codex para que editen el proyecto.
 - [docs/lenguaje.md](docs/lenguaje.md): ModScript paso a paso.
 - [docs/proyecto.md](docs/proyecto.md): `game.toml`, sprites, sonidos, fuentes y rooms.
 - [docs/funciones.md](docs/funciones.md): todas las funciones integradas.
