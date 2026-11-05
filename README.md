@@ -7,6 +7,8 @@ pensado para eso.
 
 ![Coin Climber, el juego de ejemplo](docs/img/level.png)
 
+![El editor: workspace con una room y un objeto abiertos](docs/img/editor_workspace.png)
+
 ## Instalación
 
 Un solo comando compila el motor y el editor y los instala en el sistema. Si falta algo (Rust 1.95+,
@@ -45,8 +47,6 @@ cargo build --release
 ./target/release/modengine run examples/platformer  # solo el juego
 ```
 
-![Editor de rooms](docs/img/editor_room.png)
-
 Controles del ejemplo: flechas/WASD para moverte, ESPACIO para saltar, ESC para volver al título.
 En cualquier juego: **F3** muestra la capa de depuración (fps, instancias, cajas de colisión),
 **F4** pantalla completa y **F12** guarda una captura.
@@ -62,6 +62,16 @@ carpeta de un proyecto o su `game.toml`. Desde la terminal:
 ./target/release/modengine new --template platformer --name "Mi juego" mi_juego
 ./target/release/modeditor mi_juego          # o mi_juego/game.toml
 ```
+
+## Capturas
+
+| | |
+|---|---|
+| ![Página de inicio](docs/img/editor_start.png) **Página de inicio:** nuevo proyecto con plantillas, abrir, ejemplos y recientes. | ![Editor de rooms](docs/img/editor_room.png) **Rooms:** capas, pincel de objetos, rejilla y cámara. |
+| ![Tiles](docs/img/editor_tiles.png) **Tile sets:** pinta tiles en las capas, con auto tile y tiles animados. | ![Secuencias](docs/img/editor_secuencia.png) **Secuencias:** pistas, claves y suavizado con vista previa. |
+| ![Partículas](docs/img/editor_particulas.png) **Partículas:** emisores y tipos con vista previa animada. | ![Agente](docs/img/editor_agente.png) **Agente:** Claude Code, Codex o Antigravity trabajando en el proyecto, con historial. |
+| ![Tienda de assets](docs/img/editor_tienda.png) **Tienda:** assets gratuitos de OpenGameArt con sus licencias y créditos. | ![Exportar](docs/img/editor_exportar.png) **Exportar:** Windows, Linux y Android. |
+| ![Juego con partículas y shaders](docs/img/juego_efectos.png) Partículas, shaders y extensiones en juego. | ![Trayectorias y secuencias](docs/img/juego_secuencias.png) Trayectorias, curvas y secuencias en juego. |
 
 ## Cómo es un proyecto
 
