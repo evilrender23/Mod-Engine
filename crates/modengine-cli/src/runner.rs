@@ -84,10 +84,24 @@ pub fn parse_runner_args(raw: &[String]) -> Result<RunnerArgs, String> {
     Ok(a)
 }
 
-/// Shows a fatal message where the player can see it: stderr, plus a small window
-/// (exported Windows games have no console).
+/// Shows a fatal message where the player can see it: stderr, `error.log`, and on Windows a
+/// native message box (exported games have no console, and a GL window may be the very thing
+/// that failed); elsewhere a small window.
 pub fn fatal(msg: &str) -> ! {
     eprintln!("{msg}");
+    let log = write_error_log(msg);
+    #[cfg(windows)]
+    {
+        let extra = log.map(|p| format!("\n\nGuardado en: {}", p.display())).unwrap_or_default();
+        message_box("Mod Engine", &format!("{msg}{extra}"));
+        std::process::exit(1)
+    }
+    #[cfg(not(windows))]
+    fatal_window(msg, log)
+}
+
+#[cfg(not(windows))]
+fn fatal_window(msg: &str, _log: Option<PathBuf>) -> ! {
     let text = msg.to_string();
     macroquad::Window::from_config(
         macroquad::window::Conf { window_title: "Mod Engine".into(), window_width: 720, window_height: 240, ..Default::default() },
@@ -108,8 +122,77 @@ pub fn fatal(msg: &str) -> ! {
     std::process::exit(1)
 }
 
+/// `error.log` in the game's user folder (or next to the executable): what went wrong when the
+/// game could not even open its window.
+fn error_log_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let name = exe.file_stem()?.to_string_lossy().to_string();
+    let env = |k: &str| std::env::var(k).ok();
+    let dir = modengine::vfs::user_data_dir(&name, None, &env);
+    if std::fs::create_dir_all(&dir).is_ok() {
+        return Some(dir.join("error.log"));
+    }
+    exe.parent().map(|d| d.join("error.log"))
+}
+
+fn write_error_log(msg: &str) -> Option<PathBuf> {
+    let p = error_log_path()?;
+    std::fs::write(&p, format!("{msg}\n")).ok()?;
+    Some(p)
+}
+
+/// A native Windows message box (user32 is always there; no extra crate).
+#[cfg(windows)]
+pub fn message_box(title: &str, text: &str) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(hwnd: *mut core::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
+    }
+    let w = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (t, c) = (w(text), w(title));
+    // MB_OK | MB_ICONERROR
+    // SAFETY: both buffers are NUL-terminated UTF-16 and outlive the call.
+    unsafe {
+        MessageBoxW(core::ptr::null_mut(), t.as_ptr(), c.as_ptr(), 0x10);
+    }
+}
+
+/// What to tell the player when the window/graphics layer panics (no usable OpenGL 3).
+fn explain_panic(raw: &str) -> String {
+    // miniquad panics in WGL setup, or unwraps a missing GL function in native/gl.rs when the
+    // driver only has OpenGL 1.1 (Windows without a GPU driver, VMs without 3D).
+    let gl = ["WGL", "OpenGL", "GL_", "pixel format", "context", "native/gl.rs", "native\\gl.rs"].iter().any(|k| raw.contains(k));
+    if gl {
+        format!(
+            "No se pudo iniciar el juego: este equipo no tiene OpenGL 3.\n\n\
+             Pasa en máquinas virtuales sin aceleración 3D o con drivers de gráfica viejos. \
+             Instala los drivers de la tarjeta gráfica o activa la aceleración 3D de la máquina virtual \
+             (en QEMU: virtio-gpu con virgl, o pasar la GPU). También sirve poner junto al juego el \
+             opengl32.dll de Mesa (OpenGL por software).\n\nDetalle: {raw}"
+        )
+    } else {
+        format!("El juego se cerró por un error:\n\n{raw}")
+    }
+}
+
 /// `modengine-runner` (an exported game) on desktop.
 pub fn desktop_main() {
+    // A panic in an exported game must be seen: there is no console on Windows.
+    std::panic::set_hook(Box::new(|info| {
+        let raw = match (info.payload().downcast_ref::<&str>(), info.payload().downcast_ref::<String>()) {
+            (Some(s), _) => s.to_string(),
+            (_, Some(s)) => s.clone(),
+            _ => "panic".to_string(),
+        };
+        let at = info.location().map(|l| format!(" ({}:{})", l.file(), l.line())).unwrap_or_default();
+        let msg = explain_panic(&format!("{raw}{at}"));
+        eprintln!("{msg}");
+        let log = write_error_log(&msg);
+        #[cfg(windows)]
+        message_box("Mod Engine", &format!("{msg}{}", log.map(|p| format!("\n\nGuardado en: {}", p.display())).unwrap_or_default()));
+        #[cfg(not(windows))]
+        let _ = log;
+    }));
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let args = parse_runner_args(&raw).unwrap_or_else(|e| fatal(&e));
     let exe = std::env::current_exe().unwrap_or_else(|e| fatal(&format!("cannot find the game executable: {e}")));
@@ -159,6 +242,14 @@ async fn android_error(msg: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graphics_panics_are_explained() {
+        assert!(explain_panic("WGL: ARB_create_context required!").contains("OpenGL 3"));
+        assert!(explain_panic("WGL_ARB_pixel_format is required").contains("máquinas virtuales"));
+        assert!(explain_panic("called `Option::unwrap()` on a `None` value (miniquad-0.4.11/src/native/gl.rs:339)").contains("OpenGL 3"));
+        assert!(explain_panic("index out of bounds").starts_with("El juego se cerró"));
+    }
 
     #[test]
     fn runner_flags() {
