@@ -5,10 +5,50 @@ cargo build --release              # compila el motor, el editor y el ejecutable
 ./target/release/modeditor examples/platformer
 ```
 
-Sin argumentos abre una pantalla de inicio para abrir un proyecto (con lista de recientes) o
-crear uno nuevo. El editor trabaja directamente sobre los ficheros del proyecto
-(`game.toml`, `sprites/`, `rooms/`, `.ms`...), así que puedes alternar entre el editor y tu
-editor de texto favorito.
+Sin argumentos abre la [página de inicio](#proyectos) para crear, abrir o retomar un proyecto.
+`modeditor <carpeta>` y `modeditor <carpeta>/game.toml` abren ese proyecto directamente. El editor
+trabaja directamente sobre los ficheros del proyecto (`game.toml`, `sprites/`, `rooms/`, `.ms`...),
+así que puedes alternar entre el editor y tu editor de texto favorito.
+
+## Proyectos
+
+![Página de inicio](img/editor_start.png)
+
+**Página de inicio** (sin proyecto abierto):
+
+| | |
+|---|---|
+| **＋ Nuevo proyecto** (Ctrl+N) | Diálogo con nombre, ubicación (por defecto `~/Documentos/ModEngine`, o la última que usaste; **📂 Elegir…** abre el explorador de carpetas), plantilla, tamaño de pantalla y paleta. Debajo se ve la carpeta exacta que se creará y, si algo no vale (nombre vacío o con `/ \ : * ? " < > \|`, carpeta que ya existe y no está vacía, ya hay un proyecto ahí…), por qué. **Crear proyecto** lo crea y lo abre. |
+| **📂 Abrir proyecto…** (Ctrl+O) | Explorador de carpetas (Inicio, Escritorio, Documentos, discos montados, favoritos ☆ y carpetas recientes). Las carpetas que son proyectos de Mod Engine (tienen `game.toml`) salen con 🎮 y el nombre del juego; doble clic las abre. También vale elegir el propio `game.toml` o pegar su ruta. **🗔 Usar el diálogo del sistema** abre el selector de carpetas de tu escritorio (portal XDG en KDE/GNOME, el de Windows o macOS). |
+| **Abrir ejemplo** | Coin Climber y los showcases que vienen con Mod Engine (junto al editor instalado o en `examples/`). **Abrir una copia** la deja en tu carpeta de proyectos para cambiarla sin miedo; **Abrir el original** abre el ejemplo tal cual. |
+| Recientes | Tarjetas con el nombre del juego (`[game] name`), la carpeta, cuándo lo abriste y una miniatura (`screenshot.png`/`thumbnail.png`/`icon.png` del proyecto, o el primer sprite: el del jugador si lo hay). 📍 fija un proyecto arriba, × lo quita de la lista (no borra nada). Los que ya no están en su carpeta salen en gris con **🔍 Localizar…** para decir dónde están ahora. Arriba a la derecha, **Buscar** filtra por nombre o ruta. |
+| Abrir una ruta | Escribe o pega una ruta (`~/…`, `file://…`, la carpeta o su `game.toml`). |
+
+También puedes **arrastrar a la ventana** la carpeta de un proyecto o su `game.toml` (con un
+proyecto abierto, eso abre el otro en vez de importar).
+
+**Plantillas** (las mismas que `modengine new --template …`):
+
+| Plantilla | Qué trae |
+|---|---|
+| Vacío (`empty`) | `game.toml` con la paleta elegida y una room vacía |
+| Básico (`basic`, la de `modengine new` sin más) | Un personaje que se mueve con flechas/WASD |
+| Plataformas (`platformer`) | Copia de Coin Climber (`examples/platformer`): gravedad, saltos, enemigos, 4 rooms, sonidos |
+| Top-down (`topdown`) | Vista cenital: muros, gemas que recoger y un marcador |
+| Showcase (`showcase`) | Trayectorias, timelines, curvas y secuencias (`examples/showcase_assets_s2`) |
+
+*Pantalla* cambia `[display] width/height/scale` (por defecto, el de la plantilla) y *Paleta*
+pone una de tus paletas guardadas (Pear36 y las de [Paletas](#paletas-lospec)) y pasa cada
+sprite de la plantilla al color más parecido. Las plantillas van dentro del programa, así que
+funcionan igual en una copia instalada.
+
+**Menú Archivo** con un proyecto abierto: **＋ Nuevo proyecto…** (Ctrl+Mayús+N), **📂 Abrir
+proyecto…** (Ctrl+O), **Abrir reciente ▸**, **🗁 Mostrar en el gestor de archivos** y **Cerrar
+proyecto**. Si hay cambios sin guardar, antes de cambiar de proyecto o cerrarlo pregunta
+*Guardar y continuar / Descartar cambios / Cancelar*.
+
+Los recientes se guardan en `~/.config/modengine/recent.txt` (ruta, fijado y fecha), la última
+ubicación en `new_project_dir.txt` y los favoritos del explorador en `project_favorites.txt`.
 
 ## La ventana
 
@@ -310,6 +350,75 @@ mismo tipo aparece **Sobrescribir**: el antiguo va a `.trash/`. Los ficheros de 
 avisan. No se pueden juntar varios PNG en un sprite: el motor lee una imagen por sprite (una tira
 o una rejilla).
 
+## Tienda de assets (OpenGameArt)
+
+![Tienda de assets](img/editor_tienda.png)
+
+Busca e importa sprites, sonidos, música y fuentes **gratuitos** de
+[OpenGameArt.org](https://opengameart.org). Se abre con el botón **🛒 Tienda** de la barra, con
+**Archivo → 🛒 Tienda de assets (OpenGameArt)…** o con **Ver → 🛒 Tienda de assets**.
+
+- **Buscar**: una palabra (en inglés hay muchos más resultados: `slime`, `coin`, `explosion`…), el
+  **tipo** (Arte 2D, Texturas, Efectos de sonido, Música, Fuentes —OGA no tiene un tipo «fuente»:
+  busca lo etiquetado `font`—), el **orden** (más favoritos, más recientes, relevancia) y las
+  **licencias**. Por defecto solo CC0, CC-BY y OGA-BY; las de «compartir igual» (CC-BY-SA, GPL)
+  se pueden marcar y llevan ⚠. Los resultados salen en una rejilla de 24 por página con su miniatura
+  y **◀ Anterior / Siguiente ▶**.
+- **Ficha** (clic en un resultado): vistas previas, autor y fecha, **licencias** con lo que te piden,
+  la atribución que pide el autor, etiquetas, descripción (texto plano) y los **ficheros** con su
+  tipo y tamaño. **🌐 Abrir en el navegador** abre la página original.
+- **⭐ Favoritos**: marca la estrella en una tarjeta o en la ficha; el botón **⭐ Favoritos (n)**
+  los lista. La última búsqueda y los favoritos se guardan en `~/.config/modengine/store.toml`.
+
+![Ficha de un asset](img/editor_tienda_ficha.png)
+
+**Importar.** PNG, WAV, OGG, TTF y OTF tienen **⬇ Importar…**: se descargan a la caché (con barra
+de progreso) y se abre el diálogo normal de [Importar assets](#importar-assets) con el fichero ya
+puesto, para elegir nombre, tira/rejilla de frames, origen y fps. Un `.zip` tiene **⬇ Ver
+contenido…**: se descarga, se listan sus ficheros y marcas los que quieras (PNG, WAV, OGG, TTF,
+OTF) para **Importar seleccionados**. MP3 y otros formatos que el motor no carga se indican y no
+se ofrecen. Las descargas de más de 50 MB piden confirmación, y el tamaño descargado tiene que
+coincidir con el que anuncia la página (si no, se descarta).
+
+**Licencias y créditos.** Todo lo que importas desde la tienda se apunta en **`CREDITS.md`** en la
+raíz del proyecto (se crea si no existe): título, autor (con enlace), licencia(s) con enlace al
+texto, URL de origen, el aviso de atribución del autor, qué ficheros del proyecto salen de él (y de
+qué fichero o entrada del zip) y la fecha. Cada asset tiene su sección (marcada con
+`<!-- oga:<slug> -->`): volver a importar del mismo asset añade los ficheros nuevos a esa sección.
+Si el sprite tiene `.toml`, además lleva un comentario `# Origen: …` arriba. La **Salida** lo dice
+y recuerda qué exige la licencia.
+
+| Licencia | Qué te pide |
+|---|---|
+| CC0 | Nada (dominio público). Se apunta igualmente en CREDITS.md. |
+| CC-BY 3.0 / 4.0 | **Dar crédito** al autor en tu juego (pantalla de créditos, web o README). |
+| OGA-BY 3.0 / 4.0 | Como CC-BY, pero permite DRM (tiendas de consola…). Crédito obligatorio. |
+| CC-BY-SA 3.0 / 4.0 | Crédito y **compartir igual**: si modificas el asset, tu versión se publica con la misma licencia (el resto del juego no). |
+| GPL 2.0 / 3.0, LGPL | Crédito, el asset (y lo derivado) bajo GPL, con su texto y acceso a las fuentes. Puede chocar con algunas tiendas. |
+
+Si un asset tiene varias licencias puedes elegir la que prefieras (CREDITS.md las apunta todas). Si
+la página no tiene licencia o no se reconoce, la ficha lo marca en rojo y no deja importar hasta
+marcar «He revisado la licencia…». Mod Engine no es abogado: ante la duda, lee la licencia.
+
+**Cómo usa la web.** OpenGameArt no tiene API pública; la tienda lee las mismas páginas que un
+navegador (`/art-search-advanced` y `/content/<asset>`) y descarga de `/sites/default/files/`, lo
+que su `robots.txt` permite (nunca `/search/`, que prohíbe). Cada petición la lanza el usuario (buscar,
+abrir una ficha, las miniaturas de la página que ves, descargar): no rastrea nada en segundo plano.
+Se identifica con `User-Agent: ModEngine-Editor/<versión> (+https://github.com/evilrender23/Mod-Engine)`,
+hace **como mucho una petición cada 2 s** en una cola (miniaturas incluidas: una página tarda ~50 s
+en llenarse la primera vez) y guarda páginas, miniaturas y descargas en `~/.cache/modengine/store/`
+durante 24 h (sin conexión usa la copia vieja si la hay). Los errores (sin conexión, OGA pidiendo
+que esperemos —HTTP 429/503—, página con un formato inesperado) se muestran en la tienda con
+**Reintentar**. Usa `curl` como Paletas (Linux, macOS y Windows 10+ lo traen).
+
+Para capturas: `modeditor <proyecto> --store slime --screenshot t.png` abre la tienda buscando
+`slime` y espera a las miniaturas; `--store-open animated-slime` abre esa ficha. Test contra la web
+real (unas pocas peticiones; deja la copia del ejemplo en el directorio temporal):
+`cargo test -p modengine-editor --release real_opengameart -- --ignored --nocapture` busca `slime`
+(2D, CC0), abre resultados hasta uno con PNG, lo descarga, lo importa en una copia de
+`examples/platformer`, escribe CREDITS.md y pasa `modengine check`. El resto de tests usa copias
+recortadas de páginas reales (`crates/modengine-editor/tests/fixtures/oga/`) y un cliente falso.
+
 ## Agente
 
 El panel **Agente** (a la derecha; **✦ Agente** en la barra de arriba o **Ver → Agente**) conversa
@@ -587,7 +696,10 @@ Para capturas automáticas: `modeditor <proyecto> --open room:level1 --screensho
 `--layer Mundo` elige esa capa en las rooms abiertas; `--agent` muestra el panel Agente;
 `--agent-demo history|queue|diff|browser` lo llena con datos de ejemplo, sin tocar el historial de verdad).
 `--import <fichero o carpeta>` (repetible) abre el diálogo de importar con ellos y
-`--import-run` además pulsa **Importar**.
+`--import-run` además pulsa **Importar**. Sin proyecto, `--screenshot` captura la página de
+inicio; `--new-project-dialog [plantilla]` abre Nuevo proyecto, `--open-project-dialog [carpeta]`
+el explorador de Abrir proyecto y `--config-dir DIR` lee los recientes de `DIR` en vez de
+`~/.config/modengine` (capturas reproducibles).
 
 
 ## Trayectorias, líneas de tiempo, curvas y secuencias

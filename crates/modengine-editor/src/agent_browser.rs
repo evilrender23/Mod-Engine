@@ -3,6 +3,10 @@
 //! mounted drives), favourites and recent folders on the left; the folder on the right with a
 //! filter, hidden files, multi-select (Ctrl/Mayús+clic or the boxes) and a path field that
 //! takes typed or pasted paths and `file://` URIs.
+//!
+//! The same browser is the editor's folder picker ([`Purpose`]): Abrir proyecto (folders
+//! with a game.toml show 🎮 and the game's name; game.toml itself can be picked) and
+//! Elegir carpeta (where a new project goes).
 
 use eframe::egui::{self, Key, RichText};
 use std::collections::BTreeSet;
@@ -15,6 +19,8 @@ pub struct Row {
     pub path: PathBuf,
     pub is_dir: bool,
     pub size: u64,
+    /// The game's name when this is a Mod Engine project folder (it has a game.toml).
+    pub project: Option<String>,
 }
 
 /// Every entry of `dir` (hidden ones when `hidden`), folders first, by name.
@@ -30,7 +36,9 @@ pub fn list(dir: &Path, hidden: bool) -> Result<Vec<Row>, String> {
             let path = e.path();
             // Follows links, so a link to a folder opens as one.
             let meta = std::fs::metadata(&path).ok();
-            Some(Row { is_dir: meta.as_ref().is_some_and(|m| m.is_dir()), size: meta.map(|m| m.len()).unwrap_or(0), name, path })
+            let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
+            let project = if is_dir { crate::projects::project_name(&path) } else { None };
+            Some(Row { is_dir, size: meta.map(|m| m.len()).unwrap_or(0), name, path, project })
         })
         .collect();
     out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -94,7 +102,46 @@ pub fn mounts() -> Vec<PathBuf> {
 pub enum Picked {
     Nothing,
     Cancel,
+    /// The chosen paths (one for the single-choice purposes).
     Attach(Vec<PathBuf>),
+    /// "Usar el diálogo del sistema": the caller opens the native dialog instead.
+    Native,
+}
+
+/// What the browser is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Purpose {
+    /// Attach any files or folders to the agent's message (multi-select).
+    #[default]
+    Attach,
+    /// Pick a Mod Engine project: a folder with a game.toml, or the game.toml itself.
+    OpenProject,
+    /// Pick a folder (where a new project goes).
+    PickFolder,
+}
+
+impl Purpose {
+    fn title(self) -> &'static str {
+        match self {
+            Purpose::Attach => "Adjuntar desde el disco",
+            Purpose::OpenProject => "Abrir proyecto",
+            Purpose::PickFolder => "Elegir carpeta",
+        }
+    }
+
+    /// Rows this purpose shows (`Attach`: everything).
+    pub fn shows(self, r: &Row) -> bool {
+        match self {
+            Purpose::Attach => true,
+            Purpose::OpenProject => r.is_dir || r.name == "game.toml",
+            Purpose::PickFolder => r.is_dir,
+        }
+    }
+}
+
+/// The project a path stands for: a folder with a game.toml, or a game.toml file.
+pub fn project_of(path: &Path) -> Option<PathBuf> {
+    crate::projects::project_dir(path)
 }
 
 pub struct Browser {
@@ -110,6 +157,9 @@ pub struct Browser {
     pub error: Option<String>,
     /// Last clicked row, for Mayús+clic ranges.
     anchor: Option<usize>,
+    pub purpose: Purpose,
+    /// Show "Usar el diálogo del sistema" (a native picker is available).
+    pub native: bool,
 }
 
 impl Default for Browser {
@@ -126,11 +176,17 @@ impl Default for Browser {
             listed: None,
             error: None,
             anchor: None,
+            purpose: Purpose::Attach,
+            native: false,
         }
     }
 }
 
 impl Browser {
+    pub fn with_purpose(purpose: Purpose) -> Browser {
+        Browser { purpose, ..Default::default() }
+    }
+
     /// Opens at `dir` (when it exists).
     pub fn open_at(&mut self, dir: Option<&Path>) {
         self.open = true;
@@ -195,8 +251,15 @@ impl Browser {
         let mut picked = Picked::Nothing;
         let mut open = true;
         let mut go_to: Option<PathBuf> = None;
-        egui::Window::new("Adjuntar desde el disco")
-            .id(egui::Id::unique("agent_disk_browser"))
+        let purpose = self.purpose;
+        let multi = purpose == Purpose::Attach;
+        let id = match purpose {
+            Purpose::Attach => "agent_disk_browser",
+            Purpose::OpenProject => "open_project_browser",
+            Purpose::PickFolder => "pick_folder_browser",
+        };
+        egui::Window::new(purpose.title())
+            .id(egui::Id::unique(id))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -221,14 +284,30 @@ impl Browser {
                         egui::TextEdit::singleline(&mut self.path_text)
                             .hint_text("Ruta, ~/…, o pega file://…")
                             .desired_width(ui.available_width() - 70.0)
-                            .id(egui::Id::unique("agent_disk_path")),
+                            .id(egui::Id::unique(id).with("path")),
                     );
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                     if ui.button("Ir").clicked() || enter {
                         let t = self.path_text.clone();
-                        self.enter_path(&t);
+                        let files = self.enter_path(&t);
+                        // a pasted project folder or game.toml opens straight away
+                        if purpose == Purpose::OpenProject {
+                            if let Some(p) = files.first().and_then(|f| project_of(f)).or_else(|| files.is_empty().then(|| project_of(&self.dir)).flatten()) {
+                                picked = Picked::Attach(vec![p]);
+                            }
+                        }
                     }
                 });
+                if purpose == Purpose::OpenProject {
+                    if let Some(name) = crate::projects::project_name(&self.dir) {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("🎮 Esta carpeta es el proyecto «{name}»")).color(crate::theme::colors(ui.ctx()).ok));
+                            if ui.small_button("Abrir").clicked() {
+                                picked = Picked::Attach(vec![self.dir.clone()]);
+                            }
+                        });
+                    }
+                }
                 if let Some(e) = &self.error {
                     ui.label(RichText::new(e).color(crate::theme::colors(ui.ctx()).error));
                 }
@@ -277,10 +356,15 @@ impl Browser {
                             if ui.checkbox(&mut self.hidden, "Ocultos").changed() {
                                 self.listed = None;
                             }
-                            ui.label(RichText::new("Ctrl/Mayús+clic: varios · doble clic: abrir carpeta").weak().small());
+                            let hint = match purpose {
+                                Purpose::Attach => "Ctrl/Mayús+clic: varios · doble clic: abrir carpeta",
+                                Purpose::OpenProject => "🎮 = proyecto de Mod Engine · doble clic: abrir",
+                                Purpose::PickFolder => "doble clic: entrar en la carpeta",
+                            };
+                            ui.label(RichText::new(hint).weak().small());
                         });
                         let filter = self.filter.to_lowercase();
-                        let rows: Vec<Row> = self.rows().iter().filter(|r| filter.is_empty() || r.name.to_lowercase().contains(&filter)).cloned().collect();
+                        let rows: Vec<Row> = self.rows().iter().filter(|r| purpose.shows(r) && (filter.is_empty() || r.name.to_lowercase().contains(&filter))).cloned().collect();
                         egui::ScrollArea::vertical().id_salt("agent_disk_rows").max_height(h - 26.0).auto_shrink([false, false]).show(ui, |ui| {
                             if rows.is_empty() {
                                 ui.label(RichText::new("(vacía)").weak());
@@ -290,7 +374,7 @@ impl Browser {
                                 let sel = self.selected.contains(&r.path);
                                 ui.horizontal(|ui| {
                                     let mut on = sel;
-                                    if ui.checkbox(&mut on, "").changed() {
+                                    if multi && ui.checkbox(&mut on, "").changed() {
                                         if on {
                                             self.selected.insert(r.path.clone());
                                         } else {
@@ -298,7 +382,9 @@ impl Browser {
                                         }
                                         self.anchor = Some(i);
                                     }
-                                    let icon = if r.is_dir {
+                                    let icon = if r.project.is_some() {
+                                        "🎮"
+                                    } else if r.is_dir {
                                         "📁"
                                     } else if crate::agent::IMAGE_EXTS.iter().any(|e| r.name.to_lowercase().ends_with(&format!(".{e}"))) {
                                         "🖼"
@@ -306,11 +392,21 @@ impl Browser {
                                         "📄"
                                     };
                                     let size = if r.is_dir { String::new() } else { format!("  {}", crate::import::human_size(r.size)) };
-                                    let resp = ui.selectable_label(sel, format!("{icon} {}{size}", r.name));
-                                    if resp.double_clicked() && r.is_dir {
+                                    let text = match &r.project {
+                                        Some(game) if game != &r.name => format!("{icon} {}  —  {game}", r.name),
+                                        _ => format!("{icon} {}{size}", r.name),
+                                    };
+                                    let resp = ui.selectable_label(sel, text);
+                                    let project = (purpose == Purpose::OpenProject).then(|| project_of(&r.path)).flatten();
+                                    if resp.double_clicked() && project.is_some() {
+                                        picked = Picked::Attach(vec![project.clone().unwrap_or_default()]);
+                                    } else if resp.double_clicked() && r.is_dir {
                                         go_to = Some(r.path.clone());
                                     } else if resp.clicked() {
-                                        if mods.shift {
+                                        if !multi {
+                                            self.selected.clear();
+                                            self.selected.insert(r.path.clone());
+                                        } else if mods.shift {
                                             if let Some(a) = self.anchor {
                                                 let (lo, hi) = (a.min(i), a.max(i));
                                                 for row in &rows[lo..=hi] {
@@ -335,6 +431,29 @@ impl Browser {
                     });
                 });
                 ui.separator();
+                if purpose != Purpose::Attach {
+                    ui.horizontal(|ui| {
+                        let sel = self.selected.iter().next().cloned();
+                        if purpose == Purpose::OpenProject {
+                            let target = sel.as_deref().and_then(project_of);
+                            if ui.add_enabled(target.is_some(), crate::theme::primary_button(ui, "Abrir proyecto")).on_disabled_hover_text("Elige una carpeta con 🎮 o un game.toml").clicked() {
+                                picked = Picked::Attach(target.into_iter().collect());
+                            }
+                        } else {
+                            let target = sel.filter(|p| p.is_dir()).unwrap_or_else(|| self.dir.clone());
+                            let name = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| target.display().to_string());
+                            if ui.add(crate::theme::primary_button(ui, &format!("Elegir «{name}»"))).on_hover_text(target.display().to_string()).clicked() {
+                                picked = Picked::Attach(vec![target]);
+                            }
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            picked = Picked::Cancel;
+                        }
+                        if self.native && ui.button("🗔 Usar el diálogo del sistema").on_hover_text("El selector de carpetas de tu escritorio (KDE, GNOME, Windows, macOS)").clicked() {
+                            picked = Picked::Native;
+                        }
+                    });
+                } else {
                 ui.horizontal(|ui| {
                     let n = self.selected.len();
                     let label = match n {
@@ -353,6 +472,7 @@ impl Browser {
                     }
                     ui.label(RichText::new("Las carpetas llegan como ruta, con permiso de lectura para todo lo de dentro").weak().small());
                 });
+                }
             });
         if let Some(d) = go_to {
             self.go(&d);

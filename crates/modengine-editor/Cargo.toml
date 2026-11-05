@@ -18,7 +18,15 @@ toml = "0.8"
 toml_edit = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-image = { version = "0.25", default-features = false, features = ["png"] }
+# gif + jpeg: OpenGameArt thumbnails and previews (Tienda de assets)
+image = { version = "0.25", default-features = false, features = ["png", "gif", "jpeg"] }
+# already built for the exporter: unzip OpenGameArt packs (store_zip.rs)
+flate2 = "1"
+crc32fast = "1"
+# native folder picker ("Usar el diálogo del sistema"): on Linux it talks to the XDG desktop
+# portal through libdbus loaded at runtime (no build-time system libraries, falls back to
+# zenity); on Windows/macOS the OS dialogs. The built-in browser is always available.
+rfd = "0.17"
 
 [dev-dependencies]
-egui_kittest = "0.37"
+egui_kittest = { version = "0.37", features = ["eframe"] }

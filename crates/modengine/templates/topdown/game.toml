@@ -1,0 +1,49 @@
+# Top-down: mueve al personaje con flechas / WASD y recoge todas las gemas.
+[game]
+name = "Top-down"
+start_room = "main"
+
+[display]
+width = 320
+height = 180
+scale = 3
+letterbox = "#272736"
+
+# Paleta: Pear36 de PineappleOnPizza (lospec.com). '.' es transparente.
+[palette]
+"0" = "#5e315b"
+"1" = "#8c3f5d"
+"2" = "#ba6156"
+"3" = "#f2a65e"
+"4" = "#ffe478"
+"5" = "#cfff70"
+"6" = "#8fde5d"
+"7" = "#3ca370"
+"8" = "#3d6e70"
+"9" = "#323e4f"
+"A" = "#322947"
+"B" = "#473b78"
+"C" = "#4b5bab"
+"D" = "#4da6ff"
+"E" = "#66ffe3"
+"F" = "#ffffeb"
+"G" = "#c2c2d1"
+"H" = "#7e7e8f"
+"I" = "#606070"
+"J" = "#43434f"
+"K" = "#272736"
+"L" = "#3e2347"
+"M" = "#57294b"
+"N" = "#964253"
+"O" = "#e36956"
+"P" = "#ffb570"
+"Q" = "#ff9166"
+"R" = "#eb564b"
+"S" = "#b0305c"
+"T" = "#73275c"
+"U" = "#422445"
+"V" = "#5a265e"
+"W" = "#80366b"
+"X" = "#bd4882"
+"Y" = "#ff6b97"
+"Z" = "#ffb5b5"

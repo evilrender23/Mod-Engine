@@ -309,8 +309,9 @@ function Principal {
     # Archivo → Exportar… copia este runner en los juegos exportados para Windows.
     $runner = Join-Path $compilado 'modengine-runner.exe'
     if (Test-Path $runner) { Copy-Item $runner $nuevo }
-    Copy-Item (Join-Path $codigo 'examples\platformer') (Join-Path $nuevo 'examples') -Recurse
-    Remove-Item (Join-Path $nuevo 'examples\platformer\saves') -Recurse -Force -ErrorAction SilentlyContinue
+    # Todos los ejemplos: la pantalla de inicio del editor los ofrece en «Abrir ejemplo».
+    Get-ChildItem (Join-Path $codigo 'examples') -Directory | ForEach-Object { Copy-Item $_.FullName (Join-Path $nuevo 'examples') -Recurse }
+    Get-ChildItem (Join-Path $nuevo 'examples') -Directory | ForEach-Object { Remove-Item (Join-Path $_.FullName 'saves') -Recurse -Force -ErrorAction SilentlyContinue }
     [IO.File]::WriteAllText((Join-Path $nuevo 'version.json'), ($version | ConvertTo-Json), $utf8)
     Anotar "LISTO $commit"
     if (Test-Path $app) {

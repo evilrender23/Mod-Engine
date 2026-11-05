@@ -27,12 +27,19 @@ mod motion;
 mod path;
 mod palette;
 mod project;
+mod projects;
 mod room;
 mod script;
 mod sequence;
 mod settings;
 mod sound;
 mod sprite;
+mod store;
+mod store_credits;
+mod store_net;
+mod store_oga;
+mod store_zip;
+mod start;
 mod tex;
 mod theme;
 mod timeline;
@@ -63,7 +70,7 @@ fn main() -> eframe::Result {
     // modeditor [project] [--open room:level1 ...] [--screenshot out.png]
     let mut path = None;
     let mut auto = app::Auto::default();
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--open" => {
@@ -88,6 +95,18 @@ fn main() -> eframe::Result {
             // --import <file or folder>: open the import dialog with it (screenshots)
             "--import" => auto.import.extend(args.next().map(std::path::PathBuf::from)),
             "--import-run" => auto.import_run = true,
+            // --new-project-dialog [platformer] : the Nuevo proyecto dialog (screenshots)
+            "--new-project-dialog" => auto.new_project = Some(args.next_if(|a| modengine::scaffold::template(a).is_some()).unwrap_or_default()),
+            // --open-project-dialog [folder] : the Abrir proyecto browser at that folder
+            "--open-project-dialog" => {
+                let dir = args.next_if(|a| std::path::Path::new(a).is_dir()).map(std::path::PathBuf::from);
+                auto.open_project = dir.or_else(projects::documents_dir);
+            }
+            // --config-dir DIR : recent projects etc. from DIR instead of ~/.config/modengine
+            "--config-dir" => auto.config_dir = args.next().map(std::path::PathBuf::from),
+            // --store slime : open the Tienda de assets searching that · --store-open <slug> : on that asset
+            "--store" => crate::store::open_with(args.next().as_deref(), None),
+            "--store-open" => crate::store::open_with(None, args.next().as_deref()),
             // --palettes pear36[:replace] : open the Paletas dialog with that palette selected
             "--palettes" => palette::open_dialog_with(&args.next().unwrap_or_default()),
             // --export-dialog android : open Archivo → Exportar… on that target (screenshots)

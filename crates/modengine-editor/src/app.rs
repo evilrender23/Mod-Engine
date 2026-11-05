@@ -113,7 +113,14 @@ pub struct Auto {
     /// Pretend this asset is being dragged and held at this screen point (screenshots of
     /// drag-and-drop feedback; the drop never happens).
     pub drag: Option<(Open, egui::Pos2)>,
+    /// Config folder for recent projects etc. instead of ~/.config/modengine (screenshots).
+    pub config_dir: Option<PathBuf>,
+    /// Open the Nuevo proyecto dialog (with this template id, when not empty).
+    pub new_project: Option<String>,
+    /// Open the Abrir proyecto browser at this folder.
+    pub open_project: Option<PathBuf>,
     frames: u32,
+    shot: bool,
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -339,19 +346,13 @@ enum Dialog {
     Delete { what: Open },
     CloseWin { id: u64 },
     Quit,
+    /// Unsaved changes before opening another project (`Some`) or closing this one.
+    Switch { to: Option<PathBuf> },
 }
 
 struct Runner {
     child: Child,
     rx: Receiver<String>,
-}
-
-#[derive(Default)]
-struct Start {
-    path: String,
-    new_path: String,
-    error: Option<String>,
-    recent: Vec<String>,
 }
 
 pub struct EditorApp {
@@ -369,7 +370,8 @@ pub struct EditorApp {
     log: Vec<LogLine>,
     runner: Option<Runner>,
     checks: Vec<Receiver<Vec<LogLine>>>,
-    start: Start,
+    /// Start page, recent projects and the Nuevo / Abrir proyecto dialogs (start.rs).
+    start: crate::start::StartPage,
     dialog: Option<Dialog>,
     folded: HashMap<&'static str, bool>,
     filter: String,
@@ -411,27 +413,6 @@ fn section_key(o: &Open) -> Option<&'static str> {
 
 use crate::kinds::Row;
 
-fn recent_file() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/modengine/recent.txt"))
-}
-
-fn load_recent() -> Vec<String> {
-    recent_file().and_then(|f| std::fs::read_to_string(f).ok()).map(|t| t.lines().filter(|l| !l.is_empty()).map(String::from).collect()).unwrap_or_default()
-}
-
-fn remember_recent(path: &Path) {
-    let Some(f) = recent_file() else { return };
-    let p = path.canonicalize().unwrap_or(path.to_path_buf()).to_string_lossy().to_string();
-    let mut list = load_recent();
-    list.retain(|x| *x != p);
-    list.insert(0, p);
-    list.truncate(10);
-    if let Some(d) = f.parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    let _ = std::fs::write(f, list.join("\n"));
-}
-
 impl EditorApp {
     pub fn new(cc: &eframe::CreationContext, path: Option<PathBuf>, auto: Auto) -> Self {
         let theme = crate::theme::load();
@@ -449,7 +430,7 @@ impl EditorApp {
             log: vec![],
             runner: None,
             checks: vec![],
-            start: Start { recent: load_recent(), ..Default::default() },
+            start: crate::start::StartPage::new(auto.config_dir.clone().or_else(crate::projects::config_dir)),
             dialog: None,
             folded: HashMap::new(),
             filter: String::new(),
@@ -467,6 +448,7 @@ impl EditorApp {
         if app.auto.screenshot.is_none() {
             app.upd.vigilar(&cc.egui_ctx);
         }
+        app.start.native_ok = app.auto.screenshot.is_none();
         if let Some(p) = path {
             app.open_project(&p);
         }
@@ -478,9 +460,13 @@ impl EditorApp {
     }
 
     fn open_project(&mut self, path: &Path) {
+        // a game.toml opens its folder
+        let dir = crate::projects::project_dir(path).unwrap_or_else(|| path.to_path_buf());
+        let path = dir.as_path();
         match Project::open(path) {
             Ok(p) => {
-                remember_recent(path);
+                self.stop_game();
+                self.start.opened(path);
                 self.save_layout();
                 self.agent.close_project();
                 self.ws = Workspaces::default();
@@ -499,12 +485,48 @@ impl EditorApp {
                     }
                 }
                 self.project = Some(p);
-                self.start.error = None;
                 self.load_layout();
                 self.check(false);
             }
-            Err(e) => self.start.error = Some(e),
+            Err(e) => {
+                let e = format!("no se pudo abrir el proyecto: {e}");
+                if self.project.is_some() {
+                    self.info(LogKind::Error, e.clone());
+                }
+                self.start.error = Some(e);
+            }
         }
+    }
+
+    /// Opens another project (`Some`) or closes this one, asking first about unsaved changes.
+    fn request_switch(&mut self, to: Option<PathBuf>) {
+        if self.dirty_any() {
+            self.dialog = Some(Dialog::Switch { to });
+        } else {
+            self.switch_to(to);
+        }
+    }
+
+    fn switch_to(&mut self, to: Option<PathBuf>) {
+        match to {
+            Some(p) => self.open_project(&p),
+            None => self.close_project(),
+        }
+    }
+
+    fn close_project(&mut self) {
+        self.stop_game();
+        self.save_layout();
+        self.agent.close_project();
+        self.project = None;
+        self.ws = Workspaces::default();
+        self.selected = None;
+    }
+
+    /// Folder of the open project (tests).
+    #[cfg(test)]
+    pub fn project_dir(&self) -> Option<&Path> {
+        self.project.as_ref().map(|p| p.dir.as_path())
     }
 
     fn dirty_any(&self) -> bool {
@@ -818,61 +840,37 @@ impl EditorApp {
     // ------------------------------------------------------------ ui pieces
 
     fn start_screen(&mut self, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(60.0);
-                ui.heading(RichText::new("Mod Engine").size(36.0).strong());
-                ui.label("editor de juegos 2D: objetos, eventos y rooms");
-                ui.add_space(30.0);
-            });
-            ui.horizontal(|ui| {
-                ui.add_space(((ui.available_width() - 540.0) / 2.0).max(0.0));
-                ui.vertical(|ui| {
-                ui.set_width(540.0);
-                ui.group(|ui| {
-                    ui.strong("Abrir un proyecto");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.start.path).hint_text("/ruta/a/mi_juego").desired_width(380.0));
-                        if ui.button("Abrir").clicked() {
-                            let p = PathBuf::from(self.start.path.trim());
-                            self.open_project(&p);
-                        }
-                    });
-                    if !self.start.recent.is_empty() {
-                        ui.add_space(6.0);
-                        ui.label("Recientes:");
-                        for r in self.start.recent.clone() {
-                            if ui.link(&r).clicked() {
-                                self.open_project(Path::new(&r));
-                            }
-                        }
-                    }
-                });
-                ui.add_space(12.0);
-                ui.group(|ui| {
-                    ui.strong("Crear un proyecto nuevo");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.start.new_path).hint_text("/ruta/a/nuevo_juego").desired_width(380.0));
-                        if ui.button("Crear").clicked() {
-                            let p = PathBuf::from(self.start.new_path.trim());
-                            match modengine::scaffold::create(&p) {
-                                Ok(()) => self.open_project(&p),
-                                Err(e) => self.start.error = Some(e),
-                            }
-                        }
-                    });
-                });
-                if let Some(e) = &self.start.error {
-                    ui.colored_label(crate::theme::colors(ui.ctx()).error, e);
-                }
-                });
-            });
-        });
+        if let Some(crate::start::Action::Open(p)) = self.start.ui(ui) {
+            self.open_project(&p);
+        }
     }
 
     fn menu(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("Archivo", |ui| {
+                if ui.button("＋ Nuevo proyecto…    Ctrl+Mayús+N").clicked() {
+                    self.start.open_new_dialog();
+                    ui.close();
+                }
+                if ui.button("📂 Abrir proyecto…    Ctrl+O").clicked() {
+                    self.start.open_browser(None);
+                    ui.close();
+                }
+                ui.menu_button("Abrir reciente", |ui| {
+                    let current = self.project.as_ref().map(|p| p.dir.clone());
+                    if let Some(crate::start::Action::Open(p)) = self.start.recent_menu(ui, current.as_deref()) {
+                        self.request_switch(Some(p));
+                    }
+                });
+                if ui.button("🗁 Mostrar en el gestor de archivos").clicked() {
+                    if let Some(p) = &self.project {
+                        if let Err(e) = crate::projects::show_in_file_manager(&p.dir) {
+                            self.info(LogKind::Error, e);
+                        }
+                    }
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Guardar todo    Ctrl+S").clicked() {
                     self.save_all();
                     ui.close();
@@ -885,6 +883,10 @@ impl EditorApp {
                     crate::palette::open_dialog();
                     ui.close();
                 }
+                if ui.button("🛒 Tienda de assets (OpenGameArt)…").on_hover_text("Buscar e importar sprites, sonidos y fuentes gratuitos, con sus créditos").clicked() {
+                    crate::store::open_dialog();
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("📦 Exportar…").on_hover_text("Crear el juego para Windows (.exe), Linux o Android (.apk)").clicked() {
                     self.save_all();
@@ -893,16 +895,7 @@ impl EditorApp {
                 }
                 ui.separator();
                 if ui.button("Cerrar proyecto").clicked() {
-                    if self.dirty_any() {
-                        self.save_all();
-                    }
-                    self.stop_game();
-                    self.save_layout();
-                    self.agent.close_project();
-                    self.project = None;
-                    self.ws = Workspaces::default();
-                    self.selected = None;
-                    self.start.recent = load_recent();
+                    self.request_switch(None);
                     ui.close();
                 }
                 ui.separator();
@@ -981,6 +974,10 @@ impl EditorApp {
                 for (i, label) in ["Inspector", "Navegador de assets", "Salida", "Agente"].into_iter().enumerate() {
                     ui.checkbox(&mut self.docks[i], label);
                 }
+                if ui.button("🛒 Tienda de assets").clicked() {
+                    crate::store::open_dialog();
+                    ui.close();
+                }
                 ui.separator();
                 use crate::theme::Theme;
                 for (t, label) in [(Theme::Light, "Tema claro"), (Theme::Dark, "Tema oscuro")] {
@@ -1020,6 +1017,9 @@ impl EditorApp {
             if ui.button("📦 Exportar").on_hover_text("Crear el juego para Windows, Linux o Android").clicked() {
                 self.save_all();
                 crate::export::open_dialog();
+            }
+            if ui.button("🛒 Tienda").on_hover_text("Tienda de assets gratuitos (OpenGameArt.org)").clicked() {
+                crate::store::open_dialog();
             }
             ui.toggle_value(&mut self.docks[3], "✦ Agente").on_hover_text("Panel del agente de programación (Claude Code, Antigravity o Codex)");
             if let Some(p) = &self.project {
@@ -1601,6 +1601,30 @@ impl EditorApp {
                     next = Some(Dialog::Quit);
                 }
             }
+            Dialog::Switch { to } => {
+                let mut go = false;
+                egui::Modal::new(egui::Id::unique("switch_project")).show(ctx, |ui| {
+                    ui.heading("Hay cambios sin guardar");
+                    ui.label(if to.is_some() { "¿Guardar antes de abrir el otro proyecto?" } else { "¿Guardar antes de cerrar el proyecto?" });
+                    ui.horizontal(|ui| {
+                        if ui.add(crate::theme::primary_button(ui, "Guardar y continuar")).clicked() {
+                            self.save_all();
+                            go = true;
+                        }
+                        if ui.button("Descartar cambios").clicked() {
+                            go = true;
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if go {
+                    self.switch_to(to);
+                } else if keep {
+                    next = Some(Dialog::Switch { to });
+                }
+            }
         }
         self.dialog = next;
     }
@@ -1836,6 +1860,18 @@ impl EditorApp {
                 self.new_dialog(k);
             }
         }
+        if self.auto.frames == 2 {
+            if let Some(t) = self.auto.new_project.take() {
+                self.start.open_new_dialog();
+                if let (Some(d), Some(i)) = (&mut self.start.new_dialog, modengine::scaffold::TEMPLATES.iter().position(|x| Some(x) == modengine::scaffold::template(&t))) {
+                    d.template = i;
+                    d.name = "Mi juego".into();
+                }
+            }
+            if let Some(dir) = self.auto.open_project.take() {
+                self.start.open_browser(Some(&dir));
+            }
+        }
         if self.auto.frames == 2 && !self.auto.import.is_empty() {
             let paths = std::mem::take(&mut self.auto.import);
             self.open_import(&paths, None);
@@ -1853,7 +1889,9 @@ impl EditorApp {
         }
         let Some(path) = self.auto.screenshot.clone() else { return };
         ctx.request_repaint();
-        if self.auto.frames == 30 {
+        // the Tienda de assets loads thumbnails at 1 request / 2 s: wait for them (max ~2.5 min)
+        if self.auto.frames >= 30 && !self.auto.shot && (!crate::store::busy() || ctx.input(|i| i.time) > 150.0) {
+            self.auto.shot = true;
             let done = self.auto.done.clone();
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
                 let bytes: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
@@ -1894,6 +1932,13 @@ impl EditorApp {
         if find {
             self.docks[1] = true;
             self.focus_filter = true;
+        }
+        let (new_project, open_project) = ctx.input_mut(|i| (i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::N), i.consume_key(Modifiers::COMMAND, Key::O)));
+        if new_project {
+            self.start.open_new_dialog();
+        }
+        if open_project {
+            self.start.open_browser(None);
         }
         let typing = ctx.memory(|m| m.focused().is_some());
         if self.browser_focus && !typing && self.dialog.is_none() {
@@ -2012,9 +2057,21 @@ impl eframe::App for EditorApp {
         }
         egui::CentralPanel::default().frame(crate::theme::editor_frame(&ctx).inner_margin(0)).show(ui, |ui| self.workspace(ui));
         self.dialogs(&ctx);
+        if let Some(crate::start::Action::Open(p)) = self.start.dialogs(&ctx) {
+            self.request_switch(Some(p));
+        }
         self.import_frame(ui);
         crate::palette::dialog_frame(&ctx, self.project.as_mut(), &mut self.log);
         crate::export::dialog_frame(&ctx, self.project.as_mut(), &mut self.log);
+        // the store hides while the import dialog it opened is up, then comes back
+        if self.import.is_none() {
+            let files = crate::store::dialog_frame(&ctx, self.project.is_some());
+            if !files.is_empty() {
+                // not remembered as the browser's last folder (it is the store's cache)
+                self.import.get_or_insert_with(|| crate::import::ImportDialog::new(None));
+                self.open_import(&files, None);
+            }
+        }
         crate::dnd::ghost(&ctx);
     }
 }
@@ -2108,7 +2165,10 @@ impl EditorApp {
                     crate::import::paint_drop_hint(&ctx, hovered);
                 }
                 let paths: Vec<PathBuf> = dropped.iter().map(|f| f.path().to_path_buf()).collect();
-                if !paths.is_empty() {
+                // a project folder or its game.toml opens that project instead
+                if let Some(dir) = crate::projects::dropped_project(&paths) {
+                    self.request_switch(Some(dir));
+                } else if !paths.is_empty() {
                     self.open_import(&paths, None);
                 }
             }
@@ -2160,6 +2220,9 @@ impl EditorApp {
                 self.folded.insert(k, true);
             }
             self.selected = Some(what);
+        }
+        if let Some(dir) = self.project.as_ref().map(|p| p.dir.clone()) {
+            lines.extend(crate::store::credit_imported(&dir, &done));
         }
         self.log.extend(lines);
         self.check(false);

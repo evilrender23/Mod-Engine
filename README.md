@@ -51,11 +51,16 @@ Controles del ejemplo: flechas/WASD para moverte, ESPACIO para saltar, ESC para 
 En cualquier juego: **F3** muestra la capa de depuración (fps, instancias, cajas de colisión),
 **F4** pantalla completa y **F12** guarda una captura.
 
-Crear un proyecto nuevo (también desde la pantalla de inicio del editor):
+Crear o abrir proyectos: `./target/release/modeditor` sin argumentos muestra la **página de
+inicio** con botones grandes **＋ Nuevo proyecto** (nombre, carpeta, plantilla *Vacío*, *Básico*,
+*Plataformas*, *Top-down* o *Showcase*, tamaño de pantalla y paleta), **📂 Abrir proyecto…** (un
+explorador que marca con 🎮 las carpetas que son proyectos, o el diálogo del sistema) y **Abrir
+ejemplo**, más tus proyectos recientes como tarjetas. También puedes arrastrar a la ventana la
+carpeta de un proyecto o su `game.toml`. Desde la terminal:
 
 ```bash
-./target/release/modengine new mi_juego
-./target/release/modeditor mi_juego
+./target/release/modengine new --template platformer --name "Mi juego" mi_juego
+./target/release/modeditor mi_juego          # o mi_juego/game.toml
 ```
 
 ## Cómo es un proyecto
@@ -134,7 +139,8 @@ map = '''
 ```text
 modengine run <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--screenshot f.png] [--frames N]
 modengine check <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--steps N] [--watch Objeto]
-modengine new <carpeta>
+modengine new [--template vacio|basico|plataformas|top-down|showcase] [--name "Nombre"] <carpeta>
+modengine new --template list                     # las plantillas
 modengine export <proyecto> --target windows|linux|android [--out CARPETA] [--release]
 modengine export --setup windows|linux|android   # instala lo que falte (en tu carpeta de usuario)
 modengine export --doctor                         # qué plataformas están listas

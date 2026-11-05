@@ -181,7 +181,7 @@ pub fn expand(s: &str) -> PathBuf {
     }
 }
 
-fn percent_decode(s: &str) -> String {
+pub fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -355,6 +355,8 @@ pub struct Imported {
     pub files: Vec<String>,
     /// An asset with this name was replaced (its old files are in `.trash`).
     pub replaced: bool,
+    /// The file it was copied from (the store looks up its attribution by it).
+    pub src: PathBuf,
 }
 
 impl Imported {
@@ -452,7 +454,7 @@ pub fn import(project: &Path, kind: Kind, src: &Path, name: &str, opts: &SpriteO
             files.push(format!("{}/{name}.toml", kind.folder()));
         }
     }
-    Ok(Imported { kind, name: name.to_string(), files, replaced })
+    Ok(Imported { kind, name: name.to_string(), files, replaced, src: src.to_path_buf() })
 }
 
 /// Does the file look like what its extension says? (Images are checked by decoding them.)

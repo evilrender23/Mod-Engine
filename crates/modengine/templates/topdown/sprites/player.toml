@@ -1,0 +1,12 @@
+origin = "center"
+# K outline, D body, F eyes
+pixels = ['''
+..KKKK..
+.KDDDDK.
+KDFKKFDK
+KDDDDDDK
+KCDDDDCK
+.KCCCCK.
+.KCKKCK.
+..K..K..
+''']

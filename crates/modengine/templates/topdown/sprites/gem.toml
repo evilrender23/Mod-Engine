@@ -1,0 +1,21 @@
+origin = "center"
+fps = 6
+pixels = ['''
+...KK...
+..KEEK..
+.KEFEDK.
+KEFEEDDK
+KDEEDDCK
+.KDDDCK.
+..KDCK..
+...KK...
+''', '''
+...KK...
+..KEEK..
+.KEEFDK.
+KEEFEDDK
+KDEEDDCK
+.KDDDCK.
+..KDCK..
+...KK...
+''']

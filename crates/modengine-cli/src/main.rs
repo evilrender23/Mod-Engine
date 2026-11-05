@@ -12,7 +12,9 @@ Mod Engine — 2D games made of objects, events and rooms
 usage:
   modengine run <project|game.dat> [--room R] [--exec CODE] [--input SPEC] [--screenshot <file.png>] [--frames N] [--touch]
   modengine check <project> [--room R] [--exec CODE] [--input SPEC] [--steps N] [--watch Object]
-  modengine new <folder>
+  modengine new [--template T] [--name N] <folder>
+                                           new project; templates: empty, basic (default),
+                                           platformer, topdown, showcase (--template list)
   modengine shader <project> [name] [--check] [--sprite S] [--uniform n=a,b] [--screenshot F.png]
                                            compile shaders on the GPU / live shader preview
   modengine export <project> --target linux|windows|android [--out DIR] [--release] [--arch A,B] [--zip]
@@ -39,11 +41,13 @@ struct Args {
     room: Option<String>,
     exec: Option<String>,
     touch: bool,
+    template: Option<String>,
+    name: Option<String>,
 }
 
 fn parse_args() -> Args {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    let mut a = Args { cmd: String::new(), path: None, screenshot: None, frames: None, steps: 600, input: None, watch: vec![], room: None, exec: None, touch: false };
+    let mut a = Args { cmd: String::new(), path: None, screenshot: None, frames: None, steps: 600, input: None, watch: vec![], room: None, exec: None, touch: false, template: None, name: None };
     let mut i = 0;
     let mut positional = Vec::new();
     while i < raw.len() {
@@ -64,6 +68,8 @@ fn parse_args() -> Args {
             "--room" => a.room = Some(value()),
             "--exec" => a.exec = Some(value()),
             "--touch" => a.touch = true,
+            "--template" | "-t" => a.template = Some(value()),
+            "--name" => a.name = Some(value()),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 exit(0)
@@ -141,11 +147,18 @@ fn main() {
             check(&path, &args);
         }
         "new" => {
+            if args.template.as_deref() == Some("list") {
+                for t in modengine::scaffold::TEMPLATES {
+                    println!("{:<11} {}", t.id, t.description);
+                }
+                return;
+            }
             let Some(path) = args.path else {
-                eprintln!("usage: modengine new <folder>");
+                eprintln!("usage: modengine new [--template T] [--name N] <folder>");
                 exit(2)
             };
-            if let Err(e) = modengine::scaffold::create(&path) {
+            let opts = modengine::scaffold::NewProject { template: args.template.clone().unwrap_or_default(), name: args.name.clone(), ..Default::default() };
+            if let Err(e) = modengine::scaffold::create_with(&path, &opts) {
                 eprintln!("{e}");
                 exit(1)
             }
