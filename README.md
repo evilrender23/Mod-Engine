@@ -7,6 +7,36 @@ pensado para eso.
 
 ![Coin Climber, el juego de ejemplo](docs/img/level.png)
 
+## Instalación
+
+Un solo comando compila el motor y el editor y los instala en el sistema. Si falta algo (Rust 1.95+,
+un compilador de C, Git y, en Linux, ALSA), pregunta antes de instalarlo.
+
+**Linux y Mac:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/evilrender23/Mod-Engine/master/instalar.sh | bash
+```
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/evilrender23/Mod-Engine/master/instalar.ps1 | iex
+```
+
+También desde un clon: `bash Mod-Engine/instalar.sh` o
+`powershell -ExecutionPolicy Bypass -File Mod-Engine\instalar.ps1`.
+
+| | Código y caché | Programas | Comandos | Acceso |
+|---|---|---|---|---|
+| Linux | `~/.local/share/ModEngine/codigo` | `~/.local/share/ModEngine/app` | enlaces en `~/.local/bin` | menú de aplicaciones |
+| Mac | `~/Library/Application Support/ModEngine/codigo` | `…/ModEngine/app` | enlaces en `~/.local/bin` | `~/Applications/Mod Engine Editor.app` |
+| Windows | `%LOCALAPPDATA%\ModEngine\codigo` | `%LOCALAPPDATA%\ModEngine\app` | `app` en el PATH del usuario | menú Inicio |
+
+Para actualizar, vuelve a ejecutar el mismo comando: trae lo último de `master` y recompila
+aprovechando la caché. Opciones: `--repo`, `--rama`, `--destino` y `--bin` (en Windows `-Repo`,
+`-Rama` y `-Destino`). Junto a los programas queda el ejemplo `examples/platformer`.
+
 ## Probarlo
 
 ```bash
