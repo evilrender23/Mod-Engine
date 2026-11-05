@@ -390,7 +390,7 @@ fn write_room(m: &RoomModel) -> String {
 // ------------------------------------------------------------------ editor
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tool {
+pub(crate) enum Tool {
     Paint,
     Erase,
     Select,
@@ -408,8 +408,8 @@ pub struct RoomEditor {
     pub dirty: bool,
     loaded: Option<RoomToml>,
     layer: usize,
-    tool: Tool,
-    brush: Option<String>,
+    pub(crate) tool: Tool,
+    pub(crate) brush: Option<String>,
     brush_tile: i32,
     snap: bool,
     show_grid: bool,
@@ -1252,7 +1252,7 @@ impl RoomEditor {
                 }
             }
         }
-        if ui.input(|i| i.key_pressed(egui::Key::Delete)) && ui.memory(|m| m.focused().is_none()) {
+        if cx.active && ui.input(|i| i.key_pressed(egui::Key::Delete)) && ui.memory(|m| m.focused().is_none()) {
             if let Some(i) = self.sel.take() {
                 let before = self.m.clone();
                 if i < self.m.layers[self.layer].t.instances.len() {
@@ -1265,6 +1265,12 @@ impl RoomEditor {
     }
 
     /// Screen position of a room coordinate (as of the last frame).
+    #[cfg(test)]
+    #[cfg(test)]
+    pub(crate) fn cell_objects(&self, x: i32, y: i32) -> Vec<String> {
+        self.m.layers[self.layer].get_obj(x, y).to_vec()
+    }
+
     #[cfg(test)]
     pub(crate) fn screen_of(&self, x: f32, y: f32) -> Pos2 {
         self.canvas_rect.min + self.pan + Vec2::new(x, y) * self.zoom
@@ -1466,7 +1472,7 @@ pub(crate) mod tests {
         let st = St { ed, project, tex: TexCache::default(), log: vec![], open: vec![] };
         let mut h = Harness::builder().with_size([1300.0, 820.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
             |ui, s: &mut St| {
-                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open };
+                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
                 s.ed.ui(ui, &mut cx);
             },
             st,
@@ -1504,7 +1510,7 @@ pub(crate) mod tests {
         assert_eq!(h.state().ed.m.layers[h.state().ed.layer].get_obj(5, 3), ["Coin".to_string()]);
         {
             let s = h.state_mut();
-            let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open };
+            let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
             s.ed.save(&mut cx).unwrap();
         }
         let rt: RoomToml = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

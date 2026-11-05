@@ -14,10 +14,33 @@ editor de texto favorito.
 
 | Zona | Qué hay |
 |---|---|
-| Arriba | Menús (Archivo, Crear, Juego, Editar) y los botones ▶ Ejecutar y ✔ Comprobar |
-| Derecha | Navegador de assets: sprites (con miniatura), objetos (con su padre), rooms (★ = la inicial), sonidos, scripts. **+** crea uno nuevo; clic derecho → Eliminar |
-| Centro | Pestañas con los editores abiertos (● = cambios sin guardar) |
+| Arriba | Menús (Archivo, Crear, Juego, Editar, Workspace, Ver) y los botones ▶ Ejecutar y ✔ Comprobar |
+| Izquierda | **Inspector**: miniatura y datos del asset seleccionado (tamaño, fotogramas, padre, eventos, hijos, variables con tipo, capas de la room…) y *Abrir editor* |
+| Derecha | Navegador de assets: sprites (con miniatura), objetos (con su padre), rooms (★ = la inicial), sonidos, scripts. Clic = verlo en el inspector, **doble clic = abrirlo en el workspace**. **+** crea uno nuevo; clic derecho → Eliminar |
+| Centro | **Workspaces**: pestañas *Workspace 1, 2…* y, en cada una, un lienzo con los editores como ventanas flotantes |
 | Abajo | Salida: problemas del proyecto, mensajes de `print()` y errores del juego en marcha |
+
+Los tres paneles laterales se ocultan desde **Ver**.
+
+## Workspaces
+
+Funcionan como los de GameMaker:
+
+![Workspace con cuatro editores encadenados](img/editor_workspace.png)
+
+- Cada asset se abre como una **ventana** dentro del workspace: se arrastra por el título, se
+  redimensiona desde el borde derecho, el inferior o la esquina, ▾ la pliega y 🗖 (o doble clic
+  en el título) la maximiza dentro del workspace. ● en el título = cambios sin guardar.
+- Lo que abres **desde** otra ventana (por ejemplo *Abrir objeto* en el editor de rooms, o
+  *Abrir Actor* en un objeto) aparece a su derecha, **encadenado** con una línea.
+- El fondo se arrastra para moverse; **Ctrl + rueda** hace zoom alrededor del cursor (25–200 %);
+  la rueda sola desplaza. Clic derecho en el fondo → *Ver todas las ventanas* (Ctrl+0),
+  *Zoom al 100 %* o *Cerrar todas*.
+- **+** añade otro workspace; doble clic en su pestaña lo renombra; × lo cierra (cerrando sus
+  ventanas). Si un asset ya está abierto en cualquier workspace, abrirlo de nuevo te lleva a él.
+- Ctrl+Z / Ctrl+Y / Ctrl+W y Supr actúan sobre la ventana con foco (borde azul).
+- La disposición (workspaces, ventanas, cadenas, zoom y paneles visibles) se guarda por proyecto
+  en `~/.config/modengine/layouts/` y se recupera al abrirlo.
 
 | Atajo | |
 |---|---|
@@ -25,7 +48,8 @@ editor de texto favorito.
 | F5 | guardar y ejecutar el juego (vuelve a pulsarlo para reiniciarlo) |
 | F6 | comprobar: carga el proyecto con el motor real y ejecuta 300 pasos sin ventana |
 | Ctrl+Z / Ctrl+Y | deshacer / rehacer (rooms y sprites; los campos de texto tienen su propio deshacer) |
-| Ctrl+W | cerrar pestaña |
+| Ctrl+W | cerrar la ventana con foco |
+| Ctrl+0 | ver todas las ventanas del workspace |
 
 Al guardar, el editor vuelve a cargar el proyecto con el motor y avisa en la salida si algo no
 compila. Lo que se elimina no se borra: se mueve a la carpeta `.trash/` del proyecto.

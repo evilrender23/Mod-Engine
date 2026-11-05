@@ -13,6 +13,7 @@ mod sprite;
 mod tex;
 mod theme;
 mod typedvar;
+mod workspace;
 mod tomlw;
 
 fn main() -> eframe::Result {
@@ -29,13 +30,14 @@ fn main() -> eframe::Result {
             }
             "--screenshot" => auto.screenshot = args.next().map(std::path::PathBuf::from),
             "--select" => auto.select = true,
+            "--fit" => auto.fit = true,
             _ => path = Some(std::path::PathBuf::from(a)),
         }
     }
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Mod Engine Editor")
-            .with_inner_size([1400.0, 860.0])
+            .with_inner_size(if auto.screenshot.is_some() { [1920.0, 1080.0] } else { [1400.0, 860.0] })
             .with_min_inner_size([900.0, 560.0]),
         ..Default::default()
     };

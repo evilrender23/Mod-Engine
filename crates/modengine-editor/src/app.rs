@@ -9,8 +9,9 @@ use crate::sound::SoundEditor;
 use crate::sprite::SpriteEditor;
 use crate::tex::TexCache;
 use crate::tomlw::valid_name;
+use crate::workspace::{LayoutFile, Workspaces, WsAction};
 use eframe::egui::{self, Key, Modifiers, RichText, Sense, Vec2};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -55,6 +56,18 @@ impl Open {
             _ => return None,
         })
     }
+
+    /// Inverse of [`Open::parse`].
+    pub fn key(&self) -> String {
+        match self {
+            Open::Room(n) => format!("room:{n}"),
+            Open::Object(n) => format!("object:{n}"),
+            Open::Sprite(n) => format!("sprite:{n}"),
+            Open::Sound(n) => format!("sound:{n}"),
+            Open::Script(n) => format!("script:{n}"),
+            Open::Settings => "settings".into(),
+        }
+    }
 }
 
 /// Scripted startup used for automated screenshots.
@@ -64,6 +77,8 @@ pub struct Auto {
     pub screenshot: Option<PathBuf>,
     /// Select something in the opened editors (first free instance, the variables pane).
     pub select: bool,
+    /// Zoom the workspace out so every opened window is visible.
+    pub fit: bool,
     frames: u32,
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -74,6 +89,8 @@ pub struct Cx<'a> {
     pub tex: &'a mut TexCache,
     pub log: &'a mut Vec<LogLine>,
     pub open: &'a mut Vec<Open>,
+    /// The editor's window has focus (keyboard shortcuts like Delete only act there).
+    pub active: bool,
 }
 
 impl Cx<'_> {
@@ -94,7 +111,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    fn open_key(&self) -> Open {
+    pub fn open_key(&self) -> Open {
         match self {
             Tab::Room(e) => Open::Room(e.name.clone()),
             Tab::Object(e) => Open::Object(e.name.clone()),
@@ -105,18 +122,19 @@ impl Tab {
         }
     }
 
-    fn title(&self) -> String {
+    /// Title bar text of the editor's workspace window.
+    pub fn window_title(&self) -> String {
         match self {
-            Tab::Room(e) => format!("▦ {}", e.name),
-            Tab::Object(e) => format!("◆ {}", e.name),
-            Tab::Sprite(e) => format!("▣ {}", e.name),
-            Tab::Sound(e) => format!("♪ {}", e.name),
-            Tab::Script(e) => format!("✎ {}", e.rel),
-            Tab::Settings(_) => "⚙ Juego".into(),
+            Tab::Room(e) => format!("▦ Room: {}", e.name),
+            Tab::Object(e) => format!("◆ Objeto: {}", e.name),
+            Tab::Sprite(e) => format!("▣ Sprite: {}", e.name),
+            Tab::Sound(e) => format!("♪ Sonido: {}", e.name),
+            Tab::Script(e) => format!("✎ Script: {}", e.rel),
+            Tab::Settings(_) => "⚙ Ajustes del juego".into(),
         }
     }
 
-    fn dirty(&self, p: &Project) -> bool {
+    pub fn dirty(&self, p: &Project) -> bool {
         match self {
             Tab::Room(e) => e.dirty,
             Tab::Sprite(e) => e.dirty,
@@ -127,7 +145,7 @@ impl Tab {
         }
     }
 
-    fn save(&mut self, cx: &mut Cx) -> Result<(), String> {
+    pub fn save(&mut self, cx: &mut Cx) -> Result<(), String> {
         match self {
             Tab::Room(e) => e.save(cx),
             Tab::Sprite(e) => e.save(cx),
@@ -145,7 +163,7 @@ impl Tab {
     }
 
     /// Throws away unsaved changes.
-    fn revert(&mut self, p: &mut Project) {
+    pub fn revert(&mut self, p: &mut Project) {
         let rel = match self {
             Tab::Object(e) => e.script_rel(p),
             Tab::Script(e) => Some(e.rel.clone()),
@@ -157,7 +175,7 @@ impl Tab {
         }
     }
 
-    fn undo(&mut self) {
+    pub fn undo(&mut self) {
         match self {
             Tab::Room(e) => e.undo(),
             Tab::Sprite(e) => e.undo(),
@@ -165,7 +183,7 @@ impl Tab {
         }
     }
 
-    fn redo(&mut self) {
+    pub fn redo(&mut self) {
         match self {
             Tab::Room(e) => e.redo(),
             Tab::Sprite(e) => e.redo(),
@@ -173,7 +191,7 @@ impl Tab {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         match self {
             Tab::Room(e) => e.ui(ui, cx),
             Tab::Object(e) => e.ui(ui, cx),
@@ -183,6 +201,33 @@ impl Tab {
             Tab::Settings(e) => e.ui(ui, cx),
         }
     }
+}
+
+/// Creates the editor for an asset. `Err(None)` when the asset doesn't exist.
+fn make_tab(p: &Project, what: &Open) -> Result<Tab, Option<String>> {
+    Ok(match what {
+        Open::Room(n) => {
+            let r = p.rooms.iter().find(|r| &r.name == n).ok_or(None)?;
+            Tab::Room(RoomEditor::open(n, &r.path).map_err(Some)?)
+        }
+        Open::Object(n) => {
+            p.object(n).ok_or(None)?;
+            Tab::Object(ObjectEditor::new(n))
+        }
+        Open::Sprite(n) => {
+            let s = p.sprite_entry(n).ok_or(None)?;
+            Tab::Sprite(SpriteEditor::open(n, &s.path, s.is_toml).map_err(Some)?)
+        }
+        Open::Sound(n) => {
+            let s = p.sounds.iter().find(|s| &s.name == n).ok_or(None)?;
+            Tab::Sound(SoundEditor::open(n, &s.path, s.is_toml).map_err(Some)?)
+        }
+        Open::Script(rel) => {
+            p.script_index(rel).ok_or(None)?;
+            Tab::Script(ScriptEditor::new(rel))
+        }
+        Open::Settings => Tab::Settings(SettingsEditor::new(p)),
+    })
 }
 
 // ------------------------------------------------------------------ dialogs
@@ -200,7 +245,7 @@ enum NewKind {
 enum Dialog {
     New { kind: NewKind, name: String, extra: String, error: Option<String> },
     Delete { what: Open },
-    CloseTab { idx: usize },
+    CloseWin { id: u64 },
     Quit,
 }
 
@@ -219,8 +264,11 @@ struct Start {
 
 pub struct EditorApp {
     project: Option<Project>,
-    tabs: Vec<Tab>,
-    active: usize,
+    ws: Workspaces,
+    /// Inspector, asset browser and output docks shown.
+    docks: [bool; 3],
+    /// Asset selected in the browser (shown in the inspector).
+    selected: Option<Open>,
     tex: TexCache,
     log: Vec<LogLine>,
     runner: Option<Runner>,
@@ -262,8 +310,9 @@ impl EditorApp {
         crate::theme::apply(&cc.egui_ctx, theme);
         let mut app = EditorApp {
             project: None,
-            tabs: vec![],
-            active: 0,
+            ws: Workspaces::default(),
+            docks: [true; 3],
+            selected: None,
             tex: TexCache::default(),
             log: vec![],
             runner: None,
@@ -290,7 +339,9 @@ impl EditorApp {
         match Project::open(path) {
             Ok(p) => {
                 remember_recent(path);
-                self.tabs.clear();
+                self.save_layout();
+                self.ws = Workspaces::default();
+                self.selected = None;
                 self.tex = TexCache::default();
                 self.log.clear();
                 self.info(LogKind::Ok, format!("proyecto abierto: {}", path.display()));
@@ -304,6 +355,7 @@ impl EditorApp {
                 }
                 self.project = Some(p);
                 self.start.error = None;
+                self.load_layout();
                 self.check(false);
             }
             Err(e) => self.start.error = Some(e),
@@ -312,7 +364,7 @@ impl EditorApp {
 
     fn dirty_any(&self) -> bool {
         let Some(p) = &self.project else { return false };
-        p.dirty_scripts() || self.tabs.iter().any(|t| t.dirty(p))
+        p.dirty_scripts() || self.ws.wins().any(|w| w.tab.dirty(p))
     }
 
     fn save_all(&mut self) {
@@ -320,8 +372,8 @@ impl EditorApp {
         let mut open = vec![];
         let mut errors = vec![];
         {
-            let mut cx = Cx { project, tex: &mut self.tex, log: &mut self.log, open: &mut open };
-            for t in &mut self.tabs {
+            let mut cx = Cx { project, tex: &mut self.tex, log: &mut self.log, open: &mut open, active: false };
+            for t in self.ws.tabs_mut() {
                 if t.dirty(cx.project) {
                     if let Err(e) = t.save(&mut cx) {
                         errors.push(e);
@@ -340,7 +392,35 @@ impl EditorApp {
             self.info(LogKind::Error, e);
         }
         self.info(LogKind::Ok, "guardado");
+        self.save_layout();
         self.check(false);
+    }
+
+    // ------------------------------------------------------------ workspace layout
+
+    fn load_layout(&mut self) {
+        let Some(p) = &self.project else { return };
+        if self.auto.screenshot.is_some() {
+            return; // reproducible screenshots: start from an empty workspace
+        }
+        let Some(f) = crate::workspace::layout_path(&p.dir).and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| toml::from_str::<LayoutFile>(&t).ok()) else {
+            return;
+        };
+        self.ws = Workspaces::from_file(&f, |o| make_tab(p, o).ok());
+        self.docks = f.docks;
+    }
+
+    fn save_layout(&self) {
+        let Some(p) = &self.project else { return };
+        if self.auto.screenshot.is_some() {
+            return;
+        }
+        let Some(path) = crate::workspace::layout_path(&p.dir) else { return };
+        let f = self.ws.to_file(&p.dir.to_string_lossy(), self.docks);
+        if let (Some(d), Ok(text)) = (path.parent(), toml::to_string(&f)) {
+            let _ = std::fs::create_dir_all(d);
+            let _ = std::fs::write(path, text);
+        }
     }
 
     /// Loads the project with the real engine in the background and reports problems.
@@ -452,47 +532,41 @@ impl EditorApp {
     }
 
     fn open(&mut self, what: Open) {
-        if let Some(i) = self.tabs.iter().position(|t| t.open_key() == what) {
-            self.active = i;
-            return;
-        }
-        let Some(p) = &mut self.project else { return };
-        let tab = match &what {
-            Open::Room(n) => match p.rooms.iter().find(|r| &r.name == n) {
-                Some(r) => match RoomEditor::open(n, &r.path) {
-                    Ok(e) => Tab::Room(e),
-                    Err(e) => return self.info(LogKind::Error, e),
-                },
-                None => return,
-            },
-            Open::Object(n) => Tab::Object(ObjectEditor::new(n)),
-            Open::Sprite(n) => match p.sprite_entry(n) {
-                Some(s) => match SpriteEditor::open(n, &s.path, s.is_toml) {
-                    Ok(e) => Tab::Sprite(e),
-                    Err(e) => return self.info(LogKind::Error, e),
-                },
-                None => return,
-            },
-            Open::Sound(n) => match p.sounds.iter().find(|s| &s.name == n) {
-                Some(s) => match SoundEditor::open(n, &s.path, s.is_toml) {
-                    Ok(e) => Tab::Sound(e),
-                    Err(e) => return self.info(LogKind::Error, e),
-                },
-                None => return,
-            },
-            Open::Script(rel) => Tab::Script(ScriptEditor::new(rel)),
-            Open::Settings => Tab::Settings(SettingsEditor::new(p)),
-        };
-        self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
+        self.open_from(what, None);
     }
 
-    fn close_tab(&mut self, idx: usize) {
-        if idx < self.tabs.len() {
-            self.tabs.remove(idx);
-            if self.active >= self.tabs.len() {
-                self.active = self.tabs.len().saturating_sub(1);
+    /// Opens an editor window, chained to `parent` (the window it was opened from).
+    /// An editor that is already open is focused instead.
+    fn open_from(&mut self, what: Open, parent: Option<u64>) {
+        self.selected = Some(what.clone());
+        if let Some(id) = self.ws.find(&what) {
+            self.ws.focus(id);
+            return;
+        }
+        let Some(p) = &self.project else { return };
+        match make_tab(p, &what) {
+            Ok(tab) => {
+                self.ws.add(tab, parent);
             }
+            Err(Some(e)) => self.info(LogKind::Error, e),
+            Err(None) => {}
+        }
+    }
+
+    fn close_win(&mut self, id: u64) {
+        self.ws.remove(id);
+    }
+
+    /// Closes a window, asking first when it has unsaved changes.
+    fn request_close(&mut self, id: u64) {
+        let dirty = match (&self.project, self.ws.wins().find(|w| w.id == id)) {
+            (Some(p), Some(w)) => w.tab.dirty(p),
+            _ => false,
+        };
+        if dirty {
+            self.dialog = Some(Dialog::CloseWin { id });
+        } else {
+            self.close_win(id);
         }
     }
 
@@ -563,8 +637,10 @@ impl EditorApp {
                         self.save_all();
                     }
                     self.stop_game();
+                    self.save_layout();
                     self.project = None;
-                    self.tabs.clear();
+                    self.ws = Workspaces::default();
+                    self.selected = None;
                     self.start.recent = load_recent();
                     ui.close();
                 }
@@ -610,19 +686,51 @@ impl EditorApp {
             });
             ui.menu_button("Editar", |ui| {
                 if ui.button("Deshacer    Ctrl+Z").clicked() {
-                    if let Some(t) = self.tabs.get_mut(self.active) {
-                        t.undo();
+                    if let Some(w) = self.ws.focused_mut() {
+                        w.tab.undo();
                     }
                     ui.close();
                 }
                 if ui.button("Rehacer    Ctrl+Y").clicked() {
-                    if let Some(t) = self.tabs.get_mut(self.active) {
-                        t.redo();
+                    if let Some(w) = self.ws.focused_mut() {
+                        w.tab.redo();
+                    }
+                    ui.close();
+                }
+            });
+            ui.menu_button("Workspace", |ui| {
+                if ui.button("Nuevo workspace").clicked() {
+                    self.ws.add_workspace();
+                    ui.close();
+                }
+                if ui.button("Ver todas las ventanas    Ctrl+0").clicked() {
+                    self.ws.fit_all();
+                    ui.close();
+                }
+                if ui.button("Zoom al 100 %").clicked() {
+                    self.ws.reset_zoom();
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Cerrar ventana    Ctrl+W").clicked() {
+                    if let Some(id) = self.ws.focused().map(|w| w.id) {
+                        self.request_close(id);
+                    }
+                    ui.close();
+                }
+                if ui.button("Cerrar todas las ventanas").clicked() {
+                    let ids: Vec<u64> = self.ws.cur().wins.iter().map(|w| w.id).collect();
+                    for id in ids {
+                        self.request_close(id);
                     }
                     ui.close();
                 }
             });
             ui.menu_button("Ver", |ui| {
+                for (i, label) in ["Inspector", "Navegador de assets", "Salida"].into_iter().enumerate() {
+                    ui.checkbox(&mut self.docks[i], label);
+                }
+                ui.separator();
                 use crate::theme::Theme;
                 for (t, label) in [(Theme::Light, "Tema claro"), (Theme::Dark, "Tema oscuro")] {
                     if ui.radio(self.theme == t, label).clicked() {
@@ -678,7 +786,7 @@ impl EditorApp {
         if !f.is_empty() && !label.to_lowercase().contains(&f) {
             return;
         }
-        let active = self.tabs.get(self.active).map(|t| t.open_key() == what).unwrap_or(false);
+        let active = self.selected.as_ref() == Some(&what) || self.ws.focused().is_some_and(|w| w.tab.open_key() == what);
         let resp = ui
             .horizontal(|ui| {
                 ui.add_space(10.0);
@@ -692,9 +800,12 @@ impl EditorApp {
             })
             .inner;
         if resp.clicked() {
+            self.selected = Some(what.clone());
+        }
+        if resp.double_clicked() {
             self.open(what.clone());
         }
-        resp.context_menu(|ui| {
+        resp.on_hover_text("clic: inspector · doble clic: abrir en el workspace").context_menu(|ui| {
             if ui.button("Abrir").clicked() {
                 self.open(what.clone());
                 ui.close();
@@ -768,6 +879,208 @@ impl EditorApp {
         });
     }
 
+    /// Workspace tabs plus the canvas with the open editors.
+    fn workspace(&mut self, ui: &mut egui::Ui) {
+        let dirty: HashSet<u64> = match &self.project {
+            Some(p) => self.ws.wins().filter(|w| w.tab.dirty(p)).map(|w| w.id).collect(),
+            None => HashSet::new(),
+        };
+        let mut actions = vec![];
+        egui::Frame::new().fill(crate::theme::sidebar_frame(ui.ctx()).fill).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            actions.extend(self.ws.tab_bar(ui, &dirty));
+        });
+        let mut opens: Vec<(Open, u64)> = vec![];
+        let focused = self.ws.cur().focus;
+        let (project, tex, log) = (&mut self.project, &mut self.tex, &mut self.log);
+        let Some(project) = project.as_mut() else { return };
+        actions.extend(self.ws.canvas(ui, &dirty, |ui, w| {
+            let mut open = vec![];
+            let mut cx = Cx { project, tex, log, open: &mut open, active: focused == Some(w.id) };
+            w.tab.ui(ui, &mut cx);
+            opens.extend(open.into_iter().map(|o| (o, w.id)));
+        }));
+        for (o, from) in opens {
+            self.open_from(o, Some(from));
+        }
+        for a in actions {
+            match a {
+                WsAction::Close(id) => self.request_close(id),
+                WsAction::CloseWorkspace(i) => {
+                    let ids: Vec<u64> = self.ws.list.get(i).map(|w| w.wins.iter().map(|x| x.id).collect()).unwrap_or_default();
+                    for id in ids {
+                        self.request_close(id);
+                    }
+                    self.ws.remove_workspace(i);
+                }
+            }
+        }
+    }
+
+    /// Left dock: details of the asset selected in the browser (or the focused window).
+    fn inspector(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.strong("Inspector");
+        });
+        ui.separator();
+        let what = self.selected.clone().or_else(|| self.ws.focused().map(|w| w.tab.open_key()));
+        let Some(what) = what else {
+            ui.label(RichText::new("Selecciona un asset en el navegador para ver sus propiedades.").weak());
+            return;
+        };
+        let Some(p) = &self.project else { return };
+        let (kind, name) = match &what {
+            Open::Room(n) => ("Room", n.clone()),
+            Open::Object(n) => ("Objeto", n.clone()),
+            Open::Sprite(n) => ("Sprite", n.clone()),
+            Open::Sound(n) => ("Sonido", n.clone()),
+            Open::Script(n) => ("Script", n.clone()),
+            Open::Settings => ("Juego", p.game.game.name.clone()),
+        };
+        ui.label(RichText::new(format!("Inspector: {name}")).weak());
+        ui.add_space(4.0);
+        let preview_sprite = match &what {
+            Open::Sprite(n) => Some(n.clone()),
+            Open::Object(n) => p.object_sprite(n),
+            _ => None,
+        };
+        let mut open_it = false;
+        let mut play: Option<PathBuf> = None;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(56.0), Sense::hover());
+                crate::tex::checkerboard(ui.painter(), r, 7.0);
+                if let Some(t) = preview_sprite.as_deref().and_then(|s| self.tex.get(ui.ctx(), p, s)) {
+                    t.draw_fit(ui.painter(), 0, r.shrink(4.0));
+                } else {
+                    let icon = match &what {
+                        Open::Room(_) => "▦",
+                        Open::Sound(_) => "♪",
+                        Open::Script(_) => "✎",
+                        Open::Settings => "⚙",
+                        _ => "◆",
+                    };
+                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(26.0), ui.visuals().text_color());
+                }
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(kind).weak());
+                    ui.label(RichText::new(&name).strong().monospace());
+                    if ui.button("Abrir editor").clicked() {
+                        open_it = true;
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            egui::Grid::new("insp").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                let mut row = |k: &str, v: String| {
+                    ui.label(RichText::new(k).weak());
+                    ui.label(v);
+                    ui.end_row();
+                };
+                match &what {
+                    Open::Sprite(n) => {
+                        if let Some(s) = p.sprite(n) {
+                            row("tamaño", format!("{} × {} px", s.fw, s.fh));
+                            row("fotogramas", s.frames.len().to_string());
+                            row("fps", modscript::fmt_num(s.fps));
+                            row("origen", format!("{}, {}", modscript::fmt_num(s.origin.0), modscript::fmt_num(s.origin.1)));
+                            row("máscara", format!("{:?}", s.bbox.map(|v| v as i64)));
+                        }
+                        if let Some(e) = p.sprite_entry(n) {
+                            row("fichero", e.path.strip_prefix(&p.dir).unwrap_or(&e.path).display().to_string());
+                        }
+                        let users: Vec<String> = p.objects.iter().filter(|o| p.object_sprite(&o.name).as_deref() == Some(n.as_str())).map(|o| o.name.clone()).collect();
+                        if !users.is_empty() {
+                            row("usado por", users.join(", "));
+                        }
+                    }
+                    Open::Object(n) => {
+                        if let Some(o) = p.object(n) {
+                            row("padre", o.parent.clone().unwrap_or_else(|| "—".into()));
+                            row("sprite", p.object_sprite(n).unwrap_or_else(|| "—".into()));
+                            row("fichero", p.scripts[o.script].rel.clone());
+                            if let Some(m) = &o.model {
+                                let ev: Vec<String> = m
+                                    .items
+                                    .iter()
+                                    .filter_map(|i| match &i.kind {
+                                        crate::objsrc::ItemKind::Event { name, arg, .. } => Some(match arg {
+                                            Some(a) => format!("{name}({a})"),
+                                            None => name.clone(),
+                                        }),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                row("eventos", if ev.is_empty() { "—".into() } else { ev.join(", ") });
+                            }
+                            let kids: Vec<String> = p.objects.iter().filter(|c| c.parent.as_deref() == Some(n.as_str())).map(|c| c.name.clone()).collect();
+                            if !kids.is_empty() {
+                                row("hijos", kids.join(", "));
+                            }
+                            let vars = crate::typedvar::object_vars(p, n);
+                            for v in vars {
+                                row(&v.name, format!("{}  ({})", v.value, v.ty.to_source()));
+                            }
+                        }
+                    }
+                    Open::Room(n) => {
+                        if let Some(r) = p.rooms.iter().find(|r| &r.name == n) {
+                            if let Ok(t) = std::fs::read_to_string(&r.path).map_err(|e| e.to_string()).and_then(|t| toml::from_str::<modengine::project::RoomToml>(&t).map_err(|e| e.to_string())) {
+                                row("tamaño", match (t.width, t.height) {
+                                    (Some(w), Some(h)) => format!("{w} × {h}"),
+                                    _ => "automático".into(),
+                                });
+                                row("capas", t.layers.iter().map(|l| l.kind.clone()).collect::<Vec<_>>().join(", "));
+                                row("instancias libres", t.layers.iter().map(|l| l.instances.len()).sum::<usize>().to_string());
+                                row("persistente", if t.persistent { "sí" } else { "no" }.into());
+                                if let Some(f) = &t.camera.follow {
+                                    row("cámara sigue a", f.clone());
+                                }
+                            }
+                            let start = p.game.game.start_room.as_deref() == Some(n.as_str());
+                            row("room inicial", if start { "★ sí" } else { "no" }.into());
+                        }
+                    }
+                    Open::Sound(n) => {
+                        if let Some(s) = p.sounds.iter().find(|s| &s.name == n) {
+                            row("fichero", s.path.strip_prefix(&p.dir).unwrap_or(&s.path).display().to_string());
+                            row("tipo", if s.is_toml { "sintetizado / TOML" } else { "audio" }.into());
+                            if !s.is_toml {
+                                play = Some(s.path.clone());
+                            }
+                        }
+                    }
+                    Open::Script(rel) => {
+                        if let Some(i) = p.script_index(rel) {
+                            let sc = &p.scripts[i];
+                            row("líneas", sc.text.lines().count().to_string());
+                            let objs: Vec<String> = p.objects.iter().filter(|o| o.script == i).map(|o| o.name.clone()).collect();
+                            if !objs.is_empty() {
+                                row("objetos", objs.join(", "));
+                            }
+                            row("estado", if sc.dirty() { "● sin guardar" } else { "guardado" }.into());
+                        }
+                    }
+                    Open::Settings => {
+                        let d = &p.game.display;
+                        row("resolución", format!("{} × {}", d.width, d.height));
+                        row("rooms", p.rooms.len().to_string());
+                    }
+                }
+            });
+            if let Some(path) = &play {
+                if ui.button("▶ Escuchar").clicked() {
+                    if let Err(e) = crate::sound::play_file(path) {
+                        ui.label(e);
+                    }
+                }
+            }
+        });
+        if open_it {
+            self.open(what);
+        }
+    }
+
     fn output(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.strong("Salida");
@@ -790,35 +1103,6 @@ impl EditorApp {
                 ui.label(RichText::new(&l.text).monospace().color(c));
             }
         });
-    }
-
-    fn tab_bar(&mut self, ui: &mut egui::Ui) {
-        let mut close = None;
-        ui.horizontal_wrapped(|ui| {
-            for (i, t) in self.tabs.iter().enumerate() {
-                let dirty = self.project.as_ref().map(|p| t.dirty(p)).unwrap_or(false);
-                let title = if dirty { format!("{} ●", t.title()) } else { t.title() };
-                let r = ui.add(egui::Button::selectable(i == self.active, title));
-                if r.clicked() {
-                    self.active = i;
-                }
-                if r.middle_clicked() {
-                    close = Some(i);
-                }
-                if ui.small_button("×").clicked() {
-                    close = Some(i);
-                }
-                ui.add_space(6.0);
-            }
-        });
-        if let Some(i) = close {
-            let dirty = self.project.as_ref().map(|p| self.tabs[i].dirty(p)).unwrap_or(false);
-            if dirty {
-                self.dialog = Some(Dialog::CloseTab { idx: i });
-            } else {
-                self.close_tab(i);
-            }
-        }
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -906,26 +1190,28 @@ impl EditorApp {
                     next = Some(Dialog::Delete { what });
                 }
             }
-            Dialog::CloseTab { idx } => {
-                egui::Modal::new(egui::Id::unique("close_tab")).show(ctx, |ui| {
+            Dialog::CloseWin { id } => {
+                let title = self.ws.wins().find(|w| w.id == id).map(|w| w.tab.window_title()).unwrap_or_default();
+                egui::Modal::new(egui::Id::unique("close_win")).show(ctx, |ui| {
                     ui.heading("Hay cambios sin guardar");
+                    ui.label(title);
                     ui.horizontal(|ui| {
                         if ui.button("Guardar").clicked() {
-                            if let Some(p) = &mut self.project {
+                            if let (Some(p), Some(w)) = (&mut self.project, self.ws.get_mut(id)) {
                                 let mut open = vec![];
-                                let mut cx = Cx { project: p, tex: &mut self.tex, log: &mut self.log, open: &mut open };
-                                if let Err(e) = self.tabs[idx].save(&mut cx) {
+                                let mut cx = Cx { project: p, tex: &mut self.tex, log: &mut self.log, open: &mut open, active: false };
+                                if let Err(e) = w.tab.save(&mut cx) {
                                     cx.error(e);
                                 }
                             }
-                            self.close_tab(idx);
+                            self.close_win(id);
                             keep = false;
                         }
                         if ui.button("Descartar").clicked() {
-                            if let Some(p) = &mut self.project {
-                                self.tabs[idx].revert(p);
+                            if let (Some(p), Some(w)) = (&mut self.project, self.ws.get_mut(id)) {
+                                w.tab.revert(p);
                             }
-                            self.close_tab(idx);
+                            self.close_win(id);
                             keep = false;
                         }
                         if ui.button("Cancelar").clicked() {
@@ -934,7 +1220,7 @@ impl EditorApp {
                     });
                 });
                 if keep {
-                    next = Some(Dialog::CloseTab { idx });
+                    next = Some(Dialog::CloseWin { id });
                 }
             }
             Dialog::Quit => {
@@ -1114,8 +1400,11 @@ impl EditorApp {
             }
             Open::Settings => {}
         }
-        if let Some(i) = self.tabs.iter().position(|t| &t.open_key() == what) {
-            self.close_tab(i);
+        if let Some(id) = self.ws.find(what) {
+            self.close_win(id);
+        }
+        if self.selected.as_ref() == Some(what) {
+            self.selected = None;
         }
         self.info(LogKind::Info, format!("eliminado {what:?} (en .trash)"));
         Ok(())
@@ -1124,11 +1413,14 @@ impl EditorApp {
     fn run_auto(&mut self, ctx: &egui::Context) {
         self.auto.frames += 1;
         if self.auto.frames == 2 {
+            // each `--open` is chained to the previous one, like opening it from that window
+            let mut prev = None;
             for o in std::mem::take(&mut self.auto.open) {
-                self.open(o);
+                self.open_from(o.clone(), prev);
+                prev = self.ws.find(&o);
             }
             if self.auto.select {
-                for t in &mut self.tabs {
+                for t in self.ws.tabs_mut() {
                     match t {
                         Tab::Room(r) => r.auto_select(),
                         Tab::Object(o) => o.show_vars(),
@@ -1136,6 +1428,9 @@ impl EditorApp {
                     }
                 }
             }
+        }
+        if self.auto.fit && self.auto.frames == 4 {
+            self.ws.fit_all();
         }
         let Some(path) = self.auto.screenshot.clone() else { return };
         ctx.request_repaint();
@@ -1157,7 +1452,7 @@ impl EditorApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        let (save, run, check, undo, redo, close) = ctx.input_mut(|i| {
+        let (save, run, check, undo, redo, close, fit) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::COMMAND, Key::S),
                 i.consume_key(Modifiers::NONE, Key::F5),
@@ -1165,8 +1460,12 @@ impl EditorApp {
                 i.consume_key(Modifiers::COMMAND, Key::Z),
                 i.consume_key(Modifiers::COMMAND, Key::Y) || i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z),
                 i.consume_key(Modifiers::COMMAND, Key::W),
+                i.consume_key(Modifiers::COMMAND, Key::Num0),
             )
         });
+        if fit {
+            self.ws.fit_all();
+        }
         if save {
             self.save_all();
         }
@@ -1180,23 +1479,19 @@ impl EditorApp {
         let typing = ctx.memory(|m| m.focused().is_some());
         if !typing {
             if undo {
-                if let Some(t) = self.tabs.get_mut(self.active) {
-                    t.undo();
+                if let Some(w) = self.ws.focused_mut() {
+                    w.tab.undo();
                 }
             }
             if redo {
-                if let Some(t) = self.tabs.get_mut(self.active) {
-                    t.redo();
+                if let Some(w) = self.ws.focused_mut() {
+                    w.tab.redo();
                 }
             }
         }
-        if close && !self.tabs.is_empty() {
-            let i = self.active;
-            let dirty = self.project.as_ref().map(|p| self.tabs[i].dirty(p)).unwrap_or(false);
-            if dirty {
-                self.dialog = Some(Dialog::CloseTab { idx: i });
-            } else {
-                self.close_tab(i);
+        if close {
+            if let Some(id) = self.ws.focused().map(|w| w.id) {
+                self.request_close(id);
             }
         }
     }
@@ -1225,32 +1520,23 @@ impl eframe::App for EditorApp {
 
         let side = crate::theme::sidebar_frame(&ctx);
         egui::Panel::top("menu").frame(side.inner_margin(egui::Margin::symmetric(8, 4))).show(ui, |ui| self.menu(ui));
-        egui::Panel::bottom("output").frame(side).resizable(true).default_size(150.0).show(ui, |ui| self.output(ui));
-        egui::Panel::right("assets").frame(side).resizable(true).default_size(250.0).show(ui, |ui| self.asset_browser(ui));
-        egui::CentralPanel::default().frame(crate::theme::editor_frame(&ctx)).show(ui, |ui| {
-            if self.tabs.is_empty() {
-                ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("Abre un asset desde el navegador de la derecha\n(o créalo con el botón +)").weak().size(16.0));
-                });
-                return;
-            }
-            self.tab_bar(ui);
-            ui.separator();
-            let mut open = Vec::new();
-            if let (Some(p), Some(tab)) = (&mut self.project, self.tabs.get_mut(self.active)) {
-                let mut cx = Cx { project: p, tex: &mut self.tex, log: &mut self.log, open: &mut open };
-                tab.ui(ui, &mut cx);
-            }
-            for o in open {
-                self.open(o);
-            }
-        });
+        if self.docks[2] {
+            egui::Panel::bottom("output").frame(side).resizable(true).default_size(170.0).show(ui, |ui| self.output(ui));
+        }
+        if self.docks[1] {
+            egui::Panel::right("assets").frame(side).resizable(true).default_size(260.0).show(ui, |ui| self.asset_browser(ui));
+        }
+        if self.docks[0] {
+            egui::Panel::left("inspector").frame(side).resizable(true).default_size(280.0).show(ui, |ui| self.inspector(ui));
+        }
+        egui::CentralPanel::default().frame(crate::theme::editor_frame(&ctx).inner_margin(0)).show(ui, |ui| self.workspace(ui));
         self.dialogs(&ctx);
     }
 }
 
 impl Drop for EditorApp {
     fn drop(&mut self) {
+        self.save_layout();
         self.stop_game();
     }
 }

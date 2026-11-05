@@ -69,6 +69,12 @@ pub struct Colors {
     pub selection: Color32,
     pub camera: Color32,
     pub frame_border: Color32,
+    /// Workspace canvas, its dot grid, chain links and window title bars.
+    pub workspace: Color32,
+    pub workspace_dot: Color32,
+    pub chain: Color32,
+    pub title: Color32,
+    pub title_active: Color32,
 }
 
 pub fn colors(ctx: &egui::Context) -> Colors {
@@ -87,6 +93,11 @@ pub fn colors(ctx: &egui::Context) -> Colors {
             selection: Color32::from_rgb(255, 200, 80),
             camera: Color32::from_rgb(90, 200, 255),
             frame_border: Color32::from_gray(90),
+            workspace: Color32::from_rgb(22, 24, 28),
+            workspace_dot: Color32::from_rgb(48, 52, 60),
+            chain: Color32::from_rgb(90, 140, 220),
+            title: Color32::from_rgb(40, 41, 46),
+            title_active: Color32::from_rgb(44, 56, 80),
         }
     } else {
         Colors {
@@ -103,6 +114,11 @@ pub fn colors(ctx: &egui::Context) -> Colors {
             selection: Color32::from_rgb(255, 160, 0),
             camera: ACCENT,
             frame_border: STROKE2,
+            workspace: Color32::from_rgb(236, 240, 249),
+            workspace_dot: Color32::from_rgb(206, 215, 236),
+            chain: Color32::from_rgb(120, 155, 235),
+            title: Color32::from_rgb(243, 246, 252),
+            title_active: ACCENT_SOFT,
         }
     }
 }

@@ -740,7 +740,7 @@ mod tests {
         let st = St { ed, project, tex: TexCache::default(), log: vec![], open: vec![] };
         let mut h = Harness::builder().with_size([1200.0, 800.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
             |ui, s: &mut St| {
-                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open };
+                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
                 s.ed.ui(ui, &mut cx);
             },
             st,
@@ -763,7 +763,7 @@ mod tests {
         h.state_mut().ed.redo();
         {
             let s = h.state_mut();
-            let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open };
+            let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
             s.ed.save(&mut cx).unwrap();
         }
         let spr = h.state().project.sprite("heart").expect("saved sprite reloads");
