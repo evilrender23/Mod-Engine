@@ -280,6 +280,10 @@ pub struct EditorApp {
     quitting: bool,
     auto: Auto,
     theme: crate::theme::Theme,
+    /// Background updates from the `master` branch (installed copies only).
+    upd: crate::update::Actualizador,
+    /// The user closed the "update found/ready" bar for this session.
+    upd_oculta: bool,
 }
 
 fn recent_file() -> Option<PathBuf> {
@@ -325,7 +329,12 @@ impl EditorApp {
             quitting: false,
             auto,
             theme,
+            upd: crate::update::Actualizador::default(),
+            upd_oculta: false,
         };
+        if app.auto.screenshot.is_none() {
+            app.upd.vigilar(&cc.egui_ctx);
+        }
         if let Some(p) = path {
             app.open_project(&p);
         }
@@ -740,6 +749,20 @@ impl EditorApp {
                         crate::theme::save(t);
                         ui.close();
                     }
+                }
+            });
+            ui.menu_button("Ayuda", |ui| {
+                ui.label(RichText::new(format!("Mod Engine {}", crate::update::descripcion_version())).weak());
+                ui.separator();
+                let instalada = crate::update::version_instalada().is_some();
+                if ui.add_enabled(instalada, egui::Button::new("Buscar actualizaciones")).on_disabled_hover_text("Solo las copias instaladas con instalar.sh / instalar.ps1 se actualizan solas").clicked() {
+                    self.upd_oculta = false;
+                    self.upd.buscar_ahora(crate::update::automatico());
+                    ui.close();
+                }
+                let mut auto = crate::update::automatico();
+                if ui.add_enabled(instalada, egui::Checkbox::new(&mut auto, "Actualizar automáticamente")).changed() {
+                    crate::update::cambiar_automatico(auto);
                 }
             });
             ui.add_space(20.0);
@@ -1521,6 +1544,7 @@ impl eframe::App for EditorApp {
 
         let side = crate::theme::sidebar_frame(&ctx);
         egui::Panel::top("menu").frame(side.inner_margin(egui::Margin::symmetric(8, 4))).show(ui, |ui| self.menu(ui));
+        self.update_bar(ui);
         if self.docks[2] {
             egui::Panel::bottom("output").frame(side).resizable(true).default_size(170.0).show(ui, |ui| self.output(ui));
         }
@@ -1535,8 +1559,71 @@ impl eframe::App for EditorApp {
     }
 }
 
+impl EditorApp {
+    /// Thin bar under the menu while an update is being searched, built or is ready.
+    fn update_bar(&mut self, ui: &mut egui::Ui) {
+        use crate::update::Estado;
+        let estado = self.upd.estado();
+        let mostrar = match &estado {
+            Estado::Inactiva | Estado::Buscando => false,
+            Estado::AlDia | Estado::Error(_) | Estado::Nueva { .. } => !self.upd_oculta,
+            Estado::Compilando { .. } | Estado::Lista { .. } => true,
+        };
+        if !mostrar {
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        let pal = crate::theme::colors(&ctx);
+        let mut frame = crate::theme::sidebar_frame(&ctx).inner_margin(egui::Margin::symmetric(10, 4));
+        frame.fill = if ctx.global_style().visuals.dark_mode { egui::Color32::from_rgb(30, 40, 60) } else { egui::Color32::from_rgb(230, 238, 255) };
+        egui::Panel::top("update_bar").frame(frame).show(ui, |ui| {
+            ui.horizontal(|ui| match &estado {
+                Estado::AlDia => {
+                    ui.colored_label(pal.ok, format!("✔ Mod Engine está al día ({})", crate::update::descripcion_version()));
+                    if ui.small_button("×").clicked() {
+                        self.upd_oculta = true;
+                    }
+                }
+                Estado::Error(e) => {
+                    ui.colored_label(pal.error, format!("No se pudo actualizar: {e}"));
+                    if ui.small_button("×").clicked() {
+                        self.upd_oculta = true;
+                    }
+                }
+                Estado::Nueva { ultimo } => {
+                    ui.label(format!("Hay una versión nueva: {} — {}", crate::update::corto(&ultimo.sha), ultimo.mensaje.clone().unwrap_or_default()));
+                    if ui.add(crate::theme::primary_button(ui, "Compilar e instalar")).clicked() {
+                        if let Err(e) = self.upd.instalar() {
+                            self.info(LogKind::Error, e);
+                        }
+                    }
+                    if ui.small_button("Ahora no").clicked() {
+                        self.upd_oculta = true;
+                    }
+                }
+                Estado::Compilando { paso, total, texto } => {
+                    ui.spinner();
+                    let t = if *total > 0 { format!("Actualizando Mod Engine en segundo plano · [{paso}/{total}] {texto}") } else { "Actualizando Mod Engine en segundo plano…".into() };
+                    ui.label(t);
+                }
+                Estado::Lista { commit } => {
+                    ui.colored_label(pal.ok, format!("La versión {commit} está lista. Se aplica al reiniciar el editor."));
+                    if ui.add(crate::theme::primary_button(ui, "Reiniciar ahora")).clicked() {
+                        self.save_all();
+                        self.upd.aplicar();
+                        self.quitting = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+                _ => {}
+            });
+        });
+    }
+}
+
 impl Drop for EditorApp {
     fn drop(&mut self) {
+        self.upd.al_salir();
         self.save_layout();
         self.stop_game();
     }

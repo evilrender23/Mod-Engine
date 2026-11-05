@@ -13,11 +13,28 @@ mod sprite;
 mod tex;
 mod theme;
 mod typedvar;
+mod update;
 mod workspace;
 mod tomlw;
 mod zoom;
 
 fn main() -> eframe::Result {
+    // `modeditor --actualizar`: update an installed copy from the terminal, without a window.
+    // `modeditor --version`: which commit this is.
+    match std::env::args().nth(1).as_deref() {
+        Some("--actualizar") => {
+            if let Err(e) = update::Actualizador::default().sin_ventana() {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Some("--version") => {
+            println!("modeditor {}", update::descripcion_version());
+            return Ok(());
+        }
+        _ => {}
+    }
     // modeditor [project] [--open room:level1 ...] [--screenshot out.png]
     let mut path = None;
     let mut auto = app::Auto::default();
