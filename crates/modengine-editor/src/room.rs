@@ -984,10 +984,10 @@ impl RoomEditor {
         }
         let space = ui.input(|i| i.key_down(egui::Key::Space));
         if let Some(hp) = resp.hover_pos() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y + (i.zoom_delta() - 1.0) * 100.0);
-            if scroll != 0.0 {
+            let factor = ui.input(|i| crate::zoom::factor(i.smooth_scroll_delta.y, i.zoom_delta()));
+            if factor != 1.0 {
                 let world = (hp - area.min - self.pan) / self.zoom;
-                self.zoom = (self.zoom * if scroll > 0.0 { 1.1 } else { 1.0 / 1.1 }).clamp(0.1, 16.0);
+                self.zoom = (self.zoom * factor).clamp(0.1, 16.0);
                 self.pan = hp - area.min - world * self.zoom;
             }
         }

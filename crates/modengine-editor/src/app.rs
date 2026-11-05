@@ -308,6 +308,7 @@ impl EditorApp {
         let theme = crate::theme::load();
         crate::theme::install_fonts(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx, theme);
+        crate::zoom::install(&cc.egui_ctx);
         let mut app = EditorApp {
             project: None,
             ws: Workspaces::default(),

@@ -15,6 +15,7 @@ mod theme;
 mod typedvar;
 mod workspace;
 mod tomlw;
+mod zoom;
 
 fn main() -> eframe::Result {
     // modeditor [project] [--open room:level1 ...] [--screenshot out.png]

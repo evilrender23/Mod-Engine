@@ -327,9 +327,10 @@ impl Workspaces {
             }
             if bg.hovered() {
                 if let Some(hp) = bg.hover_pos() {
-                    let (zoom_delta, scroll, ctrl) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta, i.modifiers.command));
-                    let wheel_zoom = if ctrl { 1.0 } else { 0.0 } * scroll.y;
-                    let factor = zoom_delta * (1.0 + wheel_zoom * 0.002);
+                    // Plain wheel pans; Ctrl+wheel and pinch arrive as `zoom_delta`
+                    // (egui converts Ctrl+wheel, made gentle by `zoom::install`).
+                    let (zoom_delta, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
+                    let factor = crate::zoom::factor(0.0, zoom_delta);
                     if factor != 1.0 {
                         let at = (hp - canvas.min - ws.pan) / ws.zoom;
                         ws.zoom = (ws.zoom * factor).clamp(*ZOOM.start(), *ZOOM.end());

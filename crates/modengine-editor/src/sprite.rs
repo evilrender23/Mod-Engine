@@ -533,9 +533,9 @@ impl SpriteEditor {
             self.zoom = ((area.width() - 40.0) / w).min((area.height() - 40.0) / h).floor().clamp(1.0, 48.0);
         }
         if resp.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y + (i.zoom_delta() - 1.0) * 100.0);
-            if scroll != 0.0 {
-                self.zoom = (self.zoom * if scroll > 0.0 { 1.12 } else { 1.0 / 1.12 }).clamp(1.0, 64.0);
+            let factor = ui.input(|i| crate::zoom::factor(i.smooth_scroll_delta.y, i.zoom_delta()));
+            if factor != 1.0 {
+                self.zoom = (self.zoom * factor).clamp(1.0, 64.0);
             }
         }
         let z = self.zoom;
