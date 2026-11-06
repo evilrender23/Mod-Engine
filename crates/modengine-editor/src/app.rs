@@ -1506,10 +1506,14 @@ impl EditorApp {
                 }
             });
             if let Some(path) = &play {
-                if ui.button("▶ Escuchar").clicked() {
-                    if let Err(e) = crate::sound::play_file(path) {
-                        ui.label(e);
+                let mut err = None;
+                ui.horizontal(|ui| {
+                    if crate::sound::play_stop_buttons(ui) {
+                        err = crate::sound::play_file(path).err();
                     }
+                });
+                if let Some(e) = err {
+                    ui.label(e);
                 }
             }
         });
@@ -2099,6 +2103,11 @@ impl EditorApp {
 }
 
 impl eframe::App for EditorApp {
+    /// A sound preview must not keep playing after the editor closes.
+    fn on_exit(&mut self) {
+        crate::sound::stop();
+    }
+
     /// `--drag`: keep the pointer where the fake drag is held.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // `--click x,y`: one click a few frames in (screenshots of menus)

@@ -25,14 +25,54 @@ pub struct SoundEditor {
     pub dirty: bool,
 }
 
-/// Plays a file with whatever command-line player the system has.
+/// The preview that is playing (one at a time: a new one stops the old one).
+static PLAYING: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+/// Plays a file with whatever command-line player the system has, stopping the previous one.
 pub fn play_file(path: &Path) -> Result<(), String> {
+    stop();
     for player in ["pw-play", "paplay", "aplay", "afplay"] {
-        if std::process::Command::new(player).arg(path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok() {
+        if let Ok(child) = std::process::Command::new(player).arg(path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+            *PLAYING.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
             return Ok(());
         }
     }
     Err("no se encontró ningún reproductor (pw-play, paplay, aplay)".into())
+}
+
+/// Stops the preview that is playing, if any.
+pub fn stop() {
+    if let Some(mut c) = PLAYING.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+}
+
+/// Whether a preview is still playing.
+pub fn playing() -> bool {
+    let mut g = PLAYING.lock().unwrap_or_else(|e| e.into_inner());
+    match g.as_mut().map(|c| c.try_wait()) {
+        Some(Ok(None)) => true,
+        Some(_) => {
+            *g = None;
+            false
+        }
+        None => false,
+    }
+}
+
+/// "▶ Escuchar" and, while something plays, "■ Parar" next to it. Returns whether to play.
+pub fn play_stop_buttons(ui: &mut egui::Ui) -> bool {
+    let play = ui.button("▶ Escuchar").clicked();
+    let on = playing();
+    if ui.add_enabled(on, egui::Button::new("■ Parar")).on_hover_text("Para el sonido que suena").clicked() {
+        stop();
+    }
+    if on {
+        // notice when it ends by itself
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+    }
+    play
 }
 
 impl SoundEditor {
@@ -102,7 +142,7 @@ impl SoundEditor {
         let before = self.toml_text();
         ui.horizontal(|ui| {
             ui.heading(&self.name);
-            if ui.button("▶ Escuchar").clicked() {
+            if play_stop_buttons(ui) {
                 self.preview(cx);
             }
         });
@@ -194,5 +234,20 @@ impl SoundEditor {
         if self.toml_text() != before {
             self.dirty = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_ends_the_preview() {
+        let Ok(child) = std::process::Command::new("sleep").arg("30").spawn() else { return };
+        *PLAYING.lock().unwrap() = Some(child);
+        assert!(playing());
+        stop();
+        assert!(!playing());
+        stop(); // nothing playing: no-op
     }
 }

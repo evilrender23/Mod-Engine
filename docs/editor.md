@@ -309,7 +309,8 @@ Para capturas: `modeditor <proyecto> --palettes pear36[:replace] --screenshot f.
 ## Sonidos, scripts y ajustes
 
 - **Sonidos**: todos los parámetros del sintetizador con deslizadores, ▶ Escuchar (usa
-  `pw-play`, `paplay` o `aplay`) y unos cuantos puntos de partida (salto, moneda, golpe, láser).
+  `pw-play`, `paplay` o `aplay`) y ■ Parar mientras suena (también en el inspector; escuchar otro
+  sonido para el anterior, y al cerrar el editor se para) y unos cuantos puntos de partida (salto, moneda, golpe, láser).
 - **Scripts**: editor de código con resaltado (los colores `#rrggbb` se muestran en su color) y
   comprobación de sintaxis en vivo.
 - **Ajustes del juego**: nombre, room inicial, orden de las rooms, resolución, escala, pasos por
