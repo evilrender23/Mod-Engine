@@ -14,6 +14,13 @@ pub struct Streams {
     list: Vec<Option<u64>>,
 }
 
+impl Streams {
+    /// State of the live stream `i` (decks shuffle with it).
+    pub(crate) fn state_mut(&mut self, i: usize) -> Option<&mut u64> {
+        self.list.get_mut(i).and_then(|s| s.as_mut())
+    }
+}
+
 /// splitmix64: spreads any seed (0, 1, 2...) over the whole state space.
 fn mix(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);

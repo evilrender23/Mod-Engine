@@ -40,6 +40,9 @@ usage:
   modengine store search|show|download|get ...
                                            free assets from OpenGameArt.org: search, look,
                                            import with credits (modengine store --help)
+  modengine dungeon <project> <config.toml|table:id> [--seed N,M] [--png F] [--scale N] [--json]
+                                           generate a procedural dungeon to tune its config:
+                                           ASCII map, summary, PNG preview (dungeon --help)
   modengine functions
   modengine <project>                      same as `run`
 
@@ -229,6 +232,9 @@ fn main() {
     }
     if raw.first().map(String::as_str) == Some("pixel-check") {
         exit(modengine_cli::pixel_check::main_cli(&raw[1..]));
+    }
+    if raw.first().map(String::as_str) == Some("dungeon") {
+        exit(modengine_cli::dungeon_cli::main_cli(&raw[1..]));
     }
     if raw.first().map(String::as_str) == Some("store") {
         exit(modengine_cli::store_cli::main_cli(&raw[1..]));

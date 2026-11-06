@@ -64,6 +64,8 @@ pub struct Project {
     pub notes: Vec<FileEntry>,
     pub tilesets: Vec<TileSetEntry>,
     pub rooms: Vec<FileEntry>,
+    /// `data/*.toml|json|csv` tables (datatable.rs); schemas are not listed.
+    pub data: Vec<FileEntry>,
     /// paths/, timelines/, curves/ and sequences/ (motion.rs).
     pub motion: crate::motion::Lists,
     /// particles/, shaders/ and extensions/ (fx.rs).
@@ -90,6 +92,10 @@ fn entries(dir: &Path, exts: &[&str]) -> Vec<FileEntry> {
     asset_files(dir, exts).into_iter().map(|(name, path, is_toml)| FileEntry { name, path, is_toml }).collect()
 }
 
+fn data_entries(dir: &Path) -> Vec<FileEntry> {
+    modengine::datatable::table_files(dir).into_iter().map(|(name, path, f)| FileEntry { name, path, is_toml: f == modengine::datatable::Format::Toml }).collect()
+}
+
 impl Project {
     pub fn open(dir: &Path) -> Result<Project, String> {
         let game_path = dir.join("game.toml");
@@ -108,6 +114,7 @@ impl Project {
             notes: entries(&dir.join("notes"), &["md"]).into_iter().filter(|e| !e.is_toml).collect(),
             tilesets: vec![],
             rooms: entries(&dir.join("rooms"), &[]),
+            data: data_entries(dir),
             motion: crate::motion::Lists::load(dir),
             fx: crate::fx::Lists::load(dir),
             scripts: vec![],
@@ -226,6 +233,7 @@ impl Project {
         self.fonts = entries(&self.dir.join("fonts"), &["ttf", "otf"]);
         self.notes = entries(&self.dir.join("notes"), &["md"]).into_iter().filter(|e| !e.is_toml).collect();
         self.rooms = entries(&self.dir.join("rooms"), &[]);
+        self.data = data_entries(&self.dir);
         self.motion = crate::motion::Lists::load(&self.dir);
         self.fx = crate::fx::Lists::load(&self.dir);
         self.reload_sprites();

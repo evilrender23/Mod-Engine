@@ -166,6 +166,7 @@ pub fn icon(o: &Open) -> &'static str {
         Open::Font(_) => "🗛",
         Open::Note(_) => "🗒",
         Open::TileSet(_) => "▩",
+        Open::Data(_) => "▤",
         Open::Settings => "⚙",
         Open::Anim(k, _) => k.icon(),
         Open::Fx(k, _) => k.icon(),
@@ -175,7 +176,7 @@ pub fn icon(o: &Open) -> &'static str {
 pub fn asset_label(o: &Open) -> String {
     match o {
         Open::Room(n) | Open::Object(n) | Open::Sprite(n) | Open::Sound(n) | Open::Script(n) => format!("{} {n}", icon(o)),
-        Open::Font(n) | Open::Note(n) | Open::TileSet(n) => format!("{} {n}", icon(o)),
+        Open::Font(n) | Open::Note(n) | Open::TileSet(n) | Open::Data(n) => format!("{} {n}", icon(o)),
         Open::Settings => "⚙ Ajustes".into(),
         Open::Anim(_, n) => format!("{} {n}", icon(o)),
         Open::Fx(_, n) => format!("{} {n}", icon(o)),

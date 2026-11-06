@@ -52,6 +52,8 @@ Observado (tipos y literales):
 | Errores de compilación al ejecutar | ✅ al ejecutar, más comprobación estática en el editor y `modengine shader --check` en la GPU |
 | `shader_set_uniform_*`, `texture_set_stage`, `gpu_set_blendmode` | ✅ (sin `gpu_set_blendmode_ext`); el alfa del lienzo no baja con lo semitransparente y se vuelca opaco |
 | `surface_*`, `draw_surface*`, `draw_clear(_alpha)`, `application_surface`, `application_surface_draw_enable`, eventos Pre-Draw / Post-Draw | ✅ (ver funciones.md); `pre_draw`/`post_draw` dibujan sobre el fotograma del juego, no sobre la ventana; sin `surface_getpixel`, `surface_copy` ni `gpu_set_blendmode_ext_sepalpha` |
+| `draw_sprite_pos`, `draw_primitive_begin(_texture)`, `draw_vertex(_colour/_texture/_texture_colour)`, `draw_primitive_end`, `pr_*` | ✅ mismos nombres y valores de `pr_*` (también `_color`). Diferencias: la textura es `(sprite, subimagen)` en vez de `sprite_get_texture`, y `u, v` van de 0 a 1 **dentro de la subimagen**; las líneas son de 1 px; `draw_sprite_pos` acepta un último `true` para textura con perspectiva correcta (GameMaker solo la deforma en dos triángulos). ❌ `vertex_buffer`/`vertex_format` y 3D general; en su lugar la vista en primera persona `fpview_*` (ver primera-persona.md) |
+| `ds_grid_*` y el acceso `grid[# x, y]` | ✅ mismos nombres (ver funciones.md); `ds_grid_write`/`ds_grid_read` usan JSON compacto (no el hexadecimal de GameMaker); extras `ds_grid_count`, `ds_grid_to_array`, `ds_grid_from_array`, `mp_grid_add_grid`. ❌ `ds_list`/`ds_map` (se usan arrays y structs) |
 | Extensiones con ficheros nativos DLL/dylib/so/JS por plataforma (`FilePropsWindow`, `AndroidPropsWindow`, `IosPropsWindow`, `HTML5PropsWindow`) | ❌ fuera de alcance: solo ModScript (portátil y seguro) |
 | Funciones exportadas con nombre externo y tipos (`FunctionPropsWindow`), constantes (`ConstantPropsWindow`), init/final | ✅ funciones exportadas (documentación + comprobación), constantes, `init`/`final`, orden de ficheros |
 | Opciones de extensión editables por proyecto (`ExtensionOptionsWindow`, variables label/number/string/path/boolean/list) | ⚠️ solo constantes (valores TOML) |
@@ -107,6 +109,25 @@ Comparado con el manual de GameMaker (funciones `network_*`, `buffer_*` y el eve
 | Corrutinas | ✅ `coroutine()` + `wait` / `yield` (GameMaker no las tiene) |
 | `random_set_seed`, `randomize`, `irandom`… | ✅ con otros nombres (`seed`, `randomize`, `irand`…); además generadores separados `rng_*` (GameMaker solo tiene uno) |
 | `ini_*`, `file_text_*` para partidas | ⚠️ `save_data` / `load_data` con JSON, guardado atómico, `.bak` y valores por defecto fusionados |
+
+## Tweens, juice, foco e idiomas
+
+GameMaker no trae tweens, efectos de golpe, navegación con foco ni localización: se hacen con
+extensiones de la comunidad (TweenGMS, Scribble, Input…) o a mano. En Mod Engine son
+funciones del motor ([juice-e-idiomas.md](juice-e-idiomas.md)).
+
+| GameMaker | Mod Engine |
+|---|---|
+| `animcurve_get_channel` + `animcurve_channel_evaluate` cada paso para suavizar a mano | ✅ las curvas siguen igual; además `tween_to(self, { x: 100 }, 0.5, "back_out")` hace el bucle por ti, acepta una curva de animación como `ease` y avisa al acabar (`on_complete`, `tween_done`) |
+| Extensiones de tweens (TweenGMS: `TweenFire`, `TweenEasyMove`…) | ✅ `tween`, `tween_to`, `tween_from`, `tween_chain`, yoyo/bucles, `tween_set_speed` y tweens `unscaled` |
+| Curvas de easing (`ease_in_out` de las curvas de GameMaker, «Penner» en extensiones) | ✅ `ease(nombre, t)`: las 30 de Penner más `linear` y `smooth` |
+| Destello de golpe con `shader_set` + uniform o `gpu_set_fog` | ✅ `flash(inst, color, s)`, `sprite_overwrite`, `sprite_outline` sin shaders propios y sin romper el lote |
+| Números de daño con un objeto por número | ✅ `popup_text` con *pool* (sin objetos) |
+| Hit-stop con `instance_deactivate_all` o una variable global de pausa | ✅ `hitstop(s)`: congela la lógica y deja vivos el dibujo, los popups, el audio y los tweens `unscaled` |
+| `camera_shake` de extensiones; opción «reducir destellos» a mano | ✅ `camera_shake` integrado y `juice_set_reduced(true)` para accesibilidad |
+| Navegación de menús con mando: a mano (o la extensión Input) | ✅ `ui_focus_*`: vecino más cercano en la dirección, *wrap*, pila de paneles |
+| Localización: ficheros CSV/JSON y un `ds_map` propio, o extensiones (Scribble, Lexicon) | ✅ `lang/<código>.toml` + `loc(clave, args)`, plurales por idioma, idioma de reserva, pseudolocalización, aviso de claves que faltan en `modengine check` y editor de Idiomas con CSV |
+| `audio_sync_group_*` para música por capas | ✅ `audio_play_layers` + `audio_layers_set` (fundidos por capa) |
 
 ## Hoja de ruta propuesta (por valor / esfuerzo)
 

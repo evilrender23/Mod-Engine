@@ -11,6 +11,8 @@ pub enum FxKind {
     Particles,
     Shader,
     Extension,
+    /// The string tables of `lang/` (loc_editor.rs), one "asset" for the whole table.
+    Language,
 }
 
 impl FxKind {
@@ -20,6 +22,7 @@ impl FxKind {
             FxKind::Particles => "particles",
             FxKind::Shader => "shader",
             FxKind::Extension => "extension",
+            FxKind::Language => "lang",
         }
     }
     pub fn parse(k: &str) -> Option<FxKind> {
@@ -27,6 +30,7 @@ impl FxKind {
             "particles" | "particle" | "partsys" => FxKind::Particles,
             "shader" => FxKind::Shader,
             "extension" => FxKind::Extension,
+            "lang" | "language" | "idiomas" => FxKind::Language,
             _ => return None,
         })
     }
@@ -35,6 +39,7 @@ impl FxKind {
             FxKind::Particles => "particles",
             FxKind::Shader => "shaders",
             FxKind::Extension => "extensions",
+            FxKind::Language => "lang",
         }
     }
     pub fn label(self) -> &'static str {
@@ -42,6 +47,7 @@ impl FxKind {
             FxKind::Particles => "Sistema de partículas",
             FxKind::Shader => "Shader",
             FxKind::Extension => "Extensión",
+            FxKind::Language => "Idioma",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -49,6 +55,7 @@ impl FxKind {
             FxKind::Particles => "✨",
             FxKind::Shader => "🌈",
             FxKind::Extension => "🧩",
+            FxKind::Language => "🌐",
         }
     }
     /// Asset browser section key (custom order).
@@ -72,6 +79,8 @@ pub struct Lists {
     pub shaders: Vec<ShaderFiles>,
     /// extensions/<name>/: (name, folder)
     pub extensions: Vec<(String, PathBuf)>,
+    /// lang/*.toml: (language code, path)
+    pub langs: Vec<(String, PathBuf)>,
 }
 
 impl Lists {
@@ -99,7 +108,7 @@ impl Lists {
             }
             Err(_) => vec![],
         };
-        Lists { particles, shaders, extensions }
+        Lists { particles, shaders, extensions, langs: crate::loc_editor::langs_of(dir) }
     }
 
     pub fn names(&self, k: FxKind) -> Vec<String> {
@@ -107,6 +116,13 @@ impl Lists {
             FxKind::Particles => self.particles.iter().map(|x| x.0.clone()).collect(),
             FxKind::Shader => self.shaders.iter().map(|x| x.name.clone()).collect(),
             FxKind::Extension => self.extensions.iter().map(|x| x.0.clone()).collect(),
+            FxKind::Language => {
+                if self.langs.is_empty() {
+                    vec![]
+                } else {
+                    vec![crate::loc_editor::TABLE_NAME.to_string()]
+                }
+            }
         }
     }
 
@@ -121,6 +137,7 @@ impl Lists {
             FxKind::Particles => self.particles.iter().find(|x| x.0 == name).map(|x| x.1.clone()),
             FxKind::Shader => self.shaders.iter().find(|x| x.name == name).map(|x| x.fsh.clone()),
             FxKind::Extension => self.extensions.iter().find(|x| x.0 == name).map(|x| x.1.clone()),
+            FxKind::Language => self.langs.first().and_then(|l| l.1.parent()).map(|d| d.to_path_buf()),
         }
     }
 
@@ -140,6 +157,11 @@ pub fn shader_rows(p: &Project) -> Vec<crate::kinds::Row> {
 }
 pub fn extension_rows(p: &Project) -> Vec<crate::kinds::Row> {
     rows(p, FxKind::Extension)
+}
+/// One row per language, all opening the same keys × languages table.
+pub fn language_rows(p: &Project) -> Vec<crate::kinds::Row> {
+    let what = Open::Fx(FxKind::Language, crate::loc_editor::TABLE_NAME.into());
+    p.fx.langs.iter().map(|(code, _)| crate::kinds::Row { name: code.clone(), label: code.clone(), sprite: None, what: what.clone() }).collect()
 }
 
 /// The `modengine` executable next to the editor's.
@@ -180,6 +202,7 @@ pub fn inspector_rows(p: &Project, what: &Open) -> Vec<(&'static str, String)> {
             let probs = a.problems();
             out.push(("comprobación", if probs.is_empty() { "✔ sin errores".into() } else { probs[0].clone() }));
         }
+        FxKind::Language => out = crate::loc_editor::inspector_rows(&p.dir),
         FxKind::Extension => {
             let Some(dir) = p.fx.path(*k, n) else { return out };
             match modengine::extension::load_one(&p.dir, &dir) {
@@ -238,6 +261,13 @@ pub fn create(p: &mut Project, k: FxKind, name: &str) -> Result<(), String> {
             write_new(&dir.join("shaders").join(format!("{name}.vsh")), modengine::shader::DEFAULT_VSH)?;
             write_new(&dir.join("shaders").join(format!("{name}.fsh")), modengine::shader::DEFAULT_FSH)?;
         }
+        FxKind::Language => {
+            // name = language code: an empty table (every key shows as missing)
+            if !crate::loc_editor::valid_lang(name) {
+                return Err(format!("'{name}' no vale como código de idioma (es, en, pt-BR...)"));
+            }
+            write_new(&dir.join("lang").join(format!("{name}.toml")), &format!("# Textos en '{name}': clave = \"texto\" (se editan en Idiomas)\n"))?;
+        }
         FxKind::Extension => {
             let folder = dir.join("extensions").join(name);
             if folder.exists() {
@@ -294,6 +324,7 @@ pub enum FxTab {
     Particles(crate::particles::ParticleEditor),
     Shader(crate::shader::ShaderEditor),
     Extension(crate::extension::ExtensionEditor),
+    Language(crate::loc_editor::LangEditor),
 }
 
 impl FxTab {
@@ -311,6 +342,7 @@ impl FxTab {
                 let dir = p.fx.path(k, name).ok_or(None)?;
                 FxTab::Extension(crate::extension::ExtensionEditor::open(name, &dir).map_err(Some)?)
             }
+            FxKind::Language => FxTab::Language(crate::loc_editor::LangEditor::open(&p.dir)),
         })
     }
     pub fn kind(&self) -> FxKind {
@@ -318,6 +350,7 @@ impl FxTab {
             FxTab::Particles(_) => FxKind::Particles,
             FxTab::Shader(_) => FxKind::Shader,
             FxTab::Extension(_) => FxKind::Extension,
+            FxTab::Language(_) => FxKind::Language,
         }
     }
     pub fn name(&self) -> &str {
@@ -325,6 +358,7 @@ impl FxTab {
             FxTab::Particles(e) => &e.name,
             FxTab::Shader(e) => &e.name,
             FxTab::Extension(e) => &e.name,
+            FxTab::Language(e) => &e.name,
         }
     }
     pub fn title(&self) -> String {
@@ -336,6 +370,7 @@ impl FxTab {
             FxTab::Particles(e) => e.dirty(),
             FxTab::Shader(e) => e.dirty(),
             FxTab::Extension(e) => e.dirty(),
+            FxTab::Language(e) => e.dirty,
         }
     }
     pub fn save(&mut self, cx: &mut Cx) -> Result<(), String> {
@@ -343,6 +378,7 @@ impl FxTab {
             FxTab::Particles(e) => e.save(),
             FxTab::Shader(e) => e.save(),
             FxTab::Extension(e) => e.save(),
+            FxTab::Language(e) => e.save(cx),
         };
         cx.project.fx = Lists::load(&cx.project.dir);
         r
@@ -362,6 +398,7 @@ impl FxTab {
             FxTab::Particles(e) => e.ui(ui, cx),
             FxTab::Shader(e) => e.ui(ui, cx),
             FxTab::Extension(e) => e.ui(ui, cx),
+            FxTab::Language(e) => e.ui(ui, cx),
         }
     }
 }
@@ -371,5 +408,6 @@ pub fn window_size(k: FxKind) -> Vec2 {
         FxKind::Particles => Vec2::new(1000.0, 640.0),
         FxKind::Shader => Vec2::new(980.0, 600.0),
         FxKind::Extension => Vec2::new(860.0, 600.0),
+        FxKind::Language => Vec2::new(900.0, 560.0),
     }
 }

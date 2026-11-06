@@ -850,6 +850,38 @@ ayuda; en rojo las que no están definidas; *exportar todas* las rellena). A la 
 **ficheros en orden de carga** (⏶/⏷ para cambiarlo, clic para abrirlos en el editor de
 scripts, *+ Nuevo fichero*) y las funciones que definen.
 
+## Editor de tablas de datos
+
+**Crear → Tabla de datos** (o el «+» de la sección **Tablas de datos**) crea `data/<nombre>.toml`.
+El editor muestra los registros como una rejilla: una fila por registro y una columna por
+campo, en el orden del esquema (`data/<tabla>.schema.toml`) o deducidas de los valores. Cada
+celda usa el control de su tipo: arrastrar números, casilla para `bool`, desplegable para
+`enum`, para las referencias a otras tablas (sus ids) y a assets (sprites, sonidos, objetos…),
+y TOML en línea para listas y structs (en rojo mientras no sea válido). La celda «—» es un campo
+vacío: un clic le da su valor por defecto; clic derecho → **Vaciar** lo quita.
+
+- **+ Fila**, y por fila ⬆ ⬇ (reordenar), ⧉ (duplicar con un id nuevo) y 🗑 (borrar).
+- **+ Columna** añade un campo; **Crear esquema** escribe un esquema con los tipos deducidos.
+- La búsqueda filtra las filas que contienen el texto en cualquier celda.
+- Validación en vivo con el mismo comprobador que `modengine check`: la celda con problemas se
+  marca en rojo (el mensaje al pasar el ratón) y la lista de problemas va debajo.
+- Al guardar un `.toml` se conservan los comentarios y el formato de lo que no cambió
+  (`toml_edit`); los `.json` y `.csv` se reescriben desde las filas.
+- `modeditor <proyecto> --open data:cards` abre la tabla al arrancar.
+
+## Editor de idiomas
+
+La sección **Idiomas** del navegador lista los ficheros `lang/<código>.toml`; cualquiera de
+ellos abre la tabla de textos **claves × idiomas** (el idioma base primero). Crear → Idioma
+añade un idioma (su fichero empieza vacío: todas sus celdas salen como huecos).
+
+- Las celdas sin traducir se marcan en rojo y arriba se cuentan los huecos.
+- **＋ Clave** (con puntos para agrupar: `menu.jugar`) y **＋ Idioma**; 🗑 borra una clave en
+  todos los idiomas. Buscador por clave o texto y «solo con huecos».
+- Los plurales se escriben una forma por línea: `one: {n} moneda` / `other: {n} monedas`.
+- **Exportar CSV** e **Importar CSV** (`key,es,en,…`) para traductores y hojas de cálculo.
+- Guardar reescribe `lang/*.toml` y el inspector muestra idiomas, claves y huecos.
+
 ## Formato de los ficheros guardados
 
 El editor escribe TOML ordenado y legible (mapas y pixel art como bloques `'''`). Los

@@ -237,6 +237,8 @@ pub(crate) struct Gpu {
     default_size: f32,
     /// Sprite atlases and cached RotSprite images (see sprite_draw.rs).
     sprites: std::cell::RefCell<crate::sprite_draw::SpriteDraw>,
+    /// First-person views and the pixelate post-process (see fpview.rs).
+    fp: std::cell::RefCell<crate::fpview::FpGpu>,
 }
 
 impl Gpu {
@@ -297,6 +299,7 @@ impl Gpu {
         let sprites = std::cell::RefCell::new(crate::sprite_draw::SpriteDraw::new(&e.sprites, &textures, smooth, shapes));
         let gpu = Gpu {
             sprites,
+            fp: std::cell::RefCell::new(crate::fpview::FpGpu::new()),
             fx: std::cell::RefCell::new(crate::gpu_fx::GpuFx::new(e)),
             textures,
             atlases,
@@ -393,16 +396,25 @@ pub(crate) fn exec(e: &Engine, gpu: &Gpu, cv: &mut crate::canvas::Canvas) {
     gpu.fx.borrow_mut().begin_frame();
     gpu.sprites.borrow_mut().begin_frame();
     cv.begin(e);
+    // clip rectangle in force (fpview.rs puts it back after drawing into its own targets)
+    let mut scissor: Option<[f32; 4]> = None;
     for c in &e.cmds {
         match c {
             DrawCmd::Shader(_) | DrawCmd::Uniform { .. } | DrawCmd::Sampler { .. } | DrawCmd::Blend(_) => gpu.fx.borrow_mut().apply(c, &gpu.textures),
             DrawCmd::View { .. } | DrawCmd::Gui | DrawCmd::Target(_) | DrawCmd::PostDraw { .. } => {
                 cv.apply(c, e, &mut gpu.fx.borrow_mut());
                 // a new camera / target starts unclipped
+                scissor = None;
                 crate::scissor::set(None, cv);
             }
             DrawCmd::Surface { .. } => cv.apply(c, e, &mut gpu.fx.borrow_mut()),
-            DrawCmd::Scissor(r) => crate::scissor::set(*r, cv),
+            DrawCmd::SpriteFx(fx) => gpu.sprites.borrow_mut().set_fx(*fx),
+            DrawCmd::Scissor(r) => {
+                scissor = *r;
+                crate::scissor::set(*r, cv)
+            }
+            DrawCmd::Mesh { tex, verts } => crate::fpview::draw_mesh(tex.and_then(|t| gpu.textures.get(t as usize)), verts),
+            DrawCmd::FpView { .. } | DrawCmd::PostFx { .. } => gpu.fp.borrow_mut().apply(c, &gpu.textures, cv, &mut gpu.fx.borrow_mut(), scissor),
             DrawCmd::Clear(c) => clear_background(col(*c)),
             DrawCmd::Sprite { spr, frame, x, y, sx, sy, angle, color } => {
                 let shader = gpu.fx.borrow().shader_active();

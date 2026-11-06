@@ -150,6 +150,8 @@ map = '''
 - [docs/lenguaje.md](docs/lenguaje.md): ModScript paso a paso.
 - [docs/proyecto.md](docs/proyecto.md): `game.toml`, sprites, sonidos, fuentes y rooms.
 - [docs/funciones.md](docs/funciones.md): todas las funciones integradas.
+- [docs/datos-y-cartas.md](docs/datos-y-cartas.md): **contenido como datos** (tablas `data/` con esquema, editables en el editor), mazos de cartas y la cola de acciones para separar lógica y presentación en juegos por turnos.
+- [docs/mazmorras.md](docs/mazmorras.md): **mazmorras procedurales** (salas de plantillas ASCII o rooms, Delaunay + árbol mínimo + bucles, pasillos A\*, camino principal, eventos por reglas, reproducibles con semilla) y `modengine dungeon` para afinarlas con vistas previas PNG; rejillas `ds_grid`.
 - [docs/exportar.md](docs/exportar.md): crear el juego para **Windows (.exe), Linux y Android (.apk)**.
 - [docs/red.md](docs/red.md): **multijugador** por red local o Internet: `net_host`/`net_join`/`net_send`, o sockets y buffers como en GameMaker, y servidores sin ventana.
 - [docs/arquitectura.md](docs/arquitectura.md): cómo está hecho el motor y el orden exacto del bucle de juego.
@@ -167,6 +169,7 @@ modengine export <proyecto> --target windows|linux|android [--out CARPETA] [--re
 modengine export --setup windows|linux|android   # instala lo que falte (en tu carpeta de usuario)
 modengine export --doctor                         # qué plataformas están listas
 modengine pixel-check <proyecto> <sprite>... | --all [--preview auto] [--tile] [--size 16x16]   # revisa pixel art (docs/pixel-art.md)
+modengine dungeon <proyecto> <config.toml|tabla:id> --seed 1,2,3 --png out.png   # genera y dibuja mazmorras (docs/mazmorras.md)
 modengine functions
 ```
 

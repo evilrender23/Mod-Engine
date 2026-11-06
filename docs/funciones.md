@@ -194,6 +194,101 @@ var d = mp_flow_dir(global.flujo, x, y)
 if d >= 0 motion_set(d, 1.5) else speed = 0
 ```
 
+## Rejillas 2D (ds_grid)
+
+Rejillas de `ancho × alto` celdas con cualquier valor (números, textos, arrays...), con los
+nombres y el comportamiento de las `ds_grid` de GameMaker. Sirven para mapas de casillas
+(vista en primera persona, minimapas, la salida de `dungeon_grid`), tablas de datos 2D o
+mapas de influencia. Una rejilla es un número (`id`); las celdas nuevas valen `0`. Las
+coordenadas fuera de la rejilla se ignoran al escribir y devuelven `null` al leer. Las
+regiones (`x1, y1, x2, y2`) incluyen ambos extremos, en cualquier orden, y se recortan a la
+rejilla.
+
+| Función | |
+|---|---|
+| `ds_grid_create(ancho, alto)` | crea una rejilla llena de `0` y devuelve su id |
+| `ds_grid_destroy(g)`, `ds_grid_exists(g)` | |
+| `ds_grid_width(g)`, `ds_grid_height(g)` | |
+| `ds_grid_get(g, x, y)`, `ds_grid_set(g, x, y, v)` | leer / escribir una celda. También `g[# x, y]` (ver abajo) |
+| `ds_grid_add(g, x, y, v)`, `ds_grid_multiply(g, x, y, v)` | suma (o concatena textos) / multiplica una celda |
+| `ds_grid_clear(g, v)` | todas las celdas a `v` |
+| `ds_grid_set_region(g, x1, y1, x2, y2, v)`, `ds_grid_add_region(...)`, `ds_grid_multiply_region(...)` | una región |
+| `ds_grid_set_disk(g, xm, ym, r, v)` | celdas cuyo centro está a `r` o menos de `(xm, ym)` |
+| `ds_grid_set_grid_region(dest, origen, x1, y1, x2, y2, xpos, ypos)` | copia una región de otra rejilla en `(xpos, ypos)` |
+| `ds_grid_resize(g, ancho, alto)` | cambia el tamaño conservando las celdas que caben |
+| `ds_grid_copy(dest, origen)` | `dest` pasa a ser una copia (mismo tamaño) |
+| `ds_grid_get_max/min/sum/mean(g, x1, y1, x2, y2)` | de los números de la región (los no numéricos se ignoran) |
+| `ds_grid_value_exists(g, x1, y1, x2, y2, v)`, `ds_grid_value_x(...)`, `ds_grid_value_y(...)` | ¿está `v` en la región? / columna y fila de la primera aparición (por filas; `-1` si no está) |
+| `ds_grid_count(g, v)` | cuántas celdas valen `v` |
+| `ds_grid_shuffle(g, [rng])` | baraja las celdas con los números aleatorios del juego o con un generador de `rng_create` (reproducible) |
+| `ds_grid_sort(g, columna, ascendente)` | reordena las filas por esa columna |
+| `ds_grid_to_array(g)` → `[[...], ...]` | filas: `a[y][x]` |
+| `ds_grid_from_array(filas, [g])` | crea una rejilla desde `[[...], ...]` (o rellena `g`, cambiando su tamaño); devuelve el id |
+| `ds_grid_write(g)` → texto, `ds_grid_read(g, texto)` | guardar / cargar (JSON compacto con tramos repetidos; `ds_grid_read` toma el tamaño guardado). Va dentro de `save_data` como cualquier texto |
+| `mp_grid_add_grid(mp, g, [valores=[1]], [x, y])` | marca como ocupadas en la rejilla de navegación `mp` las celdas de `g` que valen uno de `valores` (desplazadas `x, y` celdas). Devuelve cuántas marcó |
+
+**Acceso con `[#`**: `g[# x, y]` lee una celda (`ds_grid_get`) y `g[# x, y] = v` la escribe;
+también valen `+=`, `-=`, `*=`, `/=`, `++` y `--`. Deja un espacio tras `#` (`g[# x, y]`), para
+que no se confunda con un color `#RRGGBB`.
+
+```
+var mapa = ds_grid_create(16, 12)
+ds_grid_clear(mapa, 1)                         // todo pared
+ds_grid_set_region(mapa, 1, 1, 14, 10, 0)      // una sala
+mapa[# 7, 5] = 2                               // una puerta
+if mapa[# x div 16, y div 16] == 1 { ... }
+global.partida.mapa = ds_grid_write(mapa)      // al guardar
+ds_grid_read(mapa, global.partida.mapa)        // al cargar
+```
+
+Para Rust (otras funciones nativas): `engine.ds_grids.get(id)` devuelve la `DsGrid`
+(`w`, `h`, `cells`, `num(x, y, defecto)`, `to_i32(defecto)`).
+
+## Mazmorras procedurales
+
+Generador de mazmorras por capas: salas (plantillas ASCII, rooms o rectángulos) separadas con
+muelles → triangulación de Delaunay → árbol de expansión mínima + bucles → pasillos A\* →
+análisis (inicio, salida, camino principal, distancias, callejones) → eventos por reglas. Todo
+sale de una semilla: misma configuración + misma semilla = misma mazmorra. La guía completa,
+con la referencia de la configuración, está en [mazmorras.md](mazmorras.md).
+
+Celdas de `dungeon_grid` / `dungeon_cell`: `0` suelo de sala, `1` pared, `2` puerta, `3` pasillo.
+
+| Función | |
+|---|---|
+| `dungeon_create(config)` | un generador con esa configuración (struct, o ruta de un `.toml`/`.json` del proyecto); devuelve su id. Errores de configuración = error de script; claves desconocidas = aviso |
+| `dungeon_generate(id, [semilla], [rng])` | genera (número o texto). Sin semilla la saca del generador `rng` de `rng_create` o de los números aleatorios del juego (`--seed`). Devuelve `true` |
+| `dungeon_destroy(id)`, `dungeon_exists(id)` | (destruye también su `ds_grid`) |
+| `dungeon_grid(id)` | la `ds_grid` de la mazmorra: siempre el mismo id, actualizado en cada `dungeon_generate`. No la destruyas (usa `ds_grid_copy` para guardar una copia) |
+| `dungeon_cell(id, x, y)` | valor de una celda (`1` fuera) |
+| `dungeon_width(id)`, `dungeon_height(id)` | |
+| `dungeon_rooms(id)` | array de salas: `{ index, x, y, w, h, cx, cy, template, tags, neighbors, depth, path_index, dist_from_main, distance, on_main_path, is_start, is_exit, dead_end, doors, markers, floor_cells }` |
+| `dungeon_room_at(id, x, y)` | sala de una celda de suelo (`-1` en pasillos, puertas y paredes) |
+| `dungeon_events(id, [tipo])` | eventos colocados: `{ type, x, y, room, distance, t, on_main_path, rule, data }` (`t` = distancia relativa 0–1, para escalar la dificultad) |
+| `dungeon_start(id)`, `dungeon_exit(id)` | `{ x, y, room, distance }` |
+| `dungeon_main_path(id)` | `[[x, y], ...]` del inicio a la salida |
+| `dungeon_on_main_path(id, x, y)` | |
+| `dungeon_distance(id, x, y)` | pasos desde el inicio (`-1` = pared o inalcanzable) |
+| `dungeon_distance_grid(id)` | una `ds_grid` NUEVA con todas las distancias (destrúyela tú) |
+| `dungeon_dead_ends(id)` | `[[x, y], ...]` casillas transitables con una sola salida |
+| `dungeon_edges(id)` | `{ delaunay, mst, extra }`: pares de salas de cada capa del grafo |
+| `dungeon_info(id)` | `{ seed, width, height, hash, rooms, loops, events, main_path_length, attempts, warnings }` |
+| `dungeon_ascii(id)` | el mapa como texto (`#` pared, `.` suelo, `,` pasillo, `+` puerta, `S`/`X` inicio/salida, eventos por su inicial) |
+| `dungeon_debug_draw(id, x, y, px_celda, [opciones])` | dibuja la mazmorra para afinarla: celdas, salas (verde inicio, azul salida), aristas del árbol (amarillo), bucles (rosa), Delaunay (azul claro), camino principal (rojo), mapa de distancias y eventos. `opciones`: `{ cells, rooms, delaunay, mst, extra, main_path, distance, events }` (por defecto todo salvo `delaunay` y `distance`). Tramos de celdas iguales = un solo rectángulo |
+| `delaunay(puntos)` | triangulación de `[[x, y], ...]` (o `[{ x, y }, ...]`): `{ triangles: [[i, j, k], ...], edges: [[i, j], ...] }`. Con puntos alineados no hay triángulos pero `edges` los une igualmente |
+| `mst(puntos, [aristas])` | árbol de expansión mínima por longitud: `[[i, j], ...]`. Sin `aristas` usa las de Delaunay (mismo árbol que con todos los pares); con `aristas` que no lo unen todo, un bosque |
+
+```
+global.gen = dungeon_create("mazmorras/piso.toml")
+dungeon_generate(global.gen, global.semilla_partida + global.piso)
+var s = dungeon_start(global.gen)
+var mapa = dungeon_grid(global.gen)            // 0 suelo, 1 pared, 2 puerta, 3 pasillo
+for (var i = 0; i < len(dungeon_events(global.gen)); i++) { ... }
+```
+
+Desde la terminal: `modengine dungeon <proyecto> <config.toml|tabla:id> --seed 1,2,3 --png out.png`
+dibuja y resume la mazmorra sin abrir el juego (ver [mazmorras.md](mazmorras.md)).
+
 ## Eventos y rooms
 
 | Función | |
@@ -544,6 +639,88 @@ global.op = load_data("ajustes", { musica: 0.7, efectos: 0.9, idioma: "es" })
 // una partida de la versión anterior sin `idioma` se carga con idioma: "es"
 ```
 
+## Tablas de datos (`data_*`)
+
+El contenido del juego como datos: `data/<tabla>.toml` (o `.json` / `.csv`) es una lista de
+registros con un `id` único, opcionalmente descrita por `data/<tabla>.schema.toml` (tipos,
+valores por defecto, enums, referencias a sprites, sonidos u otras tablas). Formatos, esquema y
+patrones en [datos-y-cartas.md](datos-y-cartas.md).
+
+| Función | |
+|---|---|
+| `data_get(tabla, id, [campo])` | **copia** del registro (struct con `id` primero y los campos del esquema rellenos con su `default`, `null` si faltan), o solo de un campo. Cambiarla no cambia la tabla. Error con sugerencia si la tabla o el id no existen (`'slsh' no es un id de la tabla 'cards' (¿quizás 'slash'?)`) |
+| `data_exists(tabla, [id])` | ¿existe la tabla / ese registro? |
+| `data_ids(tabla)` | ids en el orden del fichero |
+| `data_all(tabla)` | copias de todos los registros |
+| `data_count(tabla)` | número de registros |
+| `data_find(tabla, campo, valor)` | copias de los registros con `campo == valor` |
+| `data_find(tabla, fn)` | copias de los registros para los que `fn(registro)` devuelve verdadero |
+| `data_tables()` | nombres de las tablas |
+| `data_reload()` | vuelve a leer `data/` ahora; con errores los informa, sigue con los datos anteriores y devuelve `false` |
+| `data_version()` | cuántas veces se han recargado las tablas (para rehacer cachés) |
+| `data_dispatch(efecto, handlers, args...)` | llama a `handlers[efecto.type](efecto, args...)` y devuelve su resultado; con un **array** de efectos los ejecuta en orden y devuelve el array de resultados. Si no hay handler para el tipo usa `handlers.fallback`, si existe |
+
+Los campos de tipo `sprite`, `sound`, `object`… del esquema llegan como el asset (sirven
+directamente en `draw_sprite`); las referencias a otras tablas llegan como el id (texto).
+Al ejecutar desde la carpeta del proyecto (▶ Ejecutar del editor, `modengine run`), si cambia un
+fichero de `data/` las tablas se recargan solas (se comprueba cada medio segundo); si el cambio
+tiene errores se informa y se siguen usando los datos anteriores. Un juego exportado no recarga.
+
+## Mazos de cartas (`deck_*`)
+
+Montones ordenados de cualquier valor (ids, structs…) para juegos de cartas: robo, mano,
+descarte, agotadas… El índice 0 es la **cima**; `deck_to_array` lista de la cima al fondo.
+Posiciones: `deck_top` (0), `deck_bottom` (-1, por defecto), `deck_random` o un índice desde la
+cima. Las cartas que son structs se comparan por referencia (cada copia es una carta distinta).
+
+| Función | |
+|---|---|
+| `deck_create([cartas])` | mazo nuevo (el primer elemento del array queda en la cima) |
+| `deck_add(mazo, carta, [pos=deck_bottom], [rng])` | añade una carta; `deck_random` la mete en un sitio al azar (con el generador `rng` si se da) |
+| `deck_draw(mazo)` / `deck_draw(mazo, n)` | quita y devuelve la carta de la cima (`null` si está vacío) / un array de hasta `n` |
+| `deck_peek(mazo, [i=0])` | mira sin quitar (`-1` = la del fondo; `null` fuera de rango) |
+| `deck_find(mazo, carta)` | índice o -1 |
+| `deck_remove(mazo, carta)` | quita la primera copia; `true` si estaba |
+| `deck_remove_at(mazo, i)` | quita y devuelve la carta `i` (`null` fuera de rango) |
+| `deck_move(desde, hacia, [carta=la de la cima], [pos], [rng])` | mueve una carta de un mazo a otro y la devuelve (`null` si no estaba) |
+| `deck_move_at(desde, i, hacia, [pos], [rng])` | mueve la carta del índice `i` |
+| `deck_move_all(desde, hacia, [pos=deck_bottom])` | mueve todas manteniendo su orden (el descarte al mazo); devuelve cuántas |
+| `deck_shuffle(mazo, [rng])` | baraja (Fisher-Yates) con un generador de `rng_create` o el aleatorio por defecto; con el mismo estado sale el mismo orden que `rng_shuffle` |
+| `deck_size(mazo)`, `deck_to_array(mazo)`, `deck_clear(mazo)` | |
+| `deck_save(mazo)` | copia de las cartas lista para `save_data` / `to_json` |
+| `deck_load(cartas, [mazo])` | rellena `mazo` (o uno nuevo, que devuelve) con cartas guardadas |
+| `deck_exists(mazo)`, `deck_destroy(mazo)` | |
+
+`restart_game()` destruye todos los mazos y colas de acciones.
+
+## Cola de acciones (`actionq_*`)
+
+Separación modelo / vista para juegos por turnos: la lógica resuelve una jugada entera al
+momento (daño, muertes, robos) y **encola** acciones de presentación (funciones que animan,
+esperan y suenan). La cola las reproduce una detrás de otra, cada una como una corrutina que
+puede usar `wait(pasos)`, `wait_seconds(s)`, `yield()` y `wait_until(fn)`. Ejemplos en
+[datos-y-cartas.md](datos-y-cartas.md#cola-de-acciones-la-vista-va-detrás-de-la-lógica).
+
+| Función | |
+|---|---|
+| `actionq_create([auto=true])` | cola nueva; las `auto` avanzan solas cada paso (después de las corrutinas); las demás solo con `actionq_update` |
+| `actionq_push(q, fn, args...)` | encola `fn(args...)` |
+| `actionq_push_next(q, fn, args...)` | la pone justo después de la acción que se está reproduciendo (reacciones: «al morir, explota»); varias seguidas mantienen su orden |
+| `actionq_push_wait(q, segundos)` | una pausa |
+| `actionq_push_parallel(q, [fn, [fn, args...], ...])` | varias a la vez; la cola sigue cuando acaba la última |
+| `actionq_update(q)` | un paso a la velocidad de la cola (para colas con `auto = false`) |
+| `actionq_finish(q)` | reproduce ya todo lo pendiente, en orden (botón «saltar») |
+| `actionq_busy(q)` | ¿queda algo por reproducir? |
+| `actionq_size(q)` | acciones pendientes, contando la que se reproduce |
+| `actionq_clear(q)` | descarta lo pendiente y la acción en curso |
+| `actionq_set_speed(q, mult)`, `actionq_get_speed(q)` | velocidad: `1` normal, `2`/`4` más rápido, `0.5` más lento, `0` pausa, `infinity` instantáneo |
+| `actionq_exists(q)`, `actionq_destroy(q)` | |
+
+La velocidad multiplica los sub-pasos que la cola avanza por paso de juego: las esperas y los
+bucles `repeat n { ...; wait(1) }` de las acciones se aceleran con ella, y en modo instantáneo
+todo se reproduce en el mismo paso sin saltarse ninguna acción. Una acción creada desde una
+instancia se descarta si esa instancia se destruye.
+
 ## Matemáticas
 
 `abs sign round floor ceil frac sqrt sqr pow exp ln log2 log10`,
@@ -850,6 +1027,226 @@ se escala a la ventana).
 
 Sin GPU (`modengine check`) las surfaces existen con su tamaño y todo se comprueba igual; solo
 no hay píxeles.
+
+### Post-proceso pixelado (`postfx_*`)
+
+Reduce lo dibujado a una resolución fija, con posterizado, *dithering* ordenado (Bayer 4×4) y
+ajuste a una paleta: hace que una escena en 3D (`fpview`), sprites escalados y efectos parezcan
+pixel art del mismo mundo. Se aplica al fotograma (application_surface) **justo antes de
+`draw_gui`**, así que el HUD queda nítido; con `incluir_gui = true`, después del GUI. Va por la
+GPU (un pase pequeño + un escalado sin filtrar), cuesta lo mismo con cualquier contenido.
+
+| Función | |
+|---|---|
+| `postfx_pixelate(ancho_px, [niveles = 0], [dither = 0], [paleta], [incluir_gui = false])` | activa el efecto. `ancho_px`: píxeles de ancho de la imagen reducida (el alto sigue la proporción). `niveles`: colores por canal del posterizado (0 = sin posterizar; 2–8 es lo típico). `dither`: 0–1 (1 = reparte un escalón entero; con solo paleta, ruido suave). `paleta`: `true` = la `[palette]` de game.toml, un array de colores o un sprite (sus colores opacos distintos, p. ej. una paleta de Lospec importada). Hasta 64 colores |
+| `postfx_off()` | lo quita |
+| `postfx_transition(t)` | 0–1: pixela más y más (escala logarítmica hasta 6 píxeles de ancho) para transiciones de escena; funciona también con el efecto apagado (entonces incluye el GUI). 0 = normal |
+| `postfx_get()` | `{ pixels_wide, levels, dither, palette_size, include_gui, transition }` o `null` |
+
+Es un ajuste global (sigue activo al cambiar de room): para tener uno por zona, llámalo en
+`room_start` de cada room (`postfx_pixelate(240, 6, 0.6, true)` en la cripta,
+`postfx_pixelate(400)` en el exterior) o desde el objeto que controla el nivel.
+
+```
+on room_start { postfx_pixelate(320, 8, 0.5, true) }
+// transición: pixelar, cambiar de room, despixelar
+t = min(1, t + 0.05); postfx_transition(t); if t == 1 goto_room(siguiente)
+```
+
+## Primitivas y sprites deformados
+
+Como en GameMaker: se abre una primitiva, se añaden vértices y se cierra; todo va en un solo
+lote de triángulos a la GPU (respeta el shader, el modo de mezcla y el recorte actuales).
+
+| Función | |
+|---|---|
+| `draw_primitive_begin(tipo)` | empieza una primitiva sin textura. `tipo`: `pr_pointlist`, `pr_linelist`, `pr_linestrip`, `pr_trianglelist`, `pr_trianglestrip`, `pr_trianglefan` (mismos valores que GameMaker) |
+| `draw_primitive_begin_texture(tipo, sprite, [subimagen])` | con la textura de ese sprite; `u, v` van de 0 a 1 dentro de la subimagen |
+| `draw_vertex(x, y)` | vértice con el color y alfa de dibujo actuales |
+| `draw_vertex_color(x, y, color, alfa)` (o `_colour`) | con su color |
+| `draw_vertex_texture(x, y, u, v)`, `draw_vertex_texture_color(x, y, u, v, color, alfa)` (o `_colour`) | con coordenadas de textura |
+| `draw_primitive_end()` | dibuja. Las líneas salen de 1 px y los puntos de 1×1 (como `draw_line`/`draw_point`) |
+| `draw_sprite_pos(sprite, subimagen, x1, y1, x2, y2, x3, y3, x4, y4, alfa, [perspectiva = false])` | el sprite deformado a cuatro esquinas: arriba-izquierda, arriba-derecha, abajo-derecha, abajo-izquierda. Con `perspectiva = true` la textura sigue la perspectiva del cuadrilátero (sin el pliegue diagonal de GameMaker): cartas inclinadas, suelos falsos |
+
+```
+draw_primitive_begin(pr_trianglefan)            // aguja de brújula
+draw_vertex_color(cx, cy, #ffe478, 1)
+draw_vertex_color(cx + dcos(a) * 20, cy - dsin(a) * 20, #ffffeb, 1)
+draw_vertex_color(cx + dcos(a + 90) * 6, cy - dsin(a + 90) * 6, #e36956, 1)
+draw_primitive_end()
+draw_sprite_pos(carta, 0, 100, 40, 160, 50, 160, 130, 100, 140, 1, true)
+```
+
+## Vista en primera persona (`fpview_*`)
+
+Dibuja un mapa de casillas en 3D desde una cámara en una casilla, como *Eye of the Beholder*,
+*Legend of Grimrock* o *Vampire Crawlers* (paredes, suelo y techo con textura, puertas en los
+bordes, niebla y enemigos en *billboards*). Guía con el bucle de movimiento completo en
+[primera-persona.md](primera-persona.md).
+
+Convenciones: la casilla `(x, y)` del mapa es `mapa[y][x]`; `0` (o negativo) = vacía, `n > 0` =
+pared de tipo `n`. La cámara en `(x, y)` está en el **centro** de esa casilla y admite
+fracciones (para animar pasos). Ángulos en grados como en GameMaker: 0 = este, 90 = norte
+(arriba en el mapa). Direcciones de rejilla: 0 este, 1 norte, 2 oeste, 3 sur
+(`ángulo = dir * 90`). Las paredes miden 1 de alto; la cámara va a 0.5.
+
+| Función | |
+|---|---|
+| `fpview_create(ancho, alto)` | nueva vista con esa resolución interna (p. ej. 640×360 o 320×180 para un aspecto más pixelado); devuelve su id |
+| `fpview_destroy(v)`, `fpview_exists(v)` | |
+| `fpview_set_map(v, mapa)` | un array 2D (`mapa[y][x]`) o una `ds_grid`. Se copia: después cambia casillas con `fpview_set_cell` |
+| `fpview_get_cell(v, x, y)`, `fpview_set_cell(v, x, y, valor)` | leer / cambiar una casilla (abrir un muro secreto). Fuera del mapa = 0 |
+| `fpview_set_wall(v, tipo, sprite, [subimagen], [color], [sólido = true])` | aspecto del tipo de pared `tipo` (sirve también para bordes). `sprite = null`: color liso. `color` tiñe la textura. `sólido = false`: se ve pero se atraviesa (puerta abierta, cortina, ilusión) |
+| `fpview_set_floor(v, sprite_o_color, [subimagen])`, `fpview_set_ceiling(v, sprite_o_color, [subimagen])` | suelo y techo de todas las casillas; `null` = nada (se ve el color de la niebla: cielo abierto) |
+| `fpview_set_cell_floor(v, x, y, sprite_o_color, [subimagen])`, `fpview_set_cell_ceiling(...)` | solo esa casilla (trampas, agujeros, alfombras); sin el 4.º argumento quita la excepción |
+| `fpview_set_edge(v, x, y, dir, tipo)` | pared fina o puerta en el lado `dir` de la casilla (el mismo borde visto desde la vecina); `0` la quita. Se dibuja por las dos caras |
+| `fpview_get_edge(v, x, y, dir)` | tipo del borde (0 = ninguno) |
+| `fpview_set_fog(v, color, inicio, fin)` | niebla por distancia (en casillas): nada antes de `inicio`, todo `color` desde `fin`. Negro = oscuridad. También es el color de fondo |
+| `fpview_set_fov(v, grados)` | campo de visión horizontal (75 por defecto) |
+| `fpview_set_draw_distance(v, casillas)` | más allá no se dibuja (0 = el fin de la niebla) |
+| `fpview_set_shading(v, k)` | brillo de las caras norte/sur (0–1, 0.8 por defecto): da relieve sin luces |
+| `fpview_set_camera(v, x, y, ángulo, [altura = 0.5], [inclinación = 0])` | cámara en casillas (con fracciones) y grados; altura 0–1 (balanceo al andar), inclinación en grados (mirar arriba/abajo) |
+| `fpview_get_camera(v)` | `{ x, y, angle, height, pitch }` |
+| `fpview_add_billboard(v, x, y, sprite, [subimagen], [escala = 0.6], [altura = 0], [color], [alfa])` | sprite que siempre mira a la cámara (enemigos, objetos) en la casilla `(x, y)` (fracciones valen); `escala` = alto en casillas, el ancho sigue al sprite; `altura` = cuánto flota. Se ordenan por distancia y las paredes los tapan. Devuelve su índice |
+| `fpview_clear_billboards(v)` | quita todos (lo normal: borrar y volver a añadir cada paso) |
+| `fpview_draw(v, x, y, [ancho, alto])` | dibuja la vista en el destino actual (fotograma o surface; respeta shader y post-proceso). Sin ancho/alto, a su resolución |
+| `fpview_pick(v, x, y)` | qué hay bajo ese punto de la última `fpview_draw` (p. ej. `mouse_x, mouse_y`): `{ kind, index, cell_x, cell_y, dir, value, distance, x, y }` con `kind` = `"billboard"` (`index` = el de `fpview_add_billboard`; los píxeles transparentes no cuentan), `"wall"` (`dir` = cara tocada), `"edge"`, `"floor"` o `"ceiling"`; `null` si nada |
+| `fpview_project(v, x, y, [altura = 0.5])` | `{ x, y, depth }` en pantalla del punto de esa casilla (números de daño sobre un enemigo, marcadores), o `null` si queda detrás |
+| `fpview_can_move(v, x, y, dir)` | ¿se puede dar un paso desde `(x, y)` en `dir`? Mira paredes sólidas, bordes sólidos y el límite del mapa |
+| `grid_dir_dx(dir)`, `grid_dir_dy(dir)` | `1, 0` / `0, -1` / `-1, 0` / `0, 1` para este, norte, oeste, sur (cualquier entero vale: se toma módulo 4) |
+| `grid_dir_angle(dir)`, `angle_to_grid_dir(ángulo)` | `dir * 90` / la dirección más cercana a un ángulo |
+| `fpview_draw_minimap(v, x, y, px_casilla, [opciones])` | minimapa del mapa de la vista, sus bordes y la cámara (ver abajo) |
+
+Se dibuja en la GPU de verdad (cámara en perspectiva y profundidad) en una imagen propia de
+`ancho × alto` que luego se pega como una surface; con un mapa de 64×64 y 50 billboards a
+640×360 cuesta ~0.1 ms de CPU por fotograma. Sin ventana (`check`, `--headless`) las funciones
+validan los argumentos y calculan movimiento, `pick` y `project` igual; solo no hay píxeles.
+
+### Minimapa
+
+| Función | |
+|---|---|
+| `draw_minimap(mapa, x, y, px_casilla, [opciones])` | dibuja un mapa (array 2D o `ds_grid`) con casillas de `px_casilla` píxeles |
+| `fpview_draw_minimap(v, x, y, px_casilla, [opciones])` | igual con el mapa de una vista, sus bordes y su cámara como jugador |
+
+`opciones` (struct, todo opcional): `visited` (array 2D o ds_grid; solo se ven las casillas
+visitadas ≠ 0 y las paredes junto a ellas), `player_x`, `player_y` y `dir` (0–3) o `angle`
+(flecha del jugador), `width` y `height` (ventana en píxeles: recorta y se desplaza para dejar al
+jugador en el centro), `markers` (array de `{ x, y, color }`), y colores `wall`, `floor`,
+`unseen` (casillas no visitadas; sin él no se dibujan), `edge`, `player`, `background`, más
+`alpha`.
+
+```
+fpview_draw_minimap(vista, 528, 8, 6, { width: 104, height: 80, visited: visitadas,
+    background: #120c1c, markers: [{ x: 9, y: 4, color: #ff4040 }] })
+```
+
+## Tweens y easing (`tween_*`)
+
+Animan números de una instancia o de un struct hasta un valor en un tiempo, con una curva de
+suavizado. Avanzan en el paso fijo del motor (mismo resultado con la misma entrada) y **antes**
+de los eventos `step` de ese paso. Guía: [juice-e-idiomas.md](juice-e-idiomas.md).
+
+| Función | |
+|---|---|
+| `ease(nombre, t)` | valor de la curva en `t` (0..1). Nombres: `linear`, `smooth` y `<familia>_<in\|out\|inout>` con las familias `quad`, `cubic`, `quart`, `quint`, `sine`, `expo`, `circ`, `back`, `elastic`, `bounce` (`quad_out`, `back_inout`…). La familia sola (`back`) es su versión `_out`. `back` y `elastic` se pasan de 0..1 a propósito |
+| `ease_names()` | array con todos los nombres |
+| `tween(destino, "campo", hasta, segundos, [ease="quad_out"], [retraso])` | anima una variable; devuelve el id del tween |
+| `tween_to(destino, { campo: hasta, ... }, segundos, [ease], [opciones])` | varias variables a la vez. `destino`: una instancia (`self`, un id) o un struct. `ease`: un nombre o una **curva de animación** (asset) |
+| `tween_from(destino, { campo: desde, ... }, segundos, [ease], [opciones])` | pone ya esos valores y anima **hasta los actuales** (entradas: «aparece desde abajo») |
+| opciones | struct `{ delay, yoyo, loops, unscaled, on_complete }`: retraso en segundos; `yoyo` vuelve al valor de partida; `loops` repeticiones extra (`-1` o `true` = siempre); `unscaled` ignora `tween_set_speed` y el `hitstop`; `on_complete` función `(id)` al acabar |
+| `tween_done(id)` / `tween_exists(id)` | ¿terminó (o se canceló)? / ¿sigue vivo? |
+| `tween_remaining(id)` | segundos que le quedan (retraso incluido) |
+| `tween_cancel(id, [saltar_al_final=false])` | lo detiene donde está, o lo deja en su valor final |
+| `tween_cancel_all([destino])` | los de un destino (o todos); devuelve cuántos |
+| `tween_count([destino])` | tweens vivos |
+| `tween_on_complete(id, fn)` | función a llamar al acabar (con el id) |
+| `tween_chain(a, b, c...)` o `tween_chain([a, b, c])` | cada uno espera a que acabe el anterior y empieza desde donde lo dejó; devuelve el último |
+| `tween_set_yoyo(id, [bool])`, `tween_set_loops(id, n)`, `tween_set_unscaled(id, [bool])` | cambian un tween ya creado |
+| `tween_pause(id)`, `tween_resume(id)` | |
+| `tween_set_speed(mult)`, `tween_get_speed()` | velocidad de presentación de todos los tweens no `unscaled` (`0` = pausa, `2` = el doble de rápido). Úsala con el mismo valor que `actionq_set_speed` para acelerar toda la presentación |
+
+- Los campos `tint` y los que acaban en `color`/`colour` se interpolan **por canal** RGB.
+- Una instancia destruida se lleva sus tweens; leer una variable que no existe es un error.
+- Esperar un tween en una corrutina: `wait_until(function() { return tween_done(t) })` o
+  `wait_seconds(tween_remaining(t))`.
+
+## Juice: destellos, contornos, números flotantes y hit-stop
+
+Efectos de *game feel* sin shaders propios: el shader de sprites por defecto mezcla un color
+en los píxeles del sprite (conserva su alfa) y el contorno es el mismo sprite dibujado alrededor
+de sí mismo con ese color, todo en el mismo lote de dibujo. Se aplican al dibujo automático y
+a `draw_self()`; un shader propio activo (`shader_set`) los ignora.
+
+| Función | |
+|---|---|
+| `flash(inst, [color=#ffffff], [segundos=0.1], [fuerza=1])` | destello: el sprite se tiñe del color y se desvanece. `inst` puede ser un objeto (todas sus instancias) |
+| `sprite_outline(inst, color \| null, [grosor=1], [alfa=1])` | contorno de 1–8 px (null lo quita). Ideal para «objetivo seleccionado» |
+| `sprite_overwrite(inst, color \| null, [fuerza=1])` | tinte sólido permanente (congelado, piedra, silueta); el destello gana mientras sea más fuerte |
+| `sprite_fx_clear(inst)` | quita destello, contorno y tinte |
+| `sprite_fx(inst)` | `{ overwrite_color, overwrite_amount, outline_color, outline_thickness, flashing }` (depuración, pruebas) |
+| `pulse(inst, [escala=1.2], [segundos=0.15])` | crece y vuelve a su escala (con tweens); repetirlo antes de acabar reinicia desde la escala base |
+| `popup_text(x, y, texto, [estilo])` | número/texto flotante que sube, se desvanece y desaparece solo. Estilo: `{ color, outline (color o false), font, rise (px), duration (s), scale, scale_pop, gui }`. Por defecto blanco con borde negro, sube 24 px en 0.8 s y nace a 1.6× de tamaño. `gui: true` = coordenadas de pantalla, encima de `draw_gui`; si no, coordenadas de room encima de todas las instancias. Reutiliza huecos (máximo 256 a la vez) |
+| `popup_count()`, `popup_clear()` | |
+| `hitstop(segundos)` | congela el juego (eventos, movimiento, corrutinas, alarmas, destellos y tweens normales) ese tiempo; siguen el dibujo, los tweens `unscaled`, los popups, el audio y el temblor de cámara. Si ya hay uno más largo, gana el largo. Las teclas pulsadas durante la pausa llegan al acabar |
+| `hitstop_active()`, `hitstop_cancel()` | |
+| `juice_set_reduced(bool)`, `juice_reduced()` | accesibilidad «reducir destellos y temblores»: los destellos se limitan al 35 %, `camera_shake` al 25 % y los popups no crecen al nacer |
+
+### Música por capas
+
+| Función | |
+|---|---|
+| `audio_play_layers([snd, ...], [volúmenes], [bucle=true])` | arranca varias pistas **en la misma muestra** (versión tranquila y de combate del mismo tema); devuelve un array de voces |
+| `audio_layers_set(voces, [volúmenes], [ms])` | fundido de cada capa a su volumen: `audio_layers_set(m, [0, 1], 800)` pasa a la de combate sin perder el compás |
+
+## Idiomas (`loc*`)
+
+Tablas de textos en `lang/<código>.toml` (`es.toml`, `en.toml`…) y en `game.toml`
+`[localization] default = "es"  fallback = "en"`. Formato, plurales y flujo de trabajo en
+[juice-e-idiomas.md](juice-e-idiomas.md#idiomas).
+
+| Función | |
+|---|---|
+| `loc(clave, [args])` | texto en el idioma actual; `{nombre}` se cambia por `args.nombre`. Si falta: idioma de reserva, luego el base y si no, la propia clave (y queda en `loc_missing()`). Las entradas con plural eligen forma con `args.n` (o `args.count`) |
+| `loc_exists(clave)` | |
+| `loc_set_language(código)` | `true` si existe (`"pseudo"` siempre existe) |
+| `loc_language()`, `loc_languages()` | actual / todos los de `lang/` más `"pseudo"` |
+| `loc_default_language()`, `loc_fallback_language()` | |
+| `loc_set_pseudo(bool)`, `loc_pseudo()` | pseudolocalización sobre el idioma actual: acentos, un 30 % más largo y entre `[ ]`; los `{marcadores}` y las `[etiquetas]` de texto enriquecido no se tocan |
+| `loc_plural(n)` | categoría de plural de `n` en el idioma actual (`"one"`, `"few"`, `"many"`, `"other"`…) |
+| `loc_keys([idioma])` | claves de un idioma (el base si no se indica) |
+| `loc_missing()` | claves pedidas que no existen en ninguna tabla |
+| `loc_reload()` | vuelve a leer `lang/` (conserva el idioma) |
+| `loc_system_language()` | idioma del sistema (`"es"` de `es_ES.UTF-8`), para elegir el inicial |
+
+`modengine check` avisa de las claves usadas con `loc("literal")` que faltan en algún idioma
+(fichero:línea; error si no están en ninguno) y de las claves de las tablas que no aparecen en
+el código (ni en un `loc` literal ni como texto en arrays o structs).
+
+## Foco y navegación de menús (`ui_focus_*`)
+
+Para menús con teclado o mando (una mano de cartas, un inventario): registras rectángulos con
+un id en un grupo y las flechas mueven el foco al **más cercano en esa dirección**. Los grupos
+forman una pila: abrir un panel hace `ui_focus_push`, cerrarlo `ui_focus_pop` y vuelve el foco
+que tenía el anterior. Los rectángulos van en las coordenadas en que los dibujes.
+
+| Función | |
+|---|---|
+| `ui_focus_add(grupo, id, x, y, w, h)` | registra (o mueve) un rectángulo; el primero del grupo recibe el foco. `id`: número o texto |
+| `ui_focus_remove(grupo, id)`, `ui_focus_clear([grupo])` | |
+| `ui_focus_update()` | lee las teclas de navegación y mueve el foco del grupo activo; devuelve el id con foco |
+| `ui_focus_confirm()`, `ui_focus_back()` | ¿se pulsó confirmar (`enter`, `space`, `z`) / volver (`escape`, `backspace`, `x`) en este paso? |
+| `ui_focus_keys({ left, right, up, down, confirm, back })` | cambia las teclas (una o un array por acción). Por defecto flechas + WASD |
+| `ui_focus_get([grupo])`, `ui_focus_set(grupo, id)`, `ui_focus_is(grupo, id)` | |
+| `ui_focus_rect([grupo])` | `{x, y, w, h}` del elemento con foco (para dibujar el marco) |
+| `ui_focus_move(dir, [grupo])` | `"left"`, `"right"`, `"up"`, `"down"`; devuelve el nuevo id o null si no hay nada en esa dirección |
+| `ui_focus_wrap(grupo, [bool])` | al llegar al borde, salta al otro extremo |
+| `ui_focus_at(x, y, [grupo])` | id bajo un punto (ratón, toque) |
+| `ui_focus_push(grupo)`, `ui_focus_pop()`, `ui_focus_group()` | pila de grupos; el de abajo nunca se quita |
+
+Solo cuentan los vecinos dentro de un cono de ±63° alrededor de la dirección (un botón debajo
+del final de una fila no está «a la derecha» de su última carta). Los grupos se vacían al
+cambiar de room.
 
 ## Extensiones
 

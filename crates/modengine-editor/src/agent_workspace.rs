@@ -120,6 +120,7 @@ fn rank(o: &Open) -> u8 {
         Open::Font(_) => 7,
         Open::Script(_) => 8,
         Open::Note(_) => 9,
+        Open::Data(_) => 9,
         Open::Settings => 10,
     }
 }

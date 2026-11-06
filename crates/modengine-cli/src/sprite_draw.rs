@@ -60,6 +60,70 @@ pub struct SpriteDraw {
     /// Sprites drawn and texture changes so far this frame.
     stats: (u64, u64),
     last_tex: Option<macroquad::miniquad::TextureId>,
+    /// Overwrite colour + amount of the following sprites (`DrawCmd::SpriteFx`).
+    fx: Option<[f32; 4]>,
+}
+
+/// The default material of the game (see `gpu_fx::compile`): GameMaker's pass-through
+/// shader plus the sprite overwrite colour, which arrives in the vertex `normal`
+/// (rgb + amount; zero for every other draw, so they look exactly as before).
+pub const FX_VSH: &str = "\
+attribute vec3 in_Position;
+attribute vec4 in_Colour;
+attribute vec2 in_TextureCoord;
+varying vec2 v_vTexcoord;
+varying vec4 v_vColour;
+varying vec4 v_vFx;
+void main()
+{
+    gl_Position = gm_Matrices[MATRIX_WORLD_VIEW_PROJECTION] * vec4(in_Position, 1.0);
+    v_vColour = in_Colour;
+    v_vTexcoord = in_TextureCoord;
+    v_vFx = normal;
+}
+";
+
+pub const FX_FSH: &str = "\
+varying vec2 v_vTexcoord;
+varying vec4 v_vColour;
+varying vec4 v_vFx;
+void main()
+{
+    vec4 c = v_vColour * texture2D(gm_BaseTexture, v_vTexcoord);
+    gl_FragColor = vec4(mix(c.rgb, v_vFx.rgb, v_vFx.a), c.a);
+}
+";
+
+/// `draw_texture_ex` with the overwrite colour in the vertices' `normal`.
+#[allow(clippy::too_many_arguments)]
+fn quad_fx(tex: &Texture2D, x: f32, y: f32, color: Color, src: Rect, dest: Vec2, rotation: f32, flip_x: bool, flip_y: bool, pivot: Option<Vec2>, fx: [f32; 4]) {
+    use macroquad::models::Vertex;
+    let (tw, th) = (tex.width(), tex.height());
+    let (mut x, mut y, mut w, mut h) = (x, y, dest.x, dest.y);
+    if flip_x {
+        x += w;
+        w = -w;
+    }
+    if flip_y {
+        y += h;
+        h = -h;
+    }
+    let pivot = pivot.unwrap_or(vec2(x + w / 2.0, y + h / 2.0));
+    let (s, c) = rotation.sin_cos();
+    let rot = |p: Vec2| {
+        let d = p - pivot;
+        vec2(d.x * c - d.y * s, d.x * s + d.y * c) + pivot
+    };
+    let p = [rot(vec2(x, y)), rot(vec2(x + w, y)), rot(vec2(x + w, y + h)), rot(vec2(x, y + h))];
+    let (u0, v0, u1, v1) = (src.x / tw, src.y / th, (src.x + src.w) / tw, (src.y + src.h) / th);
+    let n = Vec4::from_array(fx);
+    let col: [u8; 4] = color.into();
+    let vert = |p: Vec2, u: f32, v: f32| Vertex { position: vec3(p.x, p.y, 0.0), uv: vec2(u, v), color: col, normal: n };
+    let verts = [vert(p[0], u0, v0), vert(p[1], u1, v0), vert(p[2], u1, v1), vert(p[3], u0, v1)];
+    let gl = unsafe { get_internal_gl() }.quad_gl;
+    gl.texture(Some(tex));
+    gl.draw_mode(DrawMode::Triangles);
+    gl.geometry(&verts, &[0, 1, 2, 0, 2, 3]);
 }
 
 
@@ -97,7 +161,12 @@ impl SpriteDraw {
                 pages.push(t);
             }
         }
-        SpriteDraw { pages, place, big: HashMap::new(), rots: HashMap::new(), bytes: 0, frame_no: 0, spent: 0.0, filter, stats: (0, 0), last_tex: None }
+        SpriteDraw { pages, place, big: HashMap::new(), rots: HashMap::new(), bytes: 0, frame_no: 0, spent: 0.0, filter, stats: (0, 0), last_tex: None, fx: None }
+    }
+
+    /// `DrawCmd::SpriteFx`: overwrite colour of the following sprites (None = off).
+    pub fn set_fx(&mut self, fx: Option<[f32; 4]>) {
+        self.fx = fx.filter(|f| f[3] > 0.0);
     }
 
     /// Number of atlas pages (tests, stats).
@@ -112,6 +181,7 @@ impl SpriteDraw {
         self.spent = 0.0;
         self.stats = (0, 0);
         self.last_tex = None;
+        self.fx = None;
     }
 
     fn count(&mut self, tex: &Texture2D) {
@@ -140,6 +210,11 @@ impl SpriteDraw {
                 let top = if fy { y - (r.3 - r.1) * s } else { y - r.1 * s };
                 let tex = r.4.clone();
                 self.count(&tex);
+                if let (Some(sfx), false) = (self.fx, shader) {
+                    let src = Rect::new(0.0, 0.0, tex.width(), tex.height());
+                    quad_fx(&tex, left, top, color, src, vec2(r.2 * s, r.3 * s), 0.0, fx, fy, None, sfx);
+                    return;
+                }
                 draw_texture_ex(&tex, left, top, color, DrawTextureParams { dest_size: Some(vec2(r.2 * s, r.3 * s)), flip_x: fx, flip_y: fy, ..Default::default() });
                 return;
             }
@@ -153,6 +228,11 @@ impl SpriteDraw {
         let (ox, oy) = (spr.origin.0 as f32, spr.origin.1 as f32);
         let left = (x - ox * sx).min(x + (fw - ox) * sx);
         let top = (y - oy * sy).min(y + (fh - oy) * sy);
+        if let (Some(sfx), false) = (self.fx, shader) {
+            let dest = vec2(fw * sx.abs(), fh * sy.abs());
+            quad_fx(&tex, left, top, color, Rect::new(src_x, src_y, fw, fh), dest, -angle.to_radians(), sx < 0.0, sy < 0.0, Some(vec2(x, y)), sfx);
+            return;
+        }
         draw_texture_ex(
             &tex,
             left,

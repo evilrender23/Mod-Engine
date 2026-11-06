@@ -50,6 +50,8 @@ pub fn check(e: &Engine) -> Vec<Finding> {
     l.pass = Pass::Check;
     l.walk_all();
     let mut out = l.out;
+    // localization: keys missing per language, unused keys (loc.rs)
+    out.extend(crate::loc::check(e));
     out.sort_by(|a, b| (&a.file, a.line, a.severity, &a.msg).cmp(&(&b.file, b.line, b.severity, &b.msg)));
     out.dedup();
     out

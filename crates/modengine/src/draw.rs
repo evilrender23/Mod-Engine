@@ -55,6 +55,17 @@ pub enum DrawCmd {
     /// The game frame is finished: following commands (`post_draw`) draw on the final image,
     /// in GUI coordinates. `app`: start from a copy of application_surface (else black).
     PostDraw { app: bool },
+    /// Overwrite colour (rgb) and amount (a) mixed into the pixels of the following sprite
+    /// draws by the default sprite shader (flash, outline, freeze tint; see `feel.rs`);
+    /// None = off. Custom shaders ignore it.
+    SpriteFx(Option<[f32; 4]>),
+    /// Triangle list in the current coordinates (`draw_primitive_*`, `draw_sprite_pos`),
+    /// textured with sprite `tex`'s sheet (UVs normalised to the sheet) or plain white.
+    Mesh { tex: Option<u32>, verts: Vec<crate::fpview::MVert> },
+    /// A first-person view rendered at its own resolution, drawn at (x, y, w, h).
+    FpView { frame: std::rc::Rc<crate::fpview::FpFrame>, x: f32, y: f32, w: f32, h: f32 },
+    /// `postfx_pixelate` over the frame drawn so far (application_surface).
+    PostFx { pixels_wide: u32, levels: u32, dither: f32, palette: std::rc::Rc<Vec<u32>> },
 }
 
 /// Current drawing settings (`set_color`, `set_alpha`, `set_font`, `set_align`).

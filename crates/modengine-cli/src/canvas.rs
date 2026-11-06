@@ -106,6 +106,20 @@ impl Canvas {
         }
     }
 
+    /// Drawing goes to the game frame (application_surface), not a surface or post_draw.
+    pub fn on_frame(&self) -> bool {
+        self.target.is_none() && !self.in_post
+    }
+
+    /// Sets again the camera of the current target (after drawing into a private one, see
+    /// fpview.rs).
+    pub fn restore_camera(&self) {
+        match self.target.and_then(|id| self.surfaces.get(&id)) {
+            Some((w, h, rt)) => set_camera(&camera_for(rt, 0.0, 0.0, *w as f32, *h as f32)),
+            None => self.set_frame_camera(),
+        }
+    }
+
     /// The image the window shows (application_surface or the post_draw result).
     pub fn output(&self) -> &Texture2D {
         match (&self.post, self.show_post) {

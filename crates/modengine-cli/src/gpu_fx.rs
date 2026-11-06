@@ -4,7 +4,7 @@
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation};
 use macroquad::prelude::*;
 use modengine::draw::DrawCmd;
-use modengine::shader::{prepare, ShaderAsset, Stage, UType, DEFAULT_FSH, DEFAULT_VSH};
+use modengine::shader::{prepare, ShaderAsset, Stage, UType};
 use modengine::Engine;
 use std::collections::HashMap;
 
@@ -41,7 +41,8 @@ pub fn pipeline(blend: u8) -> PipelineParams {
 pub fn compile(s: Option<&ShaderAsset>, blend: u8) -> Result<Material, String> {
     let (vsh, fsh) = match s {
         Some(s) => (s.vsh.as_str(), s.fsh.as_str()),
-        None => (DEFAULT_VSH, DEFAULT_FSH),
+        // the default material also does the sprite overwrite colour (flash, outline)
+        None => (crate::sprite_draw::FX_VSH, crate::sprite_draw::FX_FSH),
     };
     let mut uniforms = vec![];
     let mut textures = vec![];

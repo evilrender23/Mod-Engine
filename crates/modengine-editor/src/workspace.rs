@@ -173,6 +173,7 @@ pub fn default_size(open: &Open) -> Vec2 {
         Open::Font(_) => Vec2::new(900.0, 560.0),
         Open::Note(_) => Vec2::new(720.0, 480.0),
         Open::TileSet(_) => Vec2::new(960.0, 600.0),
+        Open::Data(_) => Vec2::new(1040.0, 560.0),
     }
 }
 

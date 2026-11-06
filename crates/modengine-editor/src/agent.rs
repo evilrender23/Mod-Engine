@@ -831,6 +831,15 @@ pub fn engine_context_for(name: &str, docs: Option<&Path>, tool: Option<&Path>, 
          with pixel art drawn as characters of the palette (`pixels = ['''...''']`, `.` is transparent).\n\
          - rooms/*.toml: size, background, camera and layers (tiles and instances).\n\
          - sounds/: .wav/.ogg files or .toml synthesized sounds. fonts/: .ttf/.otf.\n\
+         - data/<table>.toml (or .json/.csv): content as data (cards, enemies, items...), `[[card]]` records with a \
+         unique `id`, checked by an optional data/<table>.schema.toml; scripts read them with data_get(table, id) \
+         (see datos-y-cartas.md).\n\
+         - lang/<code>.toml (es.toml, en.toml...): string tables `key = \"text\"` with {{placeholders}}; when the project \
+         has lang/, write player-facing text with loc(\"key\", {{ name: v, n: 3 }}) and add the key to every language \
+         (`modengine check` lists missing ones; see juice-e-idiomas.md).\n\
+         - procedural dungeons: a config (.toml or a data record) for dungeon_create(); tune it with \
+         `modengine dungeon <project> <config.toml|table:id> --seed 1,2,3 --png out.png` and look at the PNGs \
+         (see mazmorras.md). Maps as 2D grids: ds_grid_* and `grid[# x, y]`.\n\
          Every asset is named by its file name without extension, and all assets share one namespace.\n\n"
     );
     match docs {

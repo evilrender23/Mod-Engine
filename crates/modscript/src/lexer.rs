@@ -42,6 +42,8 @@ pub enum Tok {
     RBrace,
     LBracket,
     RBracket,
+    /// `#` right after `[`: the ds_grid accessor `grid[# x, y]`.
+    Hash,
     Comma,
     Semi,
     Colon,
@@ -139,6 +141,7 @@ fn tok_text(t: &Tok) -> &'static str {
         Colon => ":",
         Dot => ".",
         Question => "?",
+        Hash => "#",
         QQ => "??",
         Plus => "+",
         Minus => "-",
@@ -349,6 +352,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, (String, u32)> {
                 i += 1;
             }
             if i - start != 6 {
+                // `grid[# x, y]`: the ds_grid accessor
+                if matches!(out.last(), Some(Token { tok: Tok::LBracket, .. })) {
+                    i = start;
+                    out.push(Token { tok: Tok::Hash, line });
+                    continue;
+                }
                 return Err(("colour literals must look like #RRGGBB".into(), line));
             }
             let s: String = c[start..i].iter().collect();

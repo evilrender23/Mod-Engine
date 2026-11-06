@@ -66,6 +66,11 @@ x++  x--  ++x  --x
 
 `"texto" + 5` concatena. `"ab" * 3` repite el texto.
 
+`rejilla[# x, y]` lee una celda de una `ds_grid` (como en GameMaker) y `rejilla[# x, y] = v`
+la escribe; también `+=`, `-=`, `*=`, `/=`, `++` y `--`. Es otra forma de escribir
+`ds_grid_get` / `ds_grid_set` (ver [funciones.md](funciones.md#rejillas-2d-ds_grid)). Deja un
+espacio tras `#` para que no se lea como un color.
+
 ## Control de flujo
 
 ```js

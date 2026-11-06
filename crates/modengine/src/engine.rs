@@ -215,6 +215,22 @@ pub struct Engine {
     pub rngs: crate::natives::rng::Streams,
     /// `instance_pool_create()` / `pool_spawn()` (`pool.rs`).
     pub pools: crate::pool::Pools,
+    /// Tweens, sprite flash/outline, popups, hit-stop and UI focus (`feel.rs`).
+    pub feel: crate::feel::Feel,
+    /// String tables of `lang/` (`loc.rs`), read on first use.
+    pub loc: crate::loc::Loc,
+    /// Tables of `data/` (`data_get`; `datatable.rs`).
+    pub data: crate::datatable::DataTables,
+    /// `deck_create()` card piles (`natives/deck.rs`).
+    pub decks: crate::natives::deck::Decks,
+    /// `actionq_create()` presentation queues (`actionq.rs`).
+    pub actionqs: crate::actionq::ActionQueues,
+    /// First-person views, the primitive being built and the pixelate post-process (fpview.rs).
+    pub fp: crate::fpview::FpState,
+    /// `ds_grid_*` 2D grids (dsgrid.rs).
+    pub ds_grids: crate::dsgrid::DsGrids,
+    /// `dungeon_*` generators and their last result (dungeon.rs).
+    pub dungeons: crate::dungeon::Dungeons,
 }
 
 fn overlap(a: [f64; 4], b: [f64; 4]) -> bool {
@@ -421,6 +437,14 @@ impl Engine {
             coros: Default::default(),
             rngs: Default::default(),
             pools: Default::default(),
+            feel: Default::default(),
+            loc: Default::default(),
+            data: Default::default(),
+            decks: Default::default(),
+            actionqs: Default::default(),
+            fp: Default::default(),
+            ds_grids: Default::default(),
+            dungeons: Default::default(),
         };
         // particle systems, shaders and extensions
         crate::effects::link(&mut e, &mut errors);
@@ -558,6 +582,9 @@ impl Engine {
             },
             None => e.room_order.first().copied().unwrap_or(0),
         };
+
+        // data tables last: their references may name any asset
+        crate::datatable::attach(&mut e, &mut errors);
 
         if !errors.is_empty() {
             return Err(errors.join("\n"));
@@ -880,6 +907,9 @@ impl Engine {
         crate::audio::stop_all(self);
         self.coros.clear();
         self.pools.clear();
+        self.feel.clear();
+        self.decks.clear();
+        self.actionqs.clear();
         self.insts.clear();
         self.index.clear();
         self.seqs.list.clear();
@@ -1124,6 +1154,12 @@ impl Engine {
     /// One logic step (frame of game time).
     pub fn tick(&mut self) {
         self.steps += 1;
+        if crate::feel::step(self) {
+            // hit-stop: gameplay frozen; sound and camera shake go on
+            crate::audio::step(self);
+            self.update_camera(false);
+            return;
+        }
         for inst in self.insts.iter_mut().filter(|i| i.alive) {
             inst.xprev = inst.x;
             inst.yprev = inst.y;
@@ -1138,6 +1174,8 @@ impl Engine {
         self.input_events(&ids);
         self.dispatch(&ids, Ev::Step);
         crate::coroutine::step(self);
+        crate::actionq::step(self);
+        crate::datatable::step(self);
         self.motion();
         crate::anim_assets::step_paths(self, &ids);
         self.collisions(&ids);
@@ -1410,8 +1448,9 @@ impl Engine {
         self.shaders.blend = 0;
         let (mut vx, mut vy) = (self.cam.x, self.cam.y);
         if self.cam.shake_steps > 0 {
-            vx += (natives::rand01(&mut self.rng) * 2.0 - 1.0) * self.cam.shake;
-            vy += (natives::rand01(&mut self.rng) * 2.0 - 1.0) * self.cam.shake;
+            let shake = self.cam.shake * crate::feel::shake_scale(self);
+            vx += (natives::rand01(&mut self.rng) * 2.0 - 1.0) * shake;
+            vy += (natives::rand01(&mut self.rng) * 2.0 - 1.0) * shake;
         }
         if self.config.display.pixel_perfect {
             vx = vx.round();
@@ -1487,11 +1526,15 @@ impl Engine {
             }
         }
 
+        crate::feel::draw_world(self);
         self.ui.clip.clear();
+        crate::fpview::postfx_cmd(self, false);
         self.cmds.push(DrawCmd::Gui);
         self.draw = DrawState::default();
         self.dispatch_visible(&inst_ids, Ev::DrawGui);
+        crate::feel::draw_gui(self);
         crate::natives::ui::draw_cursor(self);
+        crate::fpview::postfx_cmd(self, true);
         crate::surface::end_render(self, &inst_ids);
     }
 
@@ -1507,6 +1550,9 @@ impl Engine {
 
     /// Draws instance `i` with its own sprite, frame, scale, angle, tint and alpha.
     pub fn draw_inst(&mut self, i: usize) {
+        if crate::feel::draw_inst_fx(self, i) {
+            return;
+        }
         let inst = &self.insts[i];
         let Some(s) = inst.sprite else { return };
         let n = self.sprites[s as usize].frames.len() as i64;

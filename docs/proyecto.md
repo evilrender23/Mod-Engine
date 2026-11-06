@@ -722,6 +722,39 @@ error sale en la consola y en pantalla y se dibuja con el shader por defecto.
 sintaxis de GLSL 3 como `in`/`out`/`texture()`, `;` olvidados, varyings que no coinciden) y
 `modengine shader <proyecto> [nombre] --check` los compila de verdad en la GPU.
 
+## Tablas de datos (`data/`)
+
+Contenido como datos: `data/<tabla>.toml` con registros `[[nombre]]` que llevan un `id` único
+(también `.json`, una lista de objetos, o `.csv` con cabecera). `data/<tabla>.schema.toml`
+(opcional) da el tipo de cada campo, valores por defecto, enums, rangos y referencias a assets
+u otras tablas; los errores impiden cargar el juego y salen con `fichero:línea`. Los scripts los
+leen con `data_get(tabla, id)`. Formato completo en [datos-y-cartas.md](datos-y-cartas.md).
+
+```toml
+# data/enemies.toml
+[[enemy]]
+id = "bat"
+hp = 18
+sprite = "spr_bat"
+intents = [{ type = "attack", amount = 5 }]
+```
+
+## Idiomas (`lang/`)
+
+Un fichero de textos por idioma, `lang/<código>.toml` (`es.toml`, `en.toml`, `pt-BR.toml`…):
+`clave = "texto"` con `{marcadores}`; las tablas TOML dan claves con punto (`[menu]` +
+`play = "Jugar"` es `menu.play`) y una tabla con `one`/`other` (y `zero`, `two`, `few`,
+`many`) es un texto con plural. En `game.toml`:
+
+```toml
+[localization]
+default = "es"    # idioma base y el del arranque (sin esto: el primero por orden alfabético)
+fallback = "en"   # dónde buscar lo que falte en el idioma actual
+```
+
+Los scripts los leen con `loc("menu.play")`. Se editan como tabla en el editor (sección
+Idiomas). Detalles en [juice-e-idiomas.md](juice-e-idiomas.md#idiomas).
+
 ## Extensiones (`extensions/`)
 
 Una extensión es una carpeta `extensions/<nombre>/` con scripts ModScript (`.ms`, también en

@@ -42,6 +42,8 @@ pub enum Open {
     Font(String),
     Note(String),
     TileSet(String),
+    /// A data table (`data/<name>.toml|json|csv`, datatable.rs).
+    Data(String),
     /// Paths, timelines, animation curves and sequences (motion.rs).
     Anim(crate::motion::AnimKind, String),
     /// Particle systems, shaders and extensions (fx.rs).
@@ -62,6 +64,7 @@ impl Open {
             "font" => Open::Font(v.into()),
             "note" => Open::Note(v.into()),
             "tileset" => Open::TileSet(v.into()),
+            "data" => Open::Data(v.into()),
             "settings" => Open::Settings,
             k if crate::motion::AnimKind::parse(k).is_some() => Open::Anim(crate::motion::AnimKind::parse(k)?, v.into()),
             k if crate::fx::FxKind::parse(k).is_some() => Open::Fx(crate::fx::FxKind::parse(k)?, v.into()),
@@ -80,6 +83,7 @@ impl Open {
             Open::Font(n) => format!("font:{n}"),
             Open::Note(n) => format!("note:{n}"),
             Open::TileSet(n) => format!("tileset:{n}"),
+            Open::Data(n) => format!("data:{n}"),
             Open::Anim(k, n) => format!("{}:{n}", k.key()),
             Open::Fx(k, n) => format!("{}:{n}", k.key()),
             Open::Settings => "settings".into(),
@@ -153,6 +157,7 @@ pub enum Tab {
     Font(crate::font::FontEditor),
     Note(crate::note::NoteEditor),
     TileSet(crate::tileset::TileSetEditor),
+    Data(crate::datatable::TableEditor),
     Anim(crate::motion::AnimTab),
     Fx(crate::fx::FxTab),
     Settings(SettingsEditor),
@@ -169,6 +174,7 @@ impl Tab {
             Tab::Font(e) => Open::Font(e.name.clone()),
             Tab::Note(e) => Open::Note(e.name.clone()),
             Tab::TileSet(e) => Open::TileSet(e.name.clone()),
+            Tab::Data(e) => Open::Data(e.name.clone()),
             Tab::Anim(e) => Open::Anim(e.kind(), e.name().to_string()),
             Tab::Fx(e) => Open::Fx(e.kind(), e.name().to_string()),
             Tab::Settings(_) => Open::Settings,
@@ -186,6 +192,7 @@ impl Tab {
             Tab::Font(e) => format!("🗛 Fuente: {}", e.name),
             Tab::Note(e) => format!("🗒 Nota: {}", e.name),
             Tab::TileSet(e) => format!("▩ Tile set: {}", e.name),
+            Tab::Data(e) => format!("▤ Tabla de datos: {}", e.name),
             Tab::Anim(e) => e.title(),
             Tab::Fx(e) => e.title(),
             Tab::Settings(_) => "⚙ Ajustes del juego".into(),
@@ -203,6 +210,7 @@ impl Tab {
             Tab::Font(e) => e.dirty,
             Tab::Note(e) => e.dirty,
             Tab::TileSet(e) => e.dirty,
+            Tab::Data(e) => e.dirty,
             Tab::Object(e) => e.script_rel(p).and_then(|r| p.script_index(&r)).map(|i| p.scripts[i].dirty()).unwrap_or(false),
             Tab::Script(e) => p.script_index(&e.rel).map(|i| p.scripts[i].dirty()).unwrap_or(false),
         }
@@ -219,6 +227,7 @@ impl Tab {
             Tab::Font(e) => e.save(cx),
             Tab::Note(e) => e.save(cx),
             Tab::TileSet(e) => e.save(cx),
+            Tab::Data(e) => e.save(cx),
             Tab::Object(e) => match e.script_rel(cx.project).and_then(|r| cx.project.script_index(&r)) {
                 Some(i) => cx.project.save_script(i),
                 None => Ok(()),
@@ -275,6 +284,7 @@ impl Tab {
             Tab::Font(e) => e.ui(ui, cx),
             Tab::Note(e) => e.ui(ui, cx),
             Tab::TileSet(e) => e.ui(ui, cx),
+            Tab::Data(e) => e.ui(ui, cx),
             Tab::Settings(e) => e.ui(ui, cx),
             Tab::Anim(e) => e.ui(ui, cx),
             Tab::Fx(e) => e.ui(ui, cx),
@@ -317,6 +327,10 @@ fn make_tab(p: &Project, what: &Open) -> Result<Tab, Option<String>> {
             let s = p.tilesets.iter().find(|s| &s.name == n).ok_or(None)?;
             Tab::TileSet(crate::tileset::TileSetEditor::open(n, &s.path).map_err(Some)?)
         }
+        Open::Data(n) => {
+            let s = p.data.iter().find(|s| &s.name == n).ok_or(None)?;
+            Tab::Data(crate::datatable::TableEditor::open(p, n, &s.path).map_err(Some)?)
+        }
         Open::Anim(k, n) => Tab::Anim(crate::motion::AnimTab::open(p, *k, n)?),
         Open::Fx(k, n) => Tab::Fx(crate::fx::FxTab::open(p, *k, n)?),
         Open::Settings => Tab::Settings(SettingsEditor::new(p)),
@@ -337,6 +351,8 @@ pub enum NewKind {
     Font,
     Note,
     TileSet,
+    /// A data table (datatable.rs).
+    Data,
     /// Path, timeline, animation curve or sequence.
     Anim(crate::motion::AnimKind),
     /// Particle system, shader or extension.
@@ -408,6 +424,7 @@ fn section_key(o: &Open) -> Option<&'static str> {
         Open::Font(_) => "fonts",
         Open::Note(_) => "notes",
         Open::TileSet(_) => "tilesets",
+        Open::Data(_) => "data",
         Open::Anim(k, _) => k.section(),
         Open::Fx(k, _) => k.section(),
         Open::Settings => return None,
@@ -755,6 +772,7 @@ impl EditorApp {
                 Open::Font(n) => p.fonts.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
                 Open::Note(n) => p.notes.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
                 Open::TileSet(n) => p.tilesets.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
+                Open::Data(n) => p.data.iter().find(|s| &s.name == n).map(|s| s.path.clone()),
                 Open::Object(_) | Open::Script(_) => None, // they show the project's scripts, synced above
             };
             let Some(path) = path.filter(|f| touched(f)) else { continue };
@@ -1350,6 +1368,7 @@ impl EditorApp {
             Open::Font(n) => ("Fuente", n.clone()),
             Open::Note(n) => ("Nota", n.clone()),
             Open::TileSet(n) => ("Tile set", n.clone()),
+            Open::Data(n) => ("Tabla de datos", n.clone()),
             Open::Anim(k, n) => (k.label(), n.clone()),
             Open::Fx(k, n) => (k.label(), n.clone()),
             Open::Settings => ("Juego", p.game.game.name.clone()),
@@ -1377,6 +1396,7 @@ impl EditorApp {
                         Open::Font(_) => "🗛",
                         Open::Note(_) => "🗒",
                         Open::TileSet(_) => "▩",
+                        Open::Data(_) => "▤",
                         Open::Settings => "⚙",
                         Open::Anim(k, _) => k.icon(),
                         Open::Fx(k, _) => k.icon(),
@@ -1500,6 +1520,11 @@ impl EditorApp {
                     }
                     Open::Font(_) | Open::Note(_) | Open::TileSet(_) => {
                         for (k, v) in crate::kinds::inspector_rows(p, &what) {
+                            row(k, v);
+                        }
+                    }
+                    Open::Data(n) => {
+                        for (k, v) in crate::datatable::inspector_rows(p, n) {
                             row(k, v);
                         }
                     }
@@ -1793,6 +1818,7 @@ impl EditorApp {
             NewKind::Font => crate::font::create(p, name, extra)?,
             NewKind::Note => crate::note::create(p, name)?,
             NewKind::TileSet => crate::tileset::create(p, name, extra)?,
+            NewKind::Data => crate::datatable::create(p, name)?,
             NewKind::Anim(k) => {
                 crate::motion::create(p, k, name)?;
                 Open::Anim(k, name.into())
@@ -1890,6 +1916,7 @@ impl EditorApp {
             }
             Open::Anim(k, n) => crate::motion::delete(p, *k, n)?,
             Open::Fx(k, n) => crate::fx::delete(p, *k, n)?,
+            Open::Data(n) => crate::datatable::delete(p, n)?,
             Open::Settings => {}
         }
         if let Some(id) = self.ws.find(what) {

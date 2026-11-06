@@ -25,6 +25,16 @@ pub(crate) mod ui;
 mod raycast;
 pub(crate) mod navgrid;
 mod richtext;
+mod tween;
+mod juice;
+pub(crate) mod loc;
+mod focus;
+pub(crate) mod grid;
+pub mod dungeon;
+mod datatable;
+pub(crate) mod deck;
+mod actionq;
+pub(crate) mod fpview;
 
 use crate::draw::NAMED_COLORS;
 use crate::engine::Engine;
@@ -70,6 +80,16 @@ pub fn registry() -> HashMap<Sym, NativeFn> {
     raycast::register(&mut r);
     navgrid::register(&mut r);
     richtext::register(&mut r);
+    tween::register(&mut r);
+    juice::register(&mut r);
+    loc::register(&mut r);
+    focus::register(&mut r);
+    grid::register(&mut r);
+    dungeon::register(&mut r);
+    datatable::register(&mut r);
+    deck::register(&mut r);
+    actionq::register(&mut r);
+    fpview::register(&mut r);
     m
 }
 
@@ -149,6 +169,8 @@ pub fn constants() -> HashMap<Sym, Value> {
     ui::add_constants(&mut c);
     audio::constants(&mut c);
     coroutine::constants(&mut c);
+    deck::constants(&mut c);
+    fpview::constants(&mut c);
     c.insert(intern("pi"), Value::Num(std::f64::consts::PI));
     c.insert(intern("infinity"), Value::Num(f64::INFINITY));
     c

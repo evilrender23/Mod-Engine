@@ -29,6 +29,7 @@ pub const CREATE: &[CreateRow] = &[
     row("Curva de animación", "📈", Some(Key::J), Some(NewKind::Anim(AnimKind::Curve))),
     row("Extensión", "🧩", Some(Key::E), Some(NewKind::Fx(crate::fx::FxKind::Extension))),
     row("Fuente", "🗛", Some(Key::F), Some(NewKind::Font)),
+    row("Idioma", "🌐", None, Some(NewKind::Fx(crate::fx::FxKind::Language))),
     row("Línea de tiempo", "⏱", Some(Key::T), Some(NewKind::Anim(AnimKind::Timeline))),
     row("Nota", "🗒", Some(Key::N), Some(NewKind::Note)),
     row("Objeto", "◆", Some(Key::O), Some(NewKind::Object)),
@@ -40,6 +41,7 @@ pub const CREATE: &[CreateRow] = &[
     row("Sonido", "♪", Some(Key::S), Some(NewKind::Sound)),
     row("Sprite", "▣", Some(Key::I), Some(NewKind::PixelSprite)),
     row("Sprite desde un PNG", "▣", None, Some(NewKind::PngSprite)),
+    row("Tabla de datos", "▤", None, Some(NewKind::Data)),
     row("Tile set", "▩", Some(Key::B), Some(NewKind::TileSet)),
     row("Trayectoria", "〰", Some(Key::P), Some(NewKind::Anim(AnimKind::Path))),
 ];
@@ -84,6 +86,7 @@ pub fn parse_kind(s: &str) -> Option<NewKind> {
         "object" => NewKind::Object,
         "room" => NewKind::Room,
         "script" => NewKind::Script,
+        "data" => NewKind::Data,
         _ => return None,
     })
 }
@@ -215,6 +218,8 @@ pub const SECTIONS: &[Section] = &[
     Section { key: "particles", title: "Sistemas de partículas", new: Some(NewKind::Fx(crate::fx::FxKind::Particles)), rows: crate::fx::particle_rows },
     Section { key: "shaders", title: "Shaders", new: Some(NewKind::Fx(crate::fx::FxKind::Shader)), rows: crate::fx::shader_rows },
     Section { key: "extensions", title: "Extensiones", new: Some(NewKind::Fx(crate::fx::FxKind::Extension)), rows: crate::fx::extension_rows },
+    Section { key: "lang", title: "Idiomas", new: Some(NewKind::Fx(crate::fx::FxKind::Language)), rows: crate::fx::language_rows },
+    Section { key: "data", title: "Tablas de datos", new: Some(NewKind::Data), rows: crate::datatable::rows },
 ];
 
 fn sprite_rows(p: &Project) -> Vec<Row> {

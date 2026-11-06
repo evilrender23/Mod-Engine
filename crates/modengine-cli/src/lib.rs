@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod canvas;
+pub mod fpview;
 pub mod gpu_fx;
 pub mod headless;
 pub mod runner;
@@ -12,6 +13,8 @@ pub mod sprite_draw;
 pub mod test_run;
 pub mod touch;
 
+#[cfg(not(target_os = "android"))]
+pub mod dungeon_cli;
 #[cfg(not(target_os = "android"))]
 pub mod export;
 #[cfg(not(target_os = "android"))]

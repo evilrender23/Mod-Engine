@@ -116,6 +116,26 @@ fn is_lvalue(e: &Expr) -> bool {
     matches!(e, Expr::Ident(_) | Expr::Field(..) | Expr::Index(..))
 }
 
+/// `grid[# x, y]` (parsed as `ds_grid_get(grid, x, y)`).
+fn is_grid_get(e: &Expr) -> bool {
+    matches!(e, Expr::Call(f, a) if a.len() == 3 && matches!(**f, Expr::Ident(s) if s == intern("ds_grid_get")))
+}
+
+/// `grid[# x, y] op= rhs` as a call: ds_grid_set / ds_grid_add / ds_grid_multiply.
+fn grid_assign(target: Expr, op: AssignOp, rhs: Expr) -> Result<Expr, &'static str> {
+    let Expr::Call(_, mut args) = target else { unreachable!("checked by is_grid_get") };
+    let (f, v) = match op {
+        AssignOp::Set => ("ds_grid_set", rhs),
+        AssignOp::Op(BinOp::Add) => ("ds_grid_add", rhs),
+        AssignOp::Op(BinOp::Sub) => ("ds_grid_add", Expr::Unary(UnOp::Neg, Box::new(rhs))),
+        AssignOp::Op(BinOp::Mul) => ("ds_grid_multiply", rhs),
+        AssignOp::Op(BinOp::Div) => ("ds_grid_multiply", Expr::Binary(BinOp::Div, Box::new(Expr::Num(1.0)), Box::new(rhs))),
+        _ => return Err("with grid[# x, y] only =, +=, -=, *=, /=, ++ and -- are allowed"),
+    };
+    args.push(v);
+    Ok(Expr::Call(Box::new(Expr::Ident(intern(f))), args))
+}
+
 impl Parser {
     fn new(file: &str, src: &str) -> PResult<Self> {
         let file: Rc<str> = Rc::from(file);
@@ -570,6 +590,10 @@ impl Parser {
         if matches!(self.peek(), Tok::PlusPlus | Tok::MinusMinus) {
             let d = if self.bump() == Tok::PlusPlus { 1.0 } else { -1.0 };
             let t = self.postfix()?;
+            if is_grid_get(&t) {
+                let call = match grid_assign(t, AssignOp::Op(BinOp::Add), Expr::Num(d)) { Ok(c) => c, Err(m) => return self.err(m) };
+                return Ok(Stmt { kind: StmtKind::Expr(call), line });
+            }
             if !is_lvalue(&t) {
                 return self.err("'++'/'--' needs a variable");
             }
@@ -590,12 +614,23 @@ impl Parser {
             _ => None,
         };
         if let Some(op) = op {
+            if is_grid_get(&e) {
+                self.bump();
+                let rhs = self.expr()?;
+                let call = match grid_assign(e, op, rhs) { Ok(c) => c, Err(m) => return self.err(m) };
+                return Ok(Stmt { kind: StmtKind::Expr(call), line });
+            }
             if !is_lvalue(&e) {
                 return self.err("left side of an assignment must be a variable, field or array element");
             }
             self.bump();
             let rhs = self.expr()?;
             return Ok(Stmt { kind: StmtKind::Assign(e, op, rhs), line });
+        }
+        if matches!(self.peek(), Tok::PlusPlus | Tok::MinusMinus) && is_grid_get(&e) {
+            let d = if self.bump() == Tok::PlusPlus { 1.0 } else { -1.0 };
+            let call = match grid_assign(e, AssignOp::Op(BinOp::Add), Expr::Num(d)) { Ok(c) => c, Err(m) => return self.err(m) };
+            return Ok(Stmt { kind: StmtKind::Expr(call), line });
         }
         if matches!(self.peek(), Tok::PlusPlus | Tok::MinusMinus) {
             if !is_lvalue(&e) {
@@ -688,6 +723,16 @@ impl Parser {
                     let a = self.args(Tok::RParen)?;
                     e = Expr::Call(Box::new(e), a);
                 }
+                Tok::LBracket if matches!(self.peek2(), Tok::Hash) => {
+                    // grid[# x, y] -> ds_grid_get(grid, x, y)
+                    self.bump();
+                    self.bump();
+                    let x = self.expr()?;
+                    self.expect(Tok::Comma, "',' in grid[# x, y]")?;
+                    let y = self.expr()?;
+                    self.expect(Tok::RBracket, "']'")?;
+                    e = Expr::Call(Box::new(Expr::Ident(intern("ds_grid_get"))), vec![e, x, y]);
+                }
                 Tok::LBracket => {
                     self.bump();
                     let i = self.expr()?;
@@ -758,6 +803,7 @@ impl Parser {
                 self.expect(Tok::RParen, "')'")?;
                 e
             }
+            Tok::LBracket if matches!(self.peek2(), Tok::Hash) => return self.err("'[#' only goes after a ds_grid: grid[# x, y]"),
             Tok::LBracket => {
                 self.bump();
                 Expr::Array(self.args(Tok::RBracket)?)
