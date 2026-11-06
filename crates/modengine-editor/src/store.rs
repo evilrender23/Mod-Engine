@@ -54,7 +54,7 @@ pub struct Prefs {
 }
 
 pub fn config_file() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join(".config/modengine/store.toml"))
+    modengine::home_dir().map(|h| h.join(".config/modengine/store.toml"))
 }
 
 impl Prefs {
@@ -1296,10 +1296,7 @@ mod tests {
             r => panic!("{r:?}"),
         };
         println!("downloaded {} ({} bytes)", file.display(), std::fs::metadata(&file).unwrap().len());
-        let tmp = std::env::temp_dir().join(format!("modengine_store_real_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let st = std::process::Command::new("cp").arg("-r").arg(root.join("examples/platformer")).arg(&tmp).status().unwrap();
-        assert!(st.success());
+        let tmp = crate::room::tests::temp_project("store_real");
         let name = crate::import::sanitize(Path::new(&f.name).file_stem().unwrap().to_str().unwrap());
         let imp = crate::import::import(&tmp, Kind::Sprite, &file, &name, &crate::import::SpriteOpts::default(), false).unwrap();
         remember_credit(&file, Credit::from_asset(&a, &f.name));
@@ -1310,7 +1307,7 @@ mod tests {
         let md = std::fs::read_to_string(tmp.join("CREDITS.md")).unwrap();
         println!("--- CREDITS.md\n{md}---");
         assert!(md.contains(&a.url()) && md.contains("CC0"));
-        let bin = root.join("target/release/modengine");
+        let bin = root.join("target/release").join(format!("modengine{}", std::env::consts::EXE_SUFFIX));
         let out = std::process::Command::new(&bin).arg("check").arg(&tmp).output().expect("build modengine first (cargo build --release)");
         println!("modengine check: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         assert!(out.status.success());

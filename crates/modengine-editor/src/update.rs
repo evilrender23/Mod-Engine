@@ -25,8 +25,6 @@ const LIMITE_GIT: Duration = Duration::from_secs(45);
 const PRIMERA_COMPROBACION: Duration = Duration::from_secs(60);
 const CADA: Duration = Duration::from_secs(6 * 60 * 60);
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-#[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -120,13 +118,8 @@ fn explicar_error_git(error: &str) -> String {
 }
 
 fn orden_oculta(programa: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut orden = Command::new(programa);
+    let mut orden = crate::proc::command(programa);
     orden.stdin(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        orden.creation_flags(CREATE_NO_WINDOW);
-    }
     orden
 }
 
@@ -340,7 +333,7 @@ impl Actualizador {
                 .arg(&destino)
                 .args(["-Rama", &version.rama, "-EsperarPid", &pid, "-Relanzar"]);
             // Its own group: it keeps running after the editor exits, which is when it swaps folders.
-            o.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+            o.creation_flags(crate::proc::CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
             o
         };
         #[cfg(not(windows))]

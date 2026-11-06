@@ -421,12 +421,16 @@ pub fn wrap(text: &str, max_w: f32, width_of: &dyn Fn(&str) -> f32) -> Vec<Strin
 
 /// TTF/OTF files of the system font folders (for the editor's font picker).
 pub fn system_fonts() -> Vec<std::path::PathBuf> {
-    let mut dirs: Vec<std::path::PathBuf> = vec!["/usr/share/fonts".into(), "/usr/local/share/fonts".into(), "/Library/Fonts".into(), "/System/Library/Fonts".into(), "C:\\Windows\\Fonts".into()];
-    if let Some(h) = std::env::var_os("HOME") {
-        let h = std::path::PathBuf::from(h);
+    let windir = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("WINDIR")).map_or_else(|| "C:\\Windows".into(), std::path::PathBuf::from);
+    let mut dirs: Vec<std::path::PathBuf> = vec!["/usr/share/fonts".into(), "/usr/local/share/fonts".into(), "/Library/Fonts".into(), "/System/Library/Fonts".into(), windir.join("Fonts")];
+    if let Some(h) = crate::home_dir() {
         dirs.push(h.join(".local/share/fonts"));
         dirs.push(h.join(".fonts"));
         dirs.push(h.join("Library/Fonts"));
+    }
+    // fonts installed "for this user only" on Windows
+    if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
     }
     fn walk(d: &Path, out: &mut Vec<std::path::PathBuf>, depth: u32) {
         let Ok(rd) = std::fs::read_dir(d) else { return };

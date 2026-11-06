@@ -294,11 +294,11 @@ mod tests {
         let mut input = egui::RawInput::default();
         input.events.push(egui::Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
         let mut got = None;
-        let _ = ctx.run_ui(input, |ui| got = shortcut(ui.ctx()));
+        ctx.run_ui(input, |ui| got = shortcut(ui.ctx())).textures_delta.clear();
         assert_eq!(got, Some(NewKind::Note));
         let mut input = egui::RawInput::default();
         input.events.push(egui::Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-        let _ = ctx.run_ui(input, |ui| got = shortcut(ui.ctx()));
+        ctx.run_ui(input, |ui| got = shortcut(ui.ctx())).textures_delta.clear();
         assert_eq!(got, None, "without Alt nothing happens");
     }
 }

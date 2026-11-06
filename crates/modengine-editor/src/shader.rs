@@ -8,7 +8,7 @@ use eframe::egui::{self, Color32, FontId, RichText, TextureHandle, Vec2};
 use modengine::shader::{link_problems, parse_uniforms, validate, Stage, UType, DEFAULT_FSH, DEFAULT_VSH};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver};
 
 const KEYWORDS: &[&str] = &[
@@ -168,7 +168,7 @@ impl ShaderEditor {
         let dir = cx.project.dir.clone();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let out = Command::new(exe).arg("shader").arg(&dir).args(&args).stdin(Stdio::null()).output();
+            let out = crate::proc::command(exe).arg("shader").arg(&dir).args(&args).stdin(Stdio::null()).output();
             let r = match out {
                 Ok(o) => {
                     let mut lines: Vec<String> = String::from_utf8_lossy(&o.stdout).lines().map(String::from).collect();
@@ -210,7 +210,7 @@ impl ShaderEditor {
         }
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let r = Command::new(exe).args(&args).stdin(Stdio::null()).output().map_err(|e| e.to_string()).and_then(|o| {
+            let r = crate::proc::command(exe).args(&args).stdin(Stdio::null()).output().map_err(|e| e.to_string()).and_then(|o| {
                 let text = String::from_utf8_lossy(&o.stdout).to_string();
                 if text.contains("error") && !out.exists() {
                     return Err(text);
@@ -235,7 +235,7 @@ impl ShaderEditor {
         let Some(exe) = crate::fx::modengine_exe() else {
             return cx.error("no encuentro el ejecutable `modengine` junto al editor");
         };
-        let mut cmd = Command::new(exe);
+        let mut cmd = crate::proc::command(exe);
         cmd.arg("shader").arg(&cx.project.dir).arg(&self.name).stdin(Stdio::null()).stdout(Stdio::null());
         if let Some(s) = &self.sprite {
             cmd.args(["--sprite", s]);

@@ -23,7 +23,7 @@ use std::sync::mpsc::{self, Receiver};
 
 /// Where downloaded / imported palettes are kept (`~/.config/modengine/palettes`).
 pub fn palettes_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join(".config/modengine/palettes"))
+    modengine::home_dir().map(|h| h.join(".config/modengine/palettes"))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -86,13 +86,8 @@ pub type Fetch = fn(&str) -> Result<Vec<u8>, String>;
 
 /// GET with `curl` (no shell, fails on HTTP errors, 20 s limit).
 pub fn curl_fetch(url: &str) -> Result<Vec<u8>, String> {
-    let mut cmd = std::process::Command::new("curl");
+    let mut cmd = crate::proc::command("curl");
     cmd.args(["-fsSL", "--max-time", "20", "-A", "ModEngine-editor", url]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
     let out = cmd.output().map_err(|e| format!("no se pudo ejecutar curl: {e}"))?;
     if out.status.success() {
         return Ok(out.stdout);

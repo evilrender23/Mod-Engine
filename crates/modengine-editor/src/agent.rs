@@ -5,6 +5,7 @@
 //!
 //! Modelled on the Maker editor's `src/panels/agent/*Backend.cpp`, with the same flags.
 
+use modengine::{canonical, plain_path};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -118,7 +119,7 @@ pub struct Run {
 
 /// How the agent should type `tool` in a shell command (quoted when it has spaces).
 pub fn tool_command(tool: &Path) -> String {
-    let s = tool.to_string_lossy().into_owned();
+    let s = plain_path(tool).to_string_lossy().into_owned();
     if s.contains(' ') {
         format!("\"{s}\"")
     } else {
@@ -147,7 +148,7 @@ pub fn tool_subcommands(run: &Run) -> Option<(&Path, &'static [&'static str])> {
 
 /// Claude Code rules allowing just those `modengine` subcommands (as typed, quoted or not).
 pub fn claude_tool_rules(tool: &Path, subs: &[&str]) -> Vec<String> {
-    let plain = tool.to_string_lossy().replace('\\', "/");
+    let plain = plain_path(tool).to_string_lossy().replace('\\', "/");
     let mut forms = vec![plain.clone()];
     if plain.contains(' ') {
         forms.push(format!("\"{plain}\""));
@@ -262,7 +263,7 @@ pub const INLINE_MAX: usize = 20 * 1024;
 impl Attachment {
     /// A file or folder; pictures by their extension.
     pub fn file(path: &Path) -> Attachment {
-        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path = canonical(path).unwrap_or_else(|_| path.to_path_buf());
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let image = IMAGE_EXTS.contains(&ext.as_str());
         let icon = if path.is_dir() {
@@ -372,7 +373,12 @@ pub fn prompt_with_attachments(run: &Run) -> String {
     let mut t = format!("{prompt}\n\n<attached-by-the-user>\nWith this message the user attached:\n");
     for a in &run.attachments {
         let inside = inside(&run.root, &a.path);
-        let shown = if inside { a.path.strip_prefix(&run.root).unwrap_or(&a.path).display().to_string() } else { a.path.display().to_string() };
+        let shown = if inside {
+            let rel = a.path.strip_prefix(&run.root).unwrap_or(&a.path).display().to_string();
+            if cfg!(windows) { rel.replace('\\', "/") } else { rel }
+        } else {
+            a.path.display().to_string()
+        };
         let about = if a.about.is_empty() { String::new() } else { format!(" ({})", a.about) };
         match a.kind {
             AttachKind::Image => t += &format!("- The image `{shown}`{about}. Look at it.\n"),
@@ -1015,7 +1021,7 @@ pub fn prompt_with_context(run: &Run) -> String {
 
 /// Claude permission rules write absolute paths as "//path".
 fn claude_rule_path(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
+    let s = plain_path(p).to_string_lossy().replace('\\', "/");
     let s = match s.as_bytes() {
         [d, b':', ..] => format!("/{}{}", (*d as char).to_ascii_lowercase(), &s[2..]),
         _ => s,
@@ -1025,7 +1031,7 @@ fn claude_rule_path(p: &Path) -> String {
 
 /// Antigravity rules take forward slashes and no drive letter; a directory covers everything inside it.
 fn agy_rule_path(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
+    let s = plain_path(p).to_string_lossy().replace('\\', "/");
     let s = match s.as_bytes() {
         [_, b':', ..] => s[2..].to_string(),
         _ => s,
@@ -1050,13 +1056,19 @@ pub fn one_line(text: &str, max: usize) -> String {
     }
 }
 
-/// `path` relative to the project when inside it.
+/// `path` relative to the project when inside it, with `/` on every system (as the rest of
+/// the editor shows project files).
 pub fn display_path(root: &Path, path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
     let abs = absolute(root, path);
-    abs.strip_prefix(root).unwrap_or(&abs).display().to_string()
+    let shown = abs.strip_prefix(root).unwrap_or(&abs).display().to_string();
+    if cfg!(windows) {
+        shown.replace('\\', "/")
+    } else {
+        shown
+    }
 }
 
 /// `path` made absolute against the project folder and cleaned of `.`/`..`.
@@ -1077,6 +1089,11 @@ pub fn absolute(root: &Path, path: &str) -> PathBuf {
 }
 
 pub fn inside(root: &Path, path: &Path) -> bool {
+    // Windows paths ignore case and take either slash; a CLI may report `e:/x` for `E:\x`.
+    if cfg!(windows) {
+        let norm = |p: &Path| PathBuf::from(plain_path(p).to_string_lossy().replace('/', "\\").to_lowercase());
+        return norm(path).starts_with(norm(root));
+    }
     path.starts_with(root)
 }
 
@@ -1755,7 +1772,7 @@ mod tests {
         std::fs::write(other.join("big.txt"), "é".repeat(INLINE_MAX)).unwrap(); // 2 bytes each
         std::fs::write(other.join("blob.bin"), [1u8, 0, 2]).unwrap();
         std::fs::write(other.join("shot.png"), [0x89u8, b'P', b'N', b'G', 0]).unwrap();
-        (game.canonicalize().unwrap(), other.canonicalize().unwrap())
+        (canonical(&game).unwrap(), canonical(&other).unwrap())
     }
 
     fn run_with(root: &Path, attachments: Vec<Attachment>) -> Run {
@@ -1786,12 +1803,12 @@ mod tests {
         assert!(!p.contains("object Player {}"));
         assert!(p.contains("- The image `sprites/hero.png`. Look at it.\n"));
         // Text from outside the project goes inline, in a fence longer than its own backticks.
-        let o = other.display();
-        assert!(p.contains(&format!("- The file `{o}/notes.md`, from outside the project:\n````md\n# Ideas\nuse ```code```\n````\n")), "{p}");
+        let o = |f: &str| other.join(f).display().to_string();
+        assert!(p.contains(&format!("- The file `{}`, from outside the project:\n````md\n# Ideas\nuse ```code```\n````\n", o("notes.md"))), "{p}");
         // Big text is clipped with a note; binaries and folders are only named.
         assert!(p.contains(&format!("[… truncated by the editor: {} more bytes not shown]", INLINE_MAX)), "{p}");
-        assert!(p.contains(&format!("- The file `{o}/blob.bin`, from outside the project.\n")));
-        assert!(p.contains(&format!("- The folder `{o}`, outside the project.\n")));
+        assert!(p.contains(&format!("- The file `{}`, from outside the project.\n", o("blob.bin"))));
+        assert!(p.contains(&format!("- The folder `{}`, outside the project.\n", other.display())));
         assert!(p.contains("- Salida:\n```\nerror: x\n"));
         assert!(p.len() < 3 * INLINE_MAX + 2000, "{}", p.len());
         // Nothing attached: the message as typed.
@@ -1816,28 +1833,40 @@ mod tests {
             Attachment::text("⬚", "Selección", "x = 1"),
         ];
         let r = run_with(&game, atts);
-        let o = other.display().to_string();
+        let img = |p: PathBuf| format!("--image={}", p.display());
         // Claude: on stdin, and permission to read only those files outside the project.
         let a = Kind::Claude.args(&r);
         let at = a.iter().position(|x| x == "--allowedTools").unwrap();
         assert_eq!(
             a[at + 1..],
-            ["Read(//opt/me/docs/**)".to_string(), format!("Read(/{o}/shot.png)"), format!("Read(/{o}/notes.md)"), format!("Read(/{o}/**)")]
+            [
+                "Read(//opt/me/docs/**)".to_string(),
+                format!("Read({})", claude_rule_path(&other.join("shot.png"))),
+                format!("Read({})", claude_rule_path(&other.join("notes.md"))),
+                format!("Read({}/**)", claude_rule_path(&other)),
+            ]
         );
         let input = Kind::Claude.input(&r);
         assert!(input.contains("<attached-by-the-user>") && input.contains("- Selección:\n```\nx = 1\n```"));
         // Codex: every image with --image=, before the "-" that reads stdin, also when resuming.
         let a = Kind::Codex.args(&r);
-        assert_eq!(a[a.len() - 3..], [format!("--image={}/sprites/hero.png", game.display()), format!("--image={o}/shot.png"), "-".to_string()]);
+        let hero = game.join("sprites").join("hero.png");
+        assert_eq!(a[a.len() - 3..], [img(hero.clone()), img(other.join("shot.png")), "-".to_string()]);
         let a = Kind::Codex.args(&Run { session: "T9".into(), ..run_with(&game, r.attachments.clone()) });
-        assert_eq!(a[a.len() - 5..a.len() - 2], ["resume".to_string(), "T9".into(), format!("--image={}/sprites/hero.png", game.display())]);
+        assert_eq!(a[a.len() - 5..a.len() - 2], ["resume".to_string(), "T9".into(), img(hero)]);
         assert!(Kind::Codex.input(&r).contains("Look at it."));
         // Antigravity: read rules for what is outside the project, the list in --print.
         let a = Kind::Antigravity.args(&r);
         let s: Value = serde_json::from_str(&a[5]).unwrap();
         assert_eq!(
             s["permissions"]["allow"],
-            json!([format!("write_file({})", game.display()), "read_file(/opt/me/docs)", format!("read_file({o}/shot.png)"), format!("read_file({o}/notes.md)"), format!("read_file({o})")])
+            json!([
+                format!("write_file({})", agy_rule_path(&game)),
+                "read_file(/opt/me/docs)",
+                format!("read_file({})", agy_rule_path(&other.join("shot.png"))),
+                format!("read_file({})", agy_rule_path(&other.join("notes.md"))),
+                format!("read_file({})", agy_rule_path(&other))
+            ])
         );
         assert!(a.last().unwrap().contains("<attached-by-the-user>"));
         // Without attachments nothing changes.
@@ -1868,7 +1897,7 @@ mod tests {
             fork_at: "U9".into(),
             ..run_with(&game, vec![Attachment::file(&other), Attachment::url("https://docs.example.org/x/y?z=1")])
         };
-        let other = other.canonicalize().unwrap();
+        let other = canonical(&other).unwrap();
         let rule = claude_rule_path(&other);
         let a = Kind::Claude.args(&r);
         assert!(a.windows(4).any(|w| w == ["--resume", "S1", "--fork-session", "--resume-session-at"]), "{a:?}");
@@ -2122,7 +2151,8 @@ mod tests {
         std::fs::write(other.join("hero.png"), "x").unwrap();
         let r = run_with(&game, vec![Attachment::file(&other)]);
         let t = prompt_with_attachments(&r);
-        assert!(t.contains("licence/credit files") && t.contains("LICENSE.txt") && t.contains("pack/readme.md") && t.contains("--credit"), "{t}");
+        let readme = other.join("pack").join("readme.md").display().to_string();
+        assert!(t.contains("licence/credit files") && t.contains("LICENSE.txt") && t.contains(&readme) && t.contains("--credit"), "{t}");
         assert_eq!(license_files(&other).len(), 2);
         let _ = std::fs::remove_dir_all(game.parent().unwrap());
     }

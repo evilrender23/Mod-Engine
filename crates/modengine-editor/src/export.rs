@@ -218,11 +218,6 @@ pub fn dialog_frame(ctx: &egui::Context, project: Option<&mut Project>, log: &mu
 
 fn spawn_lines(mut cmd: Command) -> Result<(Child, Receiver<String>), String> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
     let mut child = cmd.spawn().map_err(|e| format!("no se pudo lanzar {}: {e}", cmd.get_program().to_string_lossy()))?;
     let (tx, rx) = mpsc::channel();
     if let Some(o) = child.stdout.take() {
@@ -271,13 +266,8 @@ impl ExportDialog {
         };
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let mut c = Command::new(tool);
+            let mut c = crate::proc::command(tool);
             c.args(["export", "--doctor", "--json"]);
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                c.creation_flags(0x0800_0000);
-            }
             let r = c.output().map_err(|e| e.to_string()).and_then(|o| parse_doctor(&String::from_utf8_lossy(&o.stdout)));
             let _ = tx.send(r);
         });
@@ -297,7 +287,7 @@ impl ExportDialog {
             self.result = Some(Err("no encuentro `modengine` junto al editor".into()));
             return;
         };
-        let mut c = Command::new(tool);
+        let mut c = crate::proc::command(tool);
         c.args(&args);
         self.lines.clear();
         self.step = None;

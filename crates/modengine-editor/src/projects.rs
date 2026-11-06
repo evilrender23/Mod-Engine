@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// `~/.config/modengine` (where the editor keeps its settings).
 pub fn config_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join(".config/modengine"))
+    modengine::home_dir().map(|h| h.join(".config/modengine"))
 }
 
 pub fn now_secs() -> u64 {
@@ -73,7 +73,8 @@ impl Recents {
         let mut list: Vec<Recent> = vec![];
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
             let mut parts = line.split('\t');
-            let path = PathBuf::from(parts.next().unwrap_or_default());
+            // plain_path: older editors saved Windows' `\\?\C:\…` form
+            let path = modengine::plain_path(Path::new(parts.next().unwrap_or_default()));
             let pinned = parts.next() == Some("1");
             let opened = parts.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
             if !list.iter().any(|r| r.path == path) {
@@ -93,7 +94,7 @@ impl Recents {
     }
 
     fn key(path: &Path) -> PathBuf {
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+        modengine::canonical(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
     /// A project was opened now: first in the list (keeping its pin).
@@ -142,11 +143,13 @@ impl Recents {
 
     /// Pinned first, then most recently opened; filtered by `query` (name or path).
     pub fn sorted(&self, query: &str, name_of: impl Fn(&Path) -> String) -> Vec<Recent> {
-        let q = query.trim().to_lowercase();
+        // on Windows `/` and `\` both find a folder in the path
+        let slashes = |s: String| if cfg!(windows) { s.replace('\\', "/") } else { s };
+        let q = slashes(query.trim().to_lowercase());
         let mut v: Vec<Recent> = self
             .list
             .iter()
-            .filter(|r| q.is_empty() || r.path.to_string_lossy().to_lowercase().contains(&q) || name_of(&r.path).to_lowercase().contains(&q))
+            .filter(|r| q.is_empty() || slashes(r.path.to_string_lossy().to_lowercase()).contains(&q) || name_of(&r.path).to_lowercase().contains(&q))
             .cloned()
             .collect();
         // stable: entries without a time keep their file order
@@ -252,7 +255,7 @@ pub fn new_project_target(location: &str, name: &str) -> Result<PathBuf, String>
 
 /// The Documents folder (XDG `user-dirs.dirs` on Linux, then the usual names).
 pub fn documents_dir() -> Option<PathBuf> {
-    let home = PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?);
+    let home = modengine::home_dir()?;
     let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
     if let Ok(text) = std::fs::read_to_string(xdg.join("user-dirs.dirs")) {
         for l in text.lines() {
@@ -328,7 +331,7 @@ pub fn examples_in(roots: &[PathBuf]) -> Vec<(String, PathBuf)> {
         let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
         dirs.sort();
         for d in dirs {
-            let d = d.canonicalize().unwrap_or(d);
+            let d = modengine::canonical(&d).unwrap_or(d);
             if out.iter().any(|(_, p)| *p == d) {
                 continue;
             }
@@ -451,9 +454,9 @@ mod tests {
         assert!(!r.list[1].path.exists(), "missing projects stay listed");
         r.touch_at(&b, 100);
         r.touch_at(&a, 50);
-        assert_eq!(r.paths()[0], b.canonicalize().unwrap(), "most recent first");
-        r.set_pinned(&a.canonicalize().unwrap(), true);
-        assert_eq!(r.paths()[0], a.canonicalize().unwrap(), "pinned first");
+        assert_eq!(r.paths()[0], modengine::canonical(&b).unwrap(), "most recent first");
+        r.set_pinned(&modengine::canonical(&a).unwrap(), true);
+        assert_eq!(r.paths()[0], modengine::canonical(&a).unwrap(), "pinned first");
         // persisted with pins and times
         let r2 = Recents::load(Some(file.clone()));
         assert!(r2.list.iter().any(|x| x.pinned && x.opened == 50));
@@ -474,7 +477,7 @@ mod tests {
         let moved = d.join("moved");
         std::fs::create_dir_all(&moved).unwrap();
         r.relocate(&r.list[0].path.clone(), &moved);
-        assert_eq!(r.list[0].path, moved.canonicalize().unwrap());
+        assert_eq!(r.list[0].path, modengine::canonical(&moved).unwrap());
         let _ = std::fs::remove_dir_all(&d);
     }
 

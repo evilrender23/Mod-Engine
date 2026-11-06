@@ -890,7 +890,7 @@ pub fn layout_path(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         h = h.wrapping_mul(0x100000001b3);
     }
     let name = canon.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(format!(".config/modengine/layouts/{name}-{h:016x}.toml")))
+    modengine::home_dir().map(|home| home.join(format!(".config/modengine/layouts/{name}-{h:016x}.toml")))
 }
 
 #[cfg(test)]

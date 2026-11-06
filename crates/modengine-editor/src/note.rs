@@ -303,10 +303,12 @@ mod tests {
             let mut tex = crate::tex::TexCache::default();
             let mut log = vec![];
             let mut open = vec![];
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            ctx.run_ui(Default::default(), |ui| {
                 let mut cx = Cx { project: &mut p, tex: &mut tex, log: &mut log, open: &mut open, active: true };
                 ed.ui(ui, &mut cx);
-            });
+            })
+            .textures_delta
+            .clear();
         }
         assert!(ed.dirty);
         let mut tex = crate::tex::TexCache::default();

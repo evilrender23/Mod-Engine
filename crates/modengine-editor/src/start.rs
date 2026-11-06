@@ -782,7 +782,7 @@ mod tests {
         // clicking a card opens the project
         h.get_by_label("Juego de prueba").click();
         h.run_steps(2);
-        assert_eq!(h.state().actions, vec![Action::Open(game.canonicalize().unwrap())]);
+        assert_eq!(h.state().actions, vec![Action::Open(modengine::canonical(&game).unwrap())]);
         // the missing one is removed with ×
         h.state_mut().page.recents.list.retain(|r| r.path.exists());
         h.run_steps(2);

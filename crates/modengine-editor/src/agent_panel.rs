@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -59,7 +59,7 @@ pub struct Config {
 }
 
 pub fn config_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/modengine/agent.toml"))
+    modengine::home_dir().map(|h| h.join(".config/modengine/agent.toml"))
 }
 
 impl Config {
@@ -81,14 +81,25 @@ impl Config {
 /// where the agent installers put their executables.
 pub fn find_program(name: &str) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = modengine::home_dir() {
         dirs.extend([home.join(".local/bin"), home.join(".claude/local"), home.join(".npm-global/bin")]);
     }
     dirs.extend(["/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from));
     if let Some(appdata) = std::env::var_os("APPDATA") {
         dirs.push(PathBuf::from(appdata).join("npm"));
     }
-    let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat"] } else { &[""] };
+    // Windows: the spawnable extensions of PATHEXT, in its order.
+    let exts: Vec<String> = if cfg!(windows) {
+        let pathext = std::env::var("PATHEXT").unwrap_or_default().to_lowercase();
+        let exts: Vec<String> = pathext.split(';').filter(|e| matches!(*e, ".exe" | ".com" | ".cmd" | ".bat")).map(String::from).collect();
+        if exts.is_empty() {
+            [".exe", ".cmd", ".bat"].map(String::from).to_vec()
+        } else {
+            exts
+        }
+    } else {
+        vec![String::new()]
+    };
     dirs.iter().flat_map(|d| exts.iter().map(move |e| d.join(format!("{name}{e}")))).find(|p| is_executable(p))
 }
 
@@ -114,11 +125,11 @@ pub fn docs_dir() -> Option<PathBuf> {
     if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
         c.extend([exe.join("docs"), exe.join("../docs"), exe.join("../share/modengine/docs"), exe.join("../../docs")]);
     }
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = modengine::home_dir() {
         c.extend([home.join(".local/share/ModEngine/codigo/docs"), home.join(".local/share/ModEngine/docs")]);
     }
     c.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs"));
-    c.into_iter().find(|d| d.join("funciones.md").is_file()).map(|d| d.canonicalize().unwrap_or(d))
+    c.into_iter().find(|d| d.join("funciones.md").is_file()).map(|d| modengine::canonical(&d).unwrap_or(d))
 }
 
 /// The `modengine` command line the agent imports art with: `$MODENGINE_BIN`, next to the
@@ -135,7 +146,7 @@ pub fn modengine_tool() -> Option<PathBuf> {
             c.extend(dir.parent().map(|d| d.join(&name)));
         }
     }
-    c.into_iter().find(|p| is_executable(p)).map(|p| p.canonicalize().unwrap_or(p)).or_else(|| find_program("modengine"))
+    c.into_iter().find(|p| is_executable(p)).map(|p| modengine::canonical(&p).unwrap_or(p)).or_else(|| find_program("modengine"))
 }
 
 const INTERNET_TIP: &str = "El agente puede buscar en la web y leer páginas (también en Solo planificar: es de solo lectura). Se guarda por proyecto; también /internet on|off";
@@ -248,14 +259,15 @@ fn signal_group(child: &Child, sig: i32) {
     }
 }
 
+#[cfg(unix)]
 const SIGTERM: i32 = 15;
+#[cfg(unix)]
 const SIGKILL: i32 = 9;
 
 /// Windows has no process groups: `taskkill /T` ends the CLI and every command it started.
 #[cfg(windows)]
 fn kill_tree(child: &mut Child) {
-    use std::os::windows::process::CommandExt;
-    let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = crate::proc::command("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     let _ = child.kill();
 }
 
@@ -703,7 +715,7 @@ impl AgentPanel {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         std::thread::spawn(move || {
             let out = (|| {
-                let mut child = Command::new(program).args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+                let mut child = crate::proc::command(program).args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
                 let mut stdout = child.stdout.take()?;
                 let reader = std::thread::spawn(move || {
                     let mut s = String::new();
@@ -793,7 +805,7 @@ impl AgentPanel {
     /// The panel is now about `root`: loads that project's settings and reopens the
     /// conversation that was open in it.
     pub fn enter_project(&mut self, root: &Path, name: &str) {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let root = modengine::canonical(root).unwrap_or_else(|_| root.to_path_buf());
         if self.project.as_ref().is_some_and(|(r, _)| *r == root) {
             if let Some((_, n)) = &mut self.project {
                 *n = name.to_string();
@@ -979,7 +991,7 @@ impl AgentPanel {
     pub fn export(&mut self, id: &str, dir: Option<&Path>) -> Option<PathBuf> {
         let md = self.markdown(id)?;
         let title = md.lines().next().unwrap_or("").trim_start_matches("# ").to_string();
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let home = modengine::home_dir().unwrap_or_else(std::env::temp_dir);
         let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ["Descargas", "Downloads"].iter().map(|d| home.join(d)).find(|d| d.is_dir()).unwrap_or(home));
         let stem: String = title.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).take(50).collect();
         let mut path = dir.join(format!("agente-{stem}.md"));
@@ -1438,8 +1450,26 @@ impl AgentPanel {
     }
 
     fn spawn(&self, program: &Path, run: &Run) -> std::io::Result<(Child, Receiver<Msg>)> {
-        let mut cmd = Command::new(program);
-        cmd.args(self.kind.args(run)).current_dir(&run.root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut args = self.kind.args(run);
+        // A .cmd/.bat shim (npm installs) runs through cmd.exe: no line breaks in an argument
+        // (Rust refuses them) and at most 8191 characters on the whole command line.
+        if cfg!(windows) && program.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")) {
+            for a in &mut args {
+                if a.contains(['\r', '\n']) {
+                    *a = a.replace("\r\n", " ").replace(['\r', '\n'], " ");
+                }
+            }
+            // As Rust escapes it for cmd.exe: quotes doubled, each % made 8 characters longer.
+            let len = 40 + program.as_os_str().len() + args.iter().map(|a| a.chars().count() + 3 + a.matches('"').count() + 8 * a.matches('%').count()).sum::<usize>();
+            if len > 8000 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("el mensaje es demasiado largo para un programa .cmd/.bat en Windows (unos {len} caracteres; el máximo es 8191). Acórtalo o quita adjuntos"),
+                ));
+            }
+        }
+        let mut cmd = crate::proc::command(program);
+        cmd.args(args).current_dir(&run.root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         // Its own process group, so Detener also stops the commands it started.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
@@ -3155,9 +3185,15 @@ impl AgentPanel {
             }
             "queue" => {
                 self.entries.push(Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/enemy.ms".into() }));
-                #[cfg(unix)]
                 {
-                    let child = Command::new("sleep").arg("120").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+                    // A harmless long-lived child stands in for the agent.
+                    let mut cmd = if cfg!(windows) { crate::proc::command("ping") } else { crate::proc::command("sleep") };
+                    if cfg!(windows) {
+                        cmd.args(["-n", "120", "127.0.0.1"]);
+                    } else {
+                        cmd.arg("120");
+                    }
+                    let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
                     if let Ok(child) = child {
                         let (_tx, rx) = mpsc::channel();
                         std::mem::forget(_tx);
@@ -3197,7 +3233,7 @@ impl AgentPanel {
                 self.diff = Some(DiffView { turn: 1, rel: "objects/player.ms".into(), lines: snapshot::unified(before, after, 3), note: None });
             }
             "browser" => {
-                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let home = modengine::home_dir();
                 self.browser.open_at(home.as_deref());
                 let first: Vec<PathBuf> = self.browser.rows().iter().filter(|r| r.is_dir).take(2).map(|r| r.path.clone()).collect();
                 self.browser.selected = first.into_iter().collect();
@@ -3425,6 +3461,7 @@ impl Drop for AgentPanel {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
 
     /// A folder with a fake agent CLI: it records its arguments and stdin, then prints `script`.
     fn fake_cli(tag: &str, body: &str) -> (PathBuf, PathBuf) {
@@ -3720,7 +3757,7 @@ echo '{"type":"turn.completed"}'"#,
         let art = base.join("arte descargado");
         std::fs::create_dir_all(&art).unwrap();
         // real downloads from the store cache when present
-        let cache = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join(".cache/modengine/store/files");
+        let cache = modengine::home_dir().unwrap_or_default().join(".cache/modengine/store/files");
         let mut credits = String::new();
         for (dir, file, credit) in [
             ("92779efe4ffdf578", "slime spritesheet calciumtrice.png", "slime spritesheet calciumtrice.png: «Animated Slime» by Calciumtrice, CC-BY 3.0, https://opengameart.org/content/animated-slime"),

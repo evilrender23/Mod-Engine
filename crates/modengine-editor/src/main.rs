@@ -1,5 +1,8 @@
 //! Mod Engine visual editor (`modeditor [project]`).
 
+// a window-only program on Windows: no console window behind the editor
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod agent;
 mod agent_attach;
 mod agent_browser;
@@ -31,6 +34,7 @@ mod motion;
 mod path;
 mod palette;
 mod project;
+mod proc;
 mod projects;
 mod room;
 mod script;
@@ -53,6 +57,7 @@ mod tomlw;
 mod zoom;
 
 fn main() -> eframe::Result {
+    attach_parent_console();
     // `modeditor --actualizar`: update an installed copy from the terminal, without a window.
     // `modeditor --version`: which commit this is.
     match std::env::args().nth(1).as_deref() {
@@ -135,3 +140,19 @@ fn main() -> eframe::Result {
     };
     eframe::run_native("Mod Engine Editor", options, Box::new(move |cc| Ok(Box::new(app::EditorApp::new(cc, path, auto)))))
 }
+
+/// Started from a terminal (cmd, PowerShell): print `--version`, `--actualizar` and logs
+/// there. Started from Explorer there is no parent console and nothing is shown.
+#[cfg(windows)]
+fn attach_parent_console() {
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(pid: u32) -> i32;
+    }
+    // SAFETY: plain Win32 call; failing (no parent console) leaves stdout/stderr unset
+    unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}

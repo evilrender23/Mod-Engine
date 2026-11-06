@@ -153,8 +153,9 @@ mod tests {
 
         let dir = crate::testing::tmp("zip");
         let out = extract_to(&z, &[&items[0], &items[2], &items[3]], &dir.join("x")).unwrap();
-        let names: Vec<String> = out.iter().map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().to_string()).collect();
-        assert_eq!(names, vec!["x/slime_idle.png", "x/slime_idle_2.png", "x/evil.wav"], "flat and inside the folder");
+        let names: Vec<&std::path::Path> = out.iter().map(|p| p.strip_prefix(&dir).unwrap()).collect();
+        let want = ["x/slime_idle.png", "x/slime_idle_2.png", "x/evil.wav"].map(std::path::Path::new);
+        assert_eq!(names, want, "flat and inside the folder");
         assert_eq!(std::fs::read(&out[1]).unwrap(), b"second");
         let _ = std::fs::remove_dir_all(&dir);
     }

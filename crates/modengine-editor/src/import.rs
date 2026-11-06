@@ -302,7 +302,7 @@ pub fn list_folder(dir: &Path, filter: Option<Kind>) -> Result<Vec<Entry>, Strin
 
 /// `~/.config/modengine/import.txt`: the folder the browser opens in.
 pub fn last_dir_file() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/modengine/import.txt"))
+    modengine::home_dir().map(|h| h.join(".config/modengine/import.txt"))
 }
 
 /// What the user did with the dialog this frame.
@@ -332,7 +332,7 @@ pub struct ImportDialog {
 
 impl ImportDialog {
     pub fn new(config: Option<PathBuf>) -> ImportDialog {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
+        let home = modengine::home_dir().unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }));
         let dir = config.as_ref().and_then(|f| fs::read_to_string(f).ok()).map(|s| PathBuf::from(s.trim())).filter(|d| d.is_dir()).unwrap_or(home);
         ImportDialog {
             items: vec![],
@@ -807,12 +807,17 @@ mod tests {
 
     #[test]
     fn paths_expand() {
-        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let home = modengine::home_dir().unwrap();
         assert_eq!(expand("~/x/a.png"), home.join("x/a.png"));
         assert_eq!(expand("~"), home);
         assert_eq!(expand(" '/tmp/a b.png' "), PathBuf::from("/tmp/a b.png"));
         assert_eq!(expand("file:///tmp/a%20b%C3%B1.png"), PathBuf::from("/tmp/a bñ.png"));
         assert_eq!(expand("file:///tmp/100%"), PathBuf::from("/tmp/100%"));
+        #[cfg(windows)]
+        {
+            assert_eq!(expand("file:///C:/Users/a%20b.png"), PathBuf::from("C:/Users/a b.png"));
+            assert_eq!(expand("~\\x\\a.png"), home.join("x\\a.png"));
+        }
     }
 
     #[test]

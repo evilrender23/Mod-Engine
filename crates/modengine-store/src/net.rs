@@ -677,11 +677,9 @@ pub fn open_in_browser(url: &str) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("solo se abren direcciones https://".into());
     }
+    // not `cmd /C start`: cmd would treat `&` or `^` in the URL as its own syntax
     #[cfg(target_os = "windows")]
-    let r = {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("cmd").args(["/C", "start", "", url]).creation_flags(0x0800_0000).spawn()
-    };
+    let r = std::process::Command::new("rundll32").arg("url.dll,FileProtocolHandler").arg(url).spawn();
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg(url).spawn();
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

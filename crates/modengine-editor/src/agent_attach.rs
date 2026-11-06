@@ -184,9 +184,9 @@ pub fn mention_at_end(text: &str) -> Option<(usize, &str)> {
 /// A path typed by the user: `~/x`, absolute, or relative to the project.
 pub fn resolve_path(root: Option<&Path>, typed: &str) -> PathBuf {
     let t = typed.trim().trim_matches(|c| c == '"' || c == '\'');
-    if let Some(rest) = t.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
+    if let Some(rest) = t.strip_prefix("~/").or_else(|| t.strip_prefix("~\\").filter(|_| cfg!(windows))) {
+        if let Some(home) = modengine::home_dir() {
+            return home.join(rest);
         }
     }
     let p = PathBuf::from(t);
@@ -202,12 +202,12 @@ mod tests {
 
     #[test]
     fn assets_become_their_files() {
-        let dir = crate::room::tests::temp_project("attach").canonicalize().unwrap();
+        let dir = modengine::canonical(&crate::room::tests::temp_project("attach")).unwrap();
         let p = Project::open(&dir).unwrap();
         let obj = p.objects[0].name.clone();
         let a = asset(&p, &Open::Object(obj.clone())).unwrap();
         assert_eq!((a.kind, a.icon, a.label.as_str()), (AttachKind::File, "◆", obj.as_str()));
-        assert_eq!(a.path, p.scripts[p.objects[0].script].path.canonicalize().unwrap());
+        assert_eq!(a.path, modengine::canonical(&p.scripts[p.objects[0].script].path).unwrap());
         assert!(a.about.contains(&obj));
         let room = p.rooms[0].name.clone();
         assert_eq!(asset(&p, &Open::Room(room.clone())).unwrap().path, dir.join(format!("rooms/{room}.toml")));

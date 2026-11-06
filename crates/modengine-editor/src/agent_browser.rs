@@ -48,7 +48,7 @@ pub fn list(dir: &Path, hidden: bool) -> Result<Vec<Row>, String> {
 /// The usual places: home and its well-known folders, the root, and mounted drives.
 pub fn places() -> Vec<(String, PathBuf)> {
     let mut out = vec![];
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from) {
+    if let Some(home) = modengine::home_dir() {
         out.push(("🏠 Inicio".to_string(), home.clone()));
         for (label, names) in [
             ("🖥 Escritorio", ["Escritorio", "Desktop"]),
@@ -164,7 +164,7 @@ pub struct Browser {
 
 impl Default for Browser {
     fn default() -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"));
+        let home = modengine::home_dir().unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }));
         Browser {
             open: false,
             path_text: home.display().to_string(),

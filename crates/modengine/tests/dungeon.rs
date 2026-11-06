@@ -454,7 +454,7 @@ fn graph_is_mst_plus_the_asked_share_of_loops() {
             let mut uniq = edges.clone();
             uniq.sort_unstable();
             uniq.dedup();
-            assert_eq!(uniq.len() - n + 1, d.loops());
+            assert_eq!(uniq.len() + 1 - n, d.loops());
             // the MST is minimal over the Delaunay graph (same weight as over all pairs)
             let pts: Vec<(f64, f64)> = d.rooms.iter().map(|r| (r.center.0 as f64, r.center.1 as f64)).collect();
             let all: Vec<(usize, usize)> = (0..n).flat_map(|a| (a + 1..n).map(move |b| (a, b))).collect();

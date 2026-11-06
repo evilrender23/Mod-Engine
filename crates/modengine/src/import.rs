@@ -172,13 +172,22 @@ pub fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
 pub fn expand(s: &str) -> PathBuf {
     let s = s.trim().trim_matches(|c| c == '"' || c == '\'');
     let s = match s.strip_prefix("file://") {
-        Some(rest) => percent_decode(rest),
+        // file:///C:/x on Windows: the path is C:/x, not /C:/x
+        Some(rest) => {
+            let p = percent_decode(rest);
+            let b = p.as_bytes();
+            if cfg!(windows) && b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+                p[1..].to_string()
+            } else {
+                p
+            }
+        }
         None => s.to_string(),
     };
-    let home = || std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = || crate::home_dir().unwrap_or_default();
     if s == "~" {
         home()
-    } else if let Some(rest) = s.strip_prefix("~/") {
+    } else if let Some(rest) = s.strip_prefix("~/").or_else(|| if cfg!(windows) { s.strip_prefix("~\\") } else { None }) {
         home().join(rest)
     } else {
         PathBuf::from(s)

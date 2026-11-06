@@ -14,7 +14,7 @@ use eframe::egui::{self, Key, Modifiers, RichText, Sense, Vec2};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver};
 
 // ------------------------------------------------------------------ shared context
@@ -678,7 +678,7 @@ impl EditorApp {
                 // the second one (NVIDIA): give the first a head start
                 std::thread::sleep(std::time::Duration::from_millis(600));
             }
-            let mut cmd = Command::new(&exe);
+            let mut cmd = crate::proc::command(&exe);
             cmd.arg("run").arg(&dir);
             if count > 1 {
                 cmd.arg("--instance").arg(n.to_string());

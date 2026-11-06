@@ -269,7 +269,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 }
 
 fn theme_file() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config/modengine/theme.txt"))
+    modengine::home_dir().map(|h| h.join(".config/modengine/theme.txt"))
 }
 
 pub fn load() -> Theme {

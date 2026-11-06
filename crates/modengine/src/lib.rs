@@ -57,3 +57,31 @@ pub mod vfs;
 
 pub use engine::{AudioCmd, Engine};
 pub use modscript;
+
+/// The user's home folder: `HOME`, or `USERPROFILE` on Windows (where `HOME` is usually
+/// unset). Settings live under `home_dir()/.config/modengine` on every desktop.
+pub fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(std::path::PathBuf::from)
+}
+
+/// `p.canonicalize()` without Windows' `\\?\` verbatim prefix, which other programs never
+/// report, users should not see and batch files can't take as their folder.
+pub fn canonical(p: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    p.canonicalize().map(|c| plain_path(&c))
+}
+
+/// `p` without a Windows `\\?\` verbatim prefix: `\\?\C:\x` → `C:\x`, `\\?\UNC\srv\share` →
+/// `\\srv\share`. Anything else (and every path elsewhere) is returned as is.
+pub fn plain_path(p: &std::path::Path) -> std::path::PathBuf {
+    if let Some(rest) = p.to_str().and_then(|s| s.strip_prefix(r"\\?\")).filter(|_| cfg!(windows)) {
+        if let [d, b':', ..] = rest.as_bytes() {
+            if d.is_ascii_alphabetic() {
+                return std::path::PathBuf::from(rest);
+            }
+        }
+        if let Some(unc) = rest.strip_prefix(r"UNC\") {
+            return std::path::PathBuf::from(format!(r"\\{unc}"));
+        }
+    }
+    p.to_path_buf()
+}

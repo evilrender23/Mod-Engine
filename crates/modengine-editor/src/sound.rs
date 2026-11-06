@@ -26,22 +26,32 @@ pub struct SoundEditor {
 }
 
 /// The preview that is playing (one at a time: a new one stops the old one).
+#[cfg(not(windows))]
 static PLAYING: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
 
-/// Plays a file with whatever command-line player the system has, stopping the previous one.
+/// Plays a file with whatever command-line player the system has (on Windows, the system's
+/// own sound API), stopping the previous one.
 pub fn play_file(path: &Path) -> Result<(), String> {
     stop();
-    for player in ["pw-play", "paplay", "aplay", "afplay"] {
-        if let Ok(child) = std::process::Command::new(player).arg(path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
-            *PLAYING.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-            return Ok(());
+    #[cfg(windows)]
+    return winmm::play(path);
+    #[cfg(not(windows))]
+    {
+        for player in ["pw-play", "paplay", "aplay", "afplay"] {
+            if let Ok(child) = std::process::Command::new(player).arg(path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+                *PLAYING.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+                return Ok(());
+            }
         }
+        Err("no se encontró ningún reproductor (pw-play, paplay, aplay)".into())
     }
-    Err("no se encontró ningún reproductor (pw-play, paplay, aplay)".into())
 }
 
 /// Stops the preview that is playing, if any.
 pub fn stop() {
+    #[cfg(windows)]
+    winmm::stop();
+    #[cfg(not(windows))]
     if let Some(mut c) = PLAYING.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = c.kill();
         let _ = c.wait();
@@ -50,14 +60,103 @@ pub fn stop() {
 
 /// Whether a preview is still playing.
 pub fn playing() -> bool {
-    let mut g = PLAYING.lock().unwrap_or_else(|e| e.into_inner());
-    match g.as_mut().map(|c| c.try_wait()) {
-        Some(Ok(None)) => true,
-        Some(_) => {
-            *g = None;
-            false
+    #[cfg(windows)]
+    return winmm::playing();
+    #[cfg(not(windows))]
+    {
+        let mut g = PLAYING.lock().unwrap_or_else(|e| e.into_inner());
+        match g.as_mut().map(|c| c.try_wait()) {
+            Some(Ok(None)) => true,
+            Some(_) => {
+                *g = None;
+                false
+            }
+            None => false,
         }
-        None => false,
+    }
+}
+
+/// Windows: `PlaySoundW` from winmm (always present), no player process and so no console
+/// window. The file goes through the engine's decoder, so OGG plays as well as WAV.
+#[cfg(windows)]
+mod winmm {
+    use std::path::Path;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    const SND_ASYNC: u32 = 0x0001;
+    const SND_NODEFAULT: u32 = 0x0002;
+    const SND_MEMORY: u32 = 0x0004;
+    const RATE: u32 = 44_100;
+
+    #[link(name = "winmm")]
+    extern "system" {
+        fn PlaySoundW(sound: *const u16, module: *mut std::ffi::c_void, flags: u32) -> i32;
+    }
+
+    /// The WAV being played (winmm reads it from memory until it ends or is stopped).
+    struct Clip {
+        _wav: Vec<u8>,
+        ends: Instant,
+    }
+    static CLIP: Mutex<Option<Clip>> = Mutex::new(None);
+
+    pub fn play(path: &Path) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let pcm = modengine::audio::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        let wav = wav16(&pcm);
+        let ends = Instant::now() + Duration::from_secs_f64(pcm.len() as f64 / 2.0 / RATE as f64);
+        let mut g = CLIP.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: the buffer stays in CLIP until stop() has told winmm to let go of it
+        let ok = unsafe { PlaySoundW(wav.as_ptr().cast(), std::ptr::null_mut(), SND_ASYNC | SND_MEMORY | SND_NODEFAULT) };
+        if ok == 0 {
+            return Err("Windows no pudo reproducir el sonido (¿hay salida de audio?)".into());
+        }
+        *g = Some(Clip { _wav: wav, ends });
+        Ok(())
+    }
+
+    pub fn stop() {
+        let mut g = CLIP.lock().unwrap_or_else(|e| e.into_inner());
+        if g.is_some() {
+            // SAFETY: a null sound stops the current one; only then is the buffer freed
+            unsafe { PlaySoundW(std::ptr::null(), std::ptr::null_mut(), 0) };
+            *g = None;
+        }
+    }
+
+    pub fn playing() -> bool {
+        let mut g = CLIP.lock().unwrap_or_else(|e| e.into_inner());
+        match g.as_ref() {
+            Some(c) if Instant::now() < c.ends => true,
+            Some(_) => {
+                *g = None;
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Interleaved stereo f32 at 44100 Hz → 16-bit PCM WAV.
+    fn wav16(pcm: &[f32]) -> Vec<u8> {
+        let data = (pcm.len() * 2) as u32;
+        let mut w = Vec::with_capacity(44 + data as usize);
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + data).to_le_bytes());
+        w.extend_from_slice(b"WAVEfmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        w.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        w.extend_from_slice(&RATE.to_le_bytes());
+        w.extend_from_slice(&(RATE * 4).to_le_bytes());
+        w.extend_from_slice(&4u16.to_le_bytes());
+        w.extend_from_slice(&16u16.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&data.to_le_bytes());
+        for s in pcm {
+            w.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        }
+        w
     }
 }
 
@@ -242,6 +341,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(windows))]
     fn stop_ends_the_preview() {
         let Ok(child) = std::process::Command::new("sleep").arg("30").spawn() else { return };
         *PLAYING.lock().unwrap() = Some(child);
@@ -249,5 +349,21 @@ mod tests {
         stop();
         assert!(!playing());
         stop(); // nothing playing: no-op
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn stop_ends_the_preview() {
+        let def = SynthDef { duration: 2.0, volume: 0.0, ..Default::default() };
+        let f = std::env::temp_dir().join(format!("modeditor_test_{}.wav", std::process::id()));
+        std::fs::write(&f, render_wav(&def)).unwrap();
+        // no audio device (CI): winmm refuses, which is reported, not a panic
+        if play_file(&f).is_ok() {
+            assert!(playing());
+            stop();
+            assert!(!playing());
+        }
+        stop(); // nothing playing: no-op
+        let _ = std::fs::remove_file(f);
     }
 }
