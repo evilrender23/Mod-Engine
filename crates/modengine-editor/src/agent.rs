@@ -848,7 +848,12 @@ pub fn engine_context_for(name: &str, docs: Option<&Path>, tool: Option<&Path>, 
              The engine documentation is in {dir} (Spanish): lenguaje.md (the ModScript language), \
              funciones.md (every built-in function and instance variable) and proyecto.md (every file format). \
              Read the relevant one before using a function, event or setting you have not seen in this \
-             project's files.\n",
+             project's files. Guides for specific kinds of game: primera-persona.md (first-person grid views \
+             with fpview_*, step/turn movement, billboards, minimap, pixelate post-process), datos-y-cartas.md \
+             (data tables, decks, effects, enemy intents and the action queue of turn-based games), mazmorras.md \
+             (procedural dungeons with dungeon_* and ds_grid) and juice-e-idiomas.md (tweens, hit feedback, \
+             keyboard focus in menus, layered music, loc() and lang/); read the matching one before building \
+             such a feature. The `crawler` template (plantilla-crawler.md) is a complete game using all of them.\n",
             dir = d.display()
         ),
         None => c += "There is no reference documentation at hand; learn the language and file formats from the project's existing files.\n",
@@ -1844,6 +1849,10 @@ mod tests {
     fn context_points_at_docs() {
         let c = engine_context("Coin Climber", Some(Path::new("/opt/me/docs")), None);
         assert!(c.contains("\"Coin Climber\"") && c.contains("/opt/me/docs") && c.contains("funciones.md"));
+        // the feature guides, each with when to read it
+        for g in ["primera-persona.md (first-person", "datos-y-cartas.md", "mazmorras.md (procedural", "juice-e-idiomas.md (tweens", "plantilla-crawler.md"] {
+            assert!(c.contains(g), "{g}");
+        }
         assert!(engine_context("x", None, None).contains("no reference documentation"));
         assert!(!c.contains("# Importing art"));
         let c = engine_context("x", None, Some(Path::new("/opt/me/bin/modengine")));

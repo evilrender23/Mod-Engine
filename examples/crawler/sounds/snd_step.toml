@@ -1,0 +1,7 @@
+[synth]
+wave = "noise"
+freq = 180
+freq_end = 90
+duration = 0.07
+volume = 0.12
+release = 0.04

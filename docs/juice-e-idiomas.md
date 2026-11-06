@@ -202,7 +202,8 @@ lang/en.toml:0: aviso: 2 clave(s) que no aparecen en el código (ni en loc("clav
 ```
 
 Solo se comprueban las llamadas con la clave escrita tal cual (`loc("menu.play")`). Las claves
-que guardas en arrays o structs (`nombres = ["card.fire", ...]`) cuentan como usadas; las que
+que guardas en arrays o structs (`nombres = ["card.fire", ...]`) o como texto en las tablas de
+`data/` (`name = "card.fire"` en un registro) cuentan como usadas; las que
 se construyen sumando textos (`"card." + id`) no se pueden ver, así que pueden aparecer como
 «sin usar».
 

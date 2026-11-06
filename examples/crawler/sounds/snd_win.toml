@@ -1,0 +1,7 @@
+[synth]
+wave = "square"
+freq = 392
+duration = 0.12
+repeat = 4
+repeat_pitch = 1.26
+volume = 0.2

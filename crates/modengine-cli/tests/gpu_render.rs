@@ -172,6 +172,33 @@ object T {
     // draw disabled and nothing in post_draw: black frame
     let (r, _) = render("nodraw", &[], "object T {\n    on create { application_surface_draw_enable(false) }\n    on draw { draw_rect(0, 0, 64, 64) }\n}\n");
     check(near(px(&r.output, 10, 10), [0, 0, 0, 255]), format!("post: draw disabled shows black = {:?}", px(&r.output, 10, 10)));
+    // fonts without `file` use the built-in face at their own size (it used to be [display] font_size)
+    let obj = "object T {\n    on draw {\n        draw_rect(0, 0, 64, 64)\n        set_color(#000000)\n        draw_rect(0, 0, 64, 64)\n        set_color(#ffffff)\n        set_font(fnt_s)\n        draw_rect(0, 0, text_width(\"MMMM\"), 8)\n        set_font(fnt_b)\n        draw_rect(0, 20, text_width(\"MMMM\"), 28)\n    }\n}\n";
+    let dir = project("fontsize", &[], obj);
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::write(dir.join("fonts/fnt_s.toml"), "size = 6\n").unwrap();
+    std::fs::write(dir.join("fonts/fnt_b.toml"), "size = 24\n").unwrap();
+    let mut e = Engine::load(&dir).unwrap();
+    let r = render_readback(&mut e, 2);
+    let width = |y: u32| (0..SIZE).filter(|&x| px(&r.output, x, y)[0] > 128).count();
+    let (ws, wb) = (width(4), width(24));
+    check(ws > 0 && wb >= ws * 3, format!("fonts: built-in face at size 6 ({ws} px) vs 24 ({wb} px) for \"MMMM\""));
+    // pixel-art games draw the built-in face on whole pixels: the same glyph keeps all its
+    // pixels after any number of advances (5.6875 px at size 13: 8 of them land on x.5)
+    let mut obj = String::from("object T {\n    on draw {\n        set_color(#000000)\n        draw_rect(0, 0, 256, 64)\n        set_color(#ffffff)\n        set_font(fnt_s)\n");
+    for (k, n) in [0usize, 8, 24, 40].iter().enumerate() {
+        obj += &format!("        draw_text(0, {}, \"{}o\")\n", k * 16, " ".repeat(*n));
+    }
+    obj += "    }\n}\n";
+    let dir = project("fontpx", &[], &obj);
+    std::fs::write(dir.join("game.toml"), "[game]\nname = \"t\"\n[display]\nwidth = 256\nheight = 64\n").unwrap();
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    std::fs::write(dir.join("fonts/fnt_s.toml"), "size = 13\n").unwrap();
+    let mut e = Engine::load(&dir).unwrap();
+    let r = render_readback(&mut e, 2);
+    let lit = |y0: u32| (y0..y0 + 16).flat_map(|y| (0..256).map(move |x| (x, y))).filter(|&(x, y)| px(&r.output, x, y)[0] > 128).count();
+    let counts: Vec<usize> = (0..4u32).map(|k| lit(k * 16)).collect();
+    check(counts[0] > 0 && counts.iter().all(|&c| c == counts[0]), format!("fonts: the same glyph after 0, 8, 24 and 40 advances has {counts:?} lit pixels"));
 }
 
 #[test]

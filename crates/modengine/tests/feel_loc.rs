@@ -501,3 +501,15 @@ fn check_reports_missing_and_unused_keys_with_lines() {
     let unused_es = found.iter().find(|f| f.file == "lang/es.toml").unwrap_or_else(|| panic!("{text:#?}"));
     assert!(unused_es.msg.contains("title") && unused_es.msg.contains("coins") && !unused_es.msg.contains("menu.play"), "{unused_es}");
 }
+
+#[test]
+fn check_counts_keys_written_in_data_tables_as_used() {
+    // a card record carries its own text key: `name = "title"` (loc(c.name) in the code)
+    let dir = loc_project("checkdata", "    on create { show_debug_message(loc(\"menu.play\")) }");
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data/cards.toml"), "[[card]]\nid = \"a\"\nname = \"title\"\nfx = [{ text = \"coins\" }]\n").unwrap();
+    let e = Engine::load(&dir).unwrap();
+    let found = modengine::lint::check(&e);
+    let unused_es = found.iter().find(|f| f.file == "lang/es.toml").unwrap();
+    assert!(!unused_es.msg.contains("title") && !unused_es.msg.contains("coins") && unused_es.msg.contains("only_es"), "{unused_es}");
+}

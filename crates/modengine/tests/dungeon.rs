@@ -531,6 +531,25 @@ fn config_errors_and_warnings_are_readable() {
 }
 
 #[test]
+fn generator_warnings_are_not_runtime_errors() {
+    // a rule that cannot place all its events and an unknown key: printed once as warnings,
+    // but `modengine check` must not count them as runtime errors (exit code 1)
+    let dir = project(&[]);
+    let mut e = start(&dir);
+    run(
+        &mut e,
+        r#"
+        global.d = dungeon_create({ width: 24, height: 24, rooms: 3, bogus_key: 1, events: [{ type: "chest", count: 40, where: "dead_end_cell" }] })
+        dungeon_generate(global.d, 5)
+        global.w = len(dungeon_info(global.d).warnings)
+        "#,
+    );
+    assert!(num(&e, "w") >= 1.0);
+    assert_eq!(e.error_count(), 0, "{:?}", e.errors);
+    assert!(e.errors.is_empty());
+}
+
+#[test]
 fn corridor_modes_and_single_room() {
     for mode in ["astar", "l", "wiggly"] {
         let c = cfg(json!({ "width": 48, "height": 48, "rooms": [6, 8], "corridor": mode, "doors": false }));

@@ -1,0 +1,8 @@
+[synth]
+wave = "saw"
+freq = 110
+freq_end = 220
+duration = 0.3
+volume = 0.18
+vibrato = 0.05
+vibrato_speed = 14

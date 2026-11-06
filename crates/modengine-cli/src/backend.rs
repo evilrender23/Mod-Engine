@@ -235,6 +235,9 @@ pub(crate) struct Gpu {
     fonts: Vec<Option<Font>>,
     font_sizes: Vec<f32>,
     default_size: f32,
+    /// Pixel-art game (`smooth = false`): text from the built-in face is placed glyph by glyph
+    /// on whole pixels.
+    pixel_text: bool,
     /// Sprite atlases and cached RotSprite images (see sprite_draw.rs).
     sprites: std::cell::RefCell<crate::sprite_draw::SpriteDraw>,
     /// First-person views and the pixelate post-process (see fpview.rs).
@@ -267,6 +270,9 @@ impl Gpu {
                 })
             })
             .collect();
+        // macroquad's built-in face (ProggyClean) has a linear-filtered glyph atlas: in a pixel-art
+        // game glyphs at half-pixel advances come out blurred (an `o` read as `c`). Follow the game.
+        get_default_font().set_filter(filter);
         let mut fonts: Vec<Option<Font>> = Vec::new();
         for f in &e.fonts {
             if let Some(err) = &f.error {
@@ -306,16 +312,15 @@ impl Gpu {
             font_sizes: e.fonts.iter().map(|f| f.size).collect(),
             fonts: fonts.clone(),
             default_size: e.config.display.font_size,
+            pixel_text: !smooth,
         };
         let (sizes, default_size) = (gpu.font_sizes.clone(), gpu.default_size);
         e.measure = Box::new(move |font, text, scale| {
             if let Some(Some(a)) = font.and_then(|i| measure_atlases.get(i as usize)) {
                 return a.measure(text, scale);
             }
-            let (f, size) = match font.and_then(|i| fonts.get(i as usize)).and_then(|f| f.as_ref()) {
-                Some(f) => (Some(f), sizes[font.unwrap() as usize]),
-                None => (None, default_size),
-            };
+            let f = font.and_then(|i| fonts.get(i as usize)).and_then(|f| f.as_ref());
+            let size = font_size(&sizes, default_size, font);
             let lines: Vec<&str> = text.split('\n').collect();
             let w = lines.iter().map(|l| measure_text(l, f, size.round() as u16, scale).width).fold(0.0, f32::max);
             (w, size * scale * lines.len() as f32)
@@ -325,10 +330,15 @@ impl Gpu {
 }
 
 fn text_metrics(gpu: &Gpu, font: Option<u32>) -> (Option<&Font>, f32) {
-    match font.and_then(|f| gpu.fonts.get(f as usize)).and_then(|f| f.as_ref()) {
-        Some(f) => (Some(f), gpu.font_sizes[font.unwrap() as usize]),
-        None => (None, gpu.default_size),
-    }
+    let f = font.and_then(|f| gpu.fonts.get(f as usize)).and_then(|f| f.as_ref());
+    (f, font_size(&gpu.font_sizes, gpu.default_size, font))
+}
+
+/// Pixel size of a font asset (`fonts/<name>.toml` `size`), also for the ones drawn with the
+/// built-in face (no `file`, or a face that failed to load); `[display] font_size` without
+/// a font.
+fn font_size(sizes: &[f32], default_size: f32, font: Option<u32>) -> f32 {
+    font.and_then(|i| sizes.get(i as usize)).copied().unwrap_or(default_size)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -354,7 +364,20 @@ fn draw_text_block(gpu: &Gpu, text: &str, x: f32, y: f32, font: Option<u32>, sca
             2 => w,
             _ => 0.0,
         };
-        draw_text_ex(line, lx.round(), (top + ascent).round(), TextParams { font: f, font_size: size16, font_scale: scale, color, ..Default::default() });
+        let ly = (top + ascent).round();
+        if gpu.pixel_text {
+            // glyph by glyph on whole pixels: the face's advances are fractional, and a glyph
+            // that lands on a half pixel loses or doubles a column (`Diablillo` read `Diablillc`)
+            let mut pen = 0.0f32;
+            let mut buf = [0u8; 4];
+            for ch in line.chars() {
+                let g: &str = ch.encode_utf8(&mut buf);
+                draw_text_ex(g, (lx + pen).round(), ly, TextParams { font: f, font_size: size16, font_scale: scale, color, ..Default::default() });
+                pen += measure_text(g, f, size16, scale).width;
+            }
+        } else {
+            draw_text_ex(line, lx.round(), ly, TextParams { font: f, font_size: size16, font_scale: scale, color, ..Default::default() });
+        }
         top += line_h;
     }
 }
@@ -622,5 +645,20 @@ fn overlay(e: &Engine) {
         for (i, l) in lines.iter().enumerate() {
             draw_text(l, 6.0, y0 + 18.0 + i as f32 * 18.0, 18.0, Color::new(1.0, 0.75, 0.75, 1.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::font_size;
+
+    #[test]
+    fn built_in_face_fonts_keep_their_size() {
+        // a font asset without `file` (built-in face) used to fall back to [display] font_size
+        let sizes = [8.0, 14.0];
+        assert_eq!(font_size(&sizes, 16.0, Some(0)), 8.0);
+        assert_eq!(font_size(&sizes, 16.0, Some(1)), 14.0);
+        assert_eq!(font_size(&sizes, 16.0, None), 16.0);
+        assert_eq!(font_size(&sizes, 16.0, Some(9)), 16.0);
     }
 }

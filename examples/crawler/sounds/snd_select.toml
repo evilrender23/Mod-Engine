@@ -1,0 +1,6 @@
+[synth]
+wave = "square"
+freq = 660
+duration = 0.04
+volume = 0.12
+duty = 0.25

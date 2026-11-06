@@ -1,0 +1,8 @@
+# Floors of a run, in order (f1, f2, f3). The dungeon layout lives in dungeons/*.toml.
+[fields]
+dungeon = { type = "string", required = true, doc = "dungeon_create config file" }
+wall = { type = "sprite", required = true, doc = "Wall texture (frames: plain, torch, niche)" }
+fog = { type = "string", default = "K", doc = "Palette character of the fog" }
+fog_end = { type = "number", default = 6.5 }
+boss = { type = "ref", table = "enemies", doc = "Boss of the exit room (empty = stairs down)" }
+groups = { type = "list", required = true, of = { type = "list", of = { type = "ref", table = "enemies" } }, doc = "Encounters: one group is picked per enemy event" }

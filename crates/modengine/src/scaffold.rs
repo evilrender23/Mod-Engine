@@ -1,7 +1,8 @@
 //! `modengine new [--template <id>] <folder>`: new projects from templates.
 //!
 //! Templates: `basic` (default: a hero you can move), `empty` (one empty room),
-//! `platformer` (a copy of examples/platformer), `topdown` (templates/topdown) and
+//! `platformer` (a copy of examples/platformer), `topdown` (templates/topdown),
+//! `crawler` (examples/crawler: first-person dungeon crawler with card fights) and
 //! `showcase` (examples/showcase_assets_s2). The copied ones are embedded at build time
 //! (build.rs), so any installed binary can create them. [`NewProject`] can also set the
 //! game name, the display size and the palette (sprites are remapped to the nearest
@@ -120,6 +121,12 @@ pub const TEMPLATES: &[Template] = &[
     },
     Template { id: "topdown", aliases: &["top-down", "cenital"], label: "Top-down", description: "Vista cenital: muévete en 8 direcciones entre muros y recoge las gemas." },
     Template {
+        id: "crawler",
+        aliases: &["mazmorra", "cartas", "dungeon", "blobber"],
+        label: "Crawler de cartas",
+        description: "Cripta de Naipes: mazmorra en primera persona por casillas, pisos procedurales y combate de cartas por turnos (copia de examples/crawler).",
+    },
+    Template {
         id: "showcase",
         aliases: &["escaparate"],
         label: "Showcase",
@@ -147,6 +154,7 @@ pub fn template_files(id: &str) -> Option<Vec<(String, Cow<'static, [u8]>)>> {
         ],
         "platformer" => own(embedded::PLATFORMER),
         "topdown" => own(embedded::TOPDOWN),
+        "crawler" => own(embedded::CRAWLER),
         "showcase" => own(embedded::SHOWCASE),
         _ => return None,
     })
@@ -355,6 +363,7 @@ mod tests {
         assert_eq!(package_slug("Mi Juego 2!"), "mijuego2");
         assert_eq!(package_slug("3D"), "game3d");
         assert_eq!(template("Plataformas").unwrap().id, "platformer");
+        assert_eq!(template("mazmorra").unwrap().id, "crawler");
         assert!(template("nope").is_none());
     }
 

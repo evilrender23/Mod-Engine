@@ -519,6 +519,18 @@ fn walk_code(e: &crate::engine::Engine) -> (Vec<KeyUse>, HashSet<String>) {
     (out, w.lits)
 }
 
+/// Every text inside a data record (nested lists and structs too).
+fn data_strings(v: &modscript::Value, out: &mut HashSet<String>) {
+    match v {
+        modscript::Value::Str(s) => {
+            out.insert(s.to_string());
+        }
+        modscript::Value::Array(a) => a.borrow().iter().for_each(|x| data_strings(x, out)),
+        modscript::Value::Struct(st) => st.borrow().fields.iter().for_each(|(_, x)| data_strings(x, out)),
+        _ => {}
+    }
+}
+
 /// `modengine check` findings: keys used in code that a language lacks, keys no code
 /// uses (only literal `loc("key")` calls count), and errors in the tables.
 pub fn check(e: &crate::engine::Engine) -> Vec<crate::lint::Finding> {
@@ -531,7 +543,13 @@ pub fn check(e: &crate::engine::Engine) -> Vec<crate::lint::Finding> {
     if l.tables.is_empty() {
         return out;
     }
-    let (uses, lits) = walk_code(e);
+    let (uses, mut lits) = walk_code(e);
+    // text in the data tables counts too: records usually carry their own key (`name = "card.slash"`)
+    for t in &e.data.tables {
+        for v in &t.values {
+            data_strings(v, &mut lits);
+        }
+    }
     let mut reported: HashSet<(String, String)> = HashSet::new();
     for u in &uses {
         let missing: Vec<&str> = l.tables.iter().filter(|(_, t)| !t.contains_key(&u.key)).map(|(c, _)| c.as_str()).collect();

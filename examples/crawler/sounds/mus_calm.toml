@@ -1,0 +1,12 @@
+group = "musica"
+[synth]
+wave = "triangle"
+freq = 55
+duration = 1.0
+repeat = 4
+repeat_pitch = 1.0
+attack = 0.4
+release = 0.4
+vibrato = 0.02
+vibrato_speed = 3
+volume = 0.16

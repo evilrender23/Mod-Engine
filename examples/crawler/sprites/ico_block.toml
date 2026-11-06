@@ -1,0 +1,16 @@
+# 12x12 UI icon.
+fps = 0
+pixels = ['''
+............
+.KKKKKKKKKK.
+.KDDDDDCCCK.
+.KDFDDDCCCK.
+.KDDDDDCCCK.
+.KDDDDDCCCK.
+.KCDDDDCCBK.
+..KCDDDCBK..
+..KCCDCCBK..
+...KCCCBK...
+....KCBK....
+.....KK.....
+''']

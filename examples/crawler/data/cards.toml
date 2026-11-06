@@ -1,0 +1,115 @@
+# Every card of the game. Add a card: a new [[card]] record + its `name` key in lang/es.toml and lang/en.toml.
+# Effects (see data/cards.schema.toml): damage, block, draw, mana, strength, hurt_self.
+# The combo (cards already played this turn) adds +1 damage to every hit; per_combo adds more.
+
+[[card]]
+id = "tajo"
+name = "card.tajo"
+cost = 1
+kind = "attack"
+art = 0
+rarity = "starter"
+effects = [{ type = "damage", amount = 6, target = "front" }]
+
+[[card]]
+id = "guardia"
+name = "card.guardia"
+cost = 1
+kind = "skill"
+art = 1
+rarity = "starter"
+effects = [{ type = "block", amount = 5 }]
+
+[[card]]
+id = "remate"
+name = "card.remate"
+cost = 1
+kind = "attack"
+art = 6
+rarity = "starter"
+effects = [{ type = "damage", amount = 3, target = "front", per_combo = 3 }]
+
+[[card]]
+id = "barrido"
+name = "card.barrido"
+cost = 2
+kind = "attack"
+art = 4
+effects = [{ type = "damage", amount = 5, target = "all" }]
+
+[[card]]
+id = "dagas"
+name = "card.dagas"
+cost = 1
+kind = "attack"
+art = 5
+effects = [{ type = "damage", amount = 3, target = "random", times = 3 }]
+
+[[card]]
+id = "estocada"
+name = "card.estocada"
+cost = 2
+kind = "attack"
+art = 0
+effects = [{ type = "damage", amount = 13, target = "front" }]
+
+[[card]]
+id = "muro"
+name = "card.muro"
+cost = 2
+kind = "skill"
+art = 1
+effects = [{ type = "block", amount = 12 }]
+
+[[card]]
+id = "barajar"
+name = "card.barajar"
+cost = 1
+kind = "skill"
+art = 2
+effects = [{ type = "draw", count = 2 }, { type = "block", amount = 3 }]
+
+[[card]]
+id = "pacto"
+name = "card.pacto"
+cost = 0
+kind = "skill"
+art = 9
+rarity = "rare"
+exhaust = true
+effects = [{ type = "hurt_self", amount = 3 }, { type = "mana", amount = 2 }]
+
+[[card]]
+id = "eco"
+name = "card.eco"
+cost = 0
+kind = "skill"
+art = 3
+effects = [{ type = "mana", amount = 1 }, { type = "draw", count = 1 }]
+
+[[card]]
+id = "furia"
+name = "card.furia"
+cost = 1
+kind = "power"
+art = 7
+rarity = "rare"
+exhaust = true
+effects = [{ type = "strength", amount = 2 }]
+
+[[card]]
+id = "embestida"
+name = "card.embestida"
+cost = 1
+kind = "attack"
+art = 1
+effects = [{ type = "damage", amount = 5, target = "front" }, { type = "block", amount = 4 }]
+
+[[card]]
+id = "cadena"
+name = "card.cadena"
+cost = 2
+kind = "attack"
+art = 8
+rarity = "rare"
+effects = [{ type = "damage", amount = 4, target = "random", times = 4 }]

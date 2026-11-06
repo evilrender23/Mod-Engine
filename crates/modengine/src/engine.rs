@@ -175,6 +175,8 @@ pub struct Engine {
     /// Recent runtime errors (also printed to stderr once each).
     pub errors: Vec<String>,
     pub(crate) seen_errors: HashSet<String>,
+    /// Warnings already printed (printed once; they are not runtime errors).
+    pub(crate) seen_warnings: HashSet<String>,
     event_stack: Vec<(Ev, u32)>,
     pub(crate) rng: u64,
     /// Methods by declaring object (super / inherited() in methods).
@@ -411,6 +413,7 @@ impl Engine {
             audio: vec![],
             errors: vec![],
             seen_errors: HashSet::new(),
+            seen_warnings: HashSet::new(),
             event_stack: vec![],
             rng: 0x9E37_79B9_7F4A_7C15,
             methods: Default::default(),

@@ -356,6 +356,10 @@ proportional = true           # recorta cada glifo a sus píxeles (false = ancho
 spacing = 1
 ```
 
+La fuente integrada (sin `file`) es ProggyClean: a 16 px (y 32, 48…) sus píxeles caen justos
+y se ve nítida; a otros tamaños se rasteriza escalada (más suave). En los juegos de pixel art
+(`smooth = false`) se dibuja sin filtrar y letra a letra sobre píxeles enteros.
+
 Los caracteres que no están en los rangos no se dibujan (como en GameMaker). Una cara que no se
 puede leer no impide cargar el juego: se usa la fuente integrada y se avisa en la salida.
 

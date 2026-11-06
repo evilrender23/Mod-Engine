@@ -52,6 +52,8 @@ cargo build --release
 ```
 
 Controles del ejemplo: flechas/WASD para moverte, ESPACIO para saltar, ESC para volver al título.
+Dungeon crawler con cartas: `./target/release/modengine run examples/crawler` (Cripta de Naipes,
+ver [docs/plantilla-crawler.md](docs/plantilla-crawler.md)).
 Multijugador: abre `examples/multijugador` en el editor y usa **Juego → ▶▶ Ejecutar 2 instancias**
 (H en una ventana para ser host, J en la otra para unirte).
 En cualquier juego: **F3** muestra la capa de depuración (fps, instancias, cajas de colisión),
@@ -59,7 +61,7 @@ En cualquier juego: **F3** muestra la capa de depuración (fps, instancias, caja
 
 Crear o abrir proyectos: `./target/release/modeditor` sin argumentos muestra la **página de
 inicio** con botones grandes **＋ Nuevo proyecto** (nombre, carpeta, plantilla *Vacío*, *Básico*,
-*Plataformas*, *Top-down* o *Showcase*, tamaño de pantalla y paleta), **📂 Abrir proyecto…** (un
+*Plataformas*, *Top-down*, *Crawler de cartas* o *Showcase*, tamaño de pantalla y paleta), **📂 Abrir proyecto…** (un
 explorador que marca con 🎮 las carpetas que son proyectos, o el diálogo del sistema) y **Abrir
 ejemplo**, más tus proyectos recientes como tarjetas. También puedes arrastrar a la ventana la
 carpeta de un proyecto o su `game.toml`. Desde la terminal:
@@ -80,6 +82,7 @@ carpeta de un proyecto o su `game.toml`. Desde la terminal:
 | ![Tienda de assets](docs/img/editor_tienda.png) **Tienda:** assets gratuitos de OpenGameArt con sus licencias y créditos. | ![Exportar](docs/img/editor_exportar.png) **Exportar:** Windows, Linux y Android. |
 | ![RogueShot: menú](docs/img/rogueshot_menu.png) **RogueShot:** menú principal con cartas. | ![RogueShot: vestíbulo](docs/img/rogueshot_vestibulo.png) **RogueShot:** el vestíbulo del casino. |
 | ![RogueShot: plantas](docs/img/rogueshot_plantas.png) **RogueShot:** elegir planta en el ascensor. | ![RogueShot: sala](docs/img/rogueshot_sala.png) **RogueShot:** combate en una sala generada. |
+| ![Cripta de Naipes: exploración](docs/img/crawler_exploracion.png) **Cripta de Naipes** (plantilla `crawler`): mazmorra en primera persona por casillas, con minimapa. | ![Cripta de Naipes: combate](docs/img/crawler_combate.png) **Cripta de Naipes:** combate de cartas con intenciones y proyección del daño. |
 
 ## Cómo es un proyecto
 
@@ -152,6 +155,7 @@ map = '''
 - [docs/funciones.md](docs/funciones.md): todas las funciones integradas.
 - [docs/datos-y-cartas.md](docs/datos-y-cartas.md): **contenido como datos** (tablas `data/` con esquema, editables en el editor), mazos de cartas y la cola de acciones para separar lógica y presentación en juegos por turnos.
 - [docs/mazmorras.md](docs/mazmorras.md): **mazmorras procedurales** (salas de plantillas ASCII o rooms, Delaunay + árbol mínimo + bucles, pasillos A\*, camino principal, eventos por reglas, reproducibles con semilla) y `modengine dungeon` para afinarlas con vistas previas PNG; rejillas `ds_grid`.
+- [docs/plantilla-crawler.md](docs/plantilla-crawler.md): **Cripta de Naipes** (`modengine new --template crawler`), un *dungeon crawler* completo con combate de cartas: cómo está organizado, dónde añadir cartas, enemigos y salas, y cómo probarlo con saltos de depuración.
 - [docs/exportar.md](docs/exportar.md): crear el juego para **Windows (.exe), Linux y Android (.apk)**.
 - [docs/red.md](docs/red.md): **multijugador** por red local o Internet: `net_host`/`net_join`/`net_send`, o sockets y buffers como en GameMaker, y servidores sin ventana.
 - [docs/arquitectura.md](docs/arquitectura.md): cómo está hecho el motor y el orden exacto del bucle de juego.
@@ -163,7 +167,7 @@ map = '''
 modengine run <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--screenshot f.png] [--frames N]
 modengine check <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--steps N] [--watch Objeto]
 modengine server <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--steps N]   # sin ventana, en tiempo real (multijugador)
-modengine new [--template vacio|basico|plataformas|top-down|showcase] [--name "Nombre"] <carpeta>
+modengine new [--template vacio|basico|plataformas|top-down|crawler|showcase] [--name "Nombre"] <carpeta>
 modengine new --template list                     # las plantillas
 modengine export <proyecto> --target windows|linux|android [--out CARPETA] [--release]
 modengine export --setup windows|linux|android   # instala lo que falte (en tu carpeta de usuario)

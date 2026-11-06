@@ -27,8 +27,9 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let examples = manifest.join("../../examples");
-    let sets: [(&str, PathBuf); 3] = [
+    let sets: [(&str, PathBuf); 4] = [
         ("PLATFORMER", examples.join("platformer")),
+        ("CRAWLER", examples.join("crawler")),
         ("SHOWCASE", examples.join("showcase_assets_s2")),
         ("TOPDOWN", manifest.join("templates/topdown")),
     ];

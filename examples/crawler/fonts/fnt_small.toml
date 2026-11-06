@@ -1,0 +1,4 @@
+# Built-in face at 13 px (its native pixel size) (small text: cards, hints), with Latin-1 for accents and ñ.
+size = 13
+antialias = false
+ranges = [[32, 127], [160, 255]]

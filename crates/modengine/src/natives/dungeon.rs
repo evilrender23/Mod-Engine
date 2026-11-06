@@ -188,7 +188,7 @@ pub(super) fn register(r: &mut Reg) {
         let config = parse_config(e, &j, &mut warnings).map_err(|m| RtError::new(format!("dungeon_create: {m}")))?;
         for w in &warnings {
             let msg = format!("dungeon_create: {w}");
-            if e.seen_errors.insert(msg.clone()) {
+            if e.seen_warnings.insert(msg.clone()) {
                 eprintln!("aviso: {msg}");
             }
         }
@@ -216,7 +216,7 @@ pub(super) fn register(r: &mut Reg) {
         let d = dg::generate(&cfg, seed).map_err(|m| RtError::new(format!("dungeon_generate: {m}")))?;
         for w in &d.warnings {
             let msg = format!("dungeon_generate: {w}");
-            if e.seen_errors.insert(msg.clone()) {
+            if e.seen_warnings.insert(msg.clone()) {
                 eprintln!("aviso: {msg}");
             }
         }

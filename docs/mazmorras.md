@@ -76,7 +76,9 @@ La misma configuración vale como struct de ModScript, fichero TOML/JSON del pro
 | `attempts` | `30` | reintentos si no caben `rooms[0]` salas |
 
 Las claves desconocidas no son error, pero se avisan (en la consola del juego, en
-`dungeon_info(id).warnings` y en `modengine dungeon`), para pillar faltas de ortografía.
+`dungeon_info(id).warnings` y en `modengine dungeon`), para pillar faltas de ortografía. Los
+avisos (también los de reglas que no pudieron colocar todos sus eventos) se imprimen una vez y no
+cuentan como errores de ejecución: `modengine check` no falla por ellos.
 
 ### Plantillas de sala
 

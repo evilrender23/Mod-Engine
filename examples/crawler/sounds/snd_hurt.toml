@@ -1,0 +1,6 @@
+[synth]
+wave = "saw"
+freq = 220
+freq_end = 70
+duration = 0.2
+volume = 0.25

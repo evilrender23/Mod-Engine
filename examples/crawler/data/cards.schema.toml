@@ -1,0 +1,25 @@
+# Cards: one record per card. `name` is the text key in lang/*.toml.
+[fields]
+name = { type = "string", required = true, doc = "Text key in lang/*.toml" }
+cost = { type = "int", default = 1, min = 0, max = 3, doc = "Mana to play it" }
+kind = { type = "enum", values = ["attack", "skill", "power"], doc = "Frame colour" }
+art = { type = "int", default = 0, min = 0, max = 9, doc = "Frame of the card_art sprite" }
+rarity = { type = "enum", values = ["starter", "common", "rare"], default = "common", doc = "Chests offer common (and sometimes rare) cards" }
+exhaust = { type = "bool", default = false, doc = "Goes to the exhaust pile when played (not back to the deck this combat)" }
+
+[fields.effects]
+type = "list"
+required = true
+doc = "What the card does, in order"
+
+[fields.effects.of]
+type = "struct"
+tag = "type"
+
+[fields.effects.of.variants]
+damage = { amount = "int", target = { type = "enum", values = ["front", "all", "random"] }, times = { type = "int", default = 1, min = 1, max = 5 }, per_combo = { type = "int", default = 0 } }
+block = { amount = "int" }
+draw = { count = "int" }
+mana = { amount = "int" }
+strength = { amount = "int" }
+hurt_self = { amount = "int" }

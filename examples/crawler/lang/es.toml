@@ -1,0 +1,91 @@
+# Textos del juego en español (idioma base). Las claves de cartas y enemigos salen de data/*.toml (campo name).
+[title]
+name = "Cripta de Naipes"
+subtitle = "Baja tres pisos. Vence con tus cartas."
+credits = "Un ejemplo de Mod Engine"
+
+[menu]
+new = "Nueva partida"
+continue = "Continuar (piso {n})"
+lang = "Idioma: Español"
+quit = "Salir"
+hint = "Flechas: elegir   Enter: aceptar"
+
+[hud]
+floor = "Piso {n}/3"
+controls = "W/S andar   A/D de lado   Q/E girar   (flechas también)"
+
+[msg]
+start = "Desciendes a la cripta."
+chest = "Un cofre: elige una carta."
+fountain = "Bebes de la fuente: +{n} vida."
+fountain_dry = "La fuente está seca."
+stairs = "Bajas por las escaleras..."
+enemy = "¡{name} te cierra el paso!"
+boss = "¡El Rey Osario se levanta de su trono!"
+saved = "Partida guardada."
+
+[cb]
+turn = "Turno {n}"
+end = "Fin de turno"
+speed = "Velocidad {s}"
+instant = "instantánea"
+combo = "Combo x{n}"
+no_mana = "Falta maná"
+victory = "¡Victoria!"
+hint = "Enter: jugar · E: fin de turno · F: velocidad"
+draw = "Robo {n}"
+discard = "Descarte {n}"
+strength = "Fuerza +{n}"
+kills = "muere"
+shuffle = "Barajas"
+
+[fx]
+damage = "{n} daño"
+damage_all = "{n} daño a todos"
+damage_random = "{n} daño x{t}\nal azar"
+per_combo = "+{n} por combo"
+block = "{n} escudo"
+draw = "Roba {n}"
+mana = "+{n} maná"
+strength = "+{n} fuerza"
+hurt_self = "Pierdes {n} vida"
+exhaust = "Agotar"
+
+[chest]
+title = "Elige una carta para tu mazo"
+skip = "Esc: no coger nada"
+
+[end]
+won = "¡Has vencido al Rey Osario!"
+lost = "Has caído en el piso {n}"
+kills = "Enemigos derrotados: {n}"
+turns = "Turnos de combate: {n}"
+cards = "Cartas jugadas: {n}"
+deck = "Mazo final: {n} cartas"
+back = "Enter: volver al título"
+
+[card]
+tajo = "Tajo"
+guardia = "Guardia"
+remate = "Remate"
+barrido = "Barrido"
+dagas = "Dagas"
+estocada = "Estocada"
+muro = "Muro óseo"
+barajar = "Barajar"
+pacto = "Pacto"
+eco = "Eco"
+furia = "Furia"
+embestida = "Embestida"
+cadena = "Cadena"
+
+[enemy]
+rata = "Rata de cripta"
+murcielago = "Murciélago"
+limo = "Limo verde"
+esqueleto = "Esqueleto"
+espectro = "Espectro"
+gargola = "Gárgola"
+diablillo = "Diablillo"
+rey = "Rey Osario"

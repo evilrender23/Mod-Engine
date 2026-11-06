@@ -1,0 +1,24 @@
+# Enemies. `name` is the text key in lang/*.toml. Intents are chosen in order (pattern) or at random.
+[fields]
+name = { type = "string", required = true, doc = "Text key in lang/*.toml" }
+sprite = { type = "sprite", required = true }
+hp = { type = "int", required = true, min = 1 }
+scale = { type = "number", default = 0.55, doc = "Billboard height in cells" }
+top = { type = "number", default = 0.9, doc = "Where the head is (fraction of the sprite height): the intent goes above it" }
+float = { type = "number", default = 0.0, doc = "Billboard height above the floor (flyers)" }
+boss = { type = "bool", default = false }
+pattern = { type = "bool", default = false, doc = "true: intents in order (loops); false: random each turn" }
+
+[fields.intents]
+type = "list"
+required = true
+doc = "attack N (x times), block N, buff = +N strength"
+
+[fields.intents.of]
+type = "struct"
+tag = "type"
+
+[fields.intents.of.variants]
+attack = { amount = "int", times = { type = "int", default = 1, min = 1, max = 5 } }
+block = { amount = "int" }
+buff = { amount = "int" }

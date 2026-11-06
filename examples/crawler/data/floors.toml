@@ -1,0 +1,26 @@
+# The three floors of a run. Each enemy event picks one group (later groups when deeper: t = distance 0..1).
+
+[[floor]]
+id = "f1"
+dungeon = "dungeons/piso1.toml"
+wall = "wall_crypt"
+fog = "K"
+fog_end = 6.5
+groups = [["rata"], ["rata", "rata"], ["murcielago", "murcielago"], ["limo"], ["rata", "murcielago"], ["esqueleto"]]
+
+[[floor]]
+id = "f2"
+dungeon = "dungeons/piso2.toml"
+wall = "wall_moss"
+fog = "A"
+fog_end = 6
+groups = [["limo", "rata"], ["esqueleto"], ["espectro", "murcielago"], ["diablillo"], ["esqueleto", "limo"], ["gargola"]]
+
+[[floor]]
+id = "f3"
+dungeon = "dungeons/piso3.toml"
+wall = "wall_blood"
+fog = "U"
+fog_end = 5.5
+boss = "rey"
+groups = [["diablillo", "espectro"], ["gargola"], ["esqueleto", "esqueleto"], ["diablillo", "diablillo", "murcielago"], ["gargola", "espectro"]]

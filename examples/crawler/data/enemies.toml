@@ -1,0 +1,79 @@
+# Enemies and their intents (attack N [x times], block N, buff = +N strength).
+
+[[enemy]]
+id = "rata"
+name = "enemy.rata"
+top = 0.55
+sprite = "en_rat"
+hp = 9
+scale = 0.42
+intents = [{ type = "attack", amount = 4 }, { type = "attack", amount = 2, times = 2 }]
+
+[[enemy]]
+id = "murcielago"
+name = "enemy.murcielago"
+top = 0.75
+sprite = "en_bat"
+hp = 7
+scale = 0.45
+float = 0.28
+intents = [{ type = "attack", amount = 3 }, { type = "attack", amount = 2, times = 2 }, { type = "buff", amount = 1 }]
+
+[[enemy]]
+id = "limo"
+name = "enemy.limo"
+top = 0.6
+sprite = "en_slime"
+hp = 18
+scale = 0.45
+pattern = true
+intents = [{ type = "buff", amount = 2 }, { type = "attack", amount = 5 }, { type = "block", amount = 6 }]
+
+[[enemy]]
+id = "esqueleto"
+name = "enemy.esqueleto"
+top = 1.0
+sprite = "en_skeleton"
+hp = 16
+scale = 0.6
+intents = [{ type = "attack", amount = 7 }, { type = "block", amount = 6 }, { type = "attack", amount = 5 }]
+
+[[enemy]]
+id = "espectro"
+name = "enemy.espectro"
+top = 0.95
+sprite = "en_ghost"
+hp = 13
+scale = 0.5
+float = 0.12
+intents = [{ type = "attack", amount = 8 }, { type = "attack", amount = 3, times = 3 }]
+
+[[enemy]]
+id = "gargola"
+name = "enemy.gargola"
+top = 0.95
+sprite = "en_gargoyle"
+hp = 26
+scale = 0.6
+pattern = true
+intents = [{ type = "block", amount = 10 }, { type = "attack", amount = 11 }, { type = "buff", amount = 2 }]
+
+[[enemy]]
+id = "diablillo"
+name = "enemy.diablillo"
+top = 0.95
+sprite = "en_imp"
+hp = 14
+scale = 0.5
+intents = [{ type = "attack", amount = 6 }, { type = "buff", amount = 2 }, { type = "attack", amount = 2, times = 3 }]
+
+[[enemy]]
+id = "rey"
+name = "enemy.rey"
+top = 1.0
+sprite = "en_king"
+hp = 80
+scale = 0.6
+boss = true
+pattern = true
+intents = [{ type = "block", amount = 12 }, { type = "attack", amount = 9 }, { type = "attack", amount = 4, times = 3 }, { type = "buff", amount = 3 }, { type = "attack", amount = 16 }]

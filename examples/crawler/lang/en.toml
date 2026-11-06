@@ -1,0 +1,91 @@
+# English texts. Card and enemy keys come from data/*.toml (field name).
+[title]
+name = "Crypt of Cards"
+subtitle = "Descend three floors. Win with your cards."
+credits = "A Mod Engine example"
+
+[menu]
+new = "New run"
+continue = "Continue (floor {n})"
+lang = "Language: English"
+quit = "Quit"
+hint = "Arrows: choose   Enter: accept"
+
+[hud]
+floor = "Floor {n}/3"
+controls = "W/S walk   A/D strafe   Q/E turn   (arrows too)"
+
+[msg]
+start = "You descend into the crypt."
+chest = "A chest: pick a card."
+fountain = "You drink from the fountain: +{n} HP."
+fountain_dry = "The fountain is dry."
+stairs = "You take the stairs down..."
+enemy = "{name} blocks your way!"
+boss = "The Ossuary King rises from his throne!"
+saved = "Game saved."
+
+[cb]
+turn = "Turn {n}"
+end = "End turn"
+speed = "Speed {s}"
+instant = "instant"
+combo = "Combo x{n}"
+no_mana = "Not enough mana"
+victory = "Victory!"
+hint = "Enter: play · E: end turn · F: speed"
+draw = "Draw {n}"
+discard = "Discard {n}"
+strength = "Strength +{n}"
+kills = "dies"
+shuffle = "Reshuffle"
+
+[fx]
+damage = "{n} damage"
+damage_all = "{n} damage to all"
+damage_random = "{n} dmg x{t}\nrandom"
+per_combo = "+{n} per combo"
+block = "{n} block"
+draw = "Draw {n}"
+mana = "+{n} mana"
+strength = "+{n} strength"
+hurt_self = "Lose {n} HP"
+exhaust = "Exhaust"
+
+[chest]
+title = "Pick a card for your deck"
+skip = "Esc: take nothing"
+
+[end]
+won = "You defeated the Ossuary King!"
+lost = "You fell on floor {n}"
+kills = "Enemies defeated: {n}"
+turns = "Combat turns: {n}"
+cards = "Cards played: {n}"
+deck = "Final deck: {n} cards"
+back = "Enter: back to the title"
+
+[card]
+tajo = "Slash"
+guardia = "Guard"
+remate = "Finisher"
+barrido = "Sweep"
+dagas = "Daggers"
+estocada = "Thrust"
+muro = "Bone Wall"
+barajar = "Shuffle"
+pacto = "Pact"
+eco = "Echo"
+furia = "Fury"
+embestida = "Shield Bash"
+cadena = "Chain"
+
+[enemy]
+rata = "Crypt rat"
+murcielago = "Bat"
+limo = "Green slime"
+esqueleto = "Skeleton"
+espectro = "Wraith"
+gargola = "Gargoyle"
+diablillo = "Card imp"
+rey = "Ossuary King"

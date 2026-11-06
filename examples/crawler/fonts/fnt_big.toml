@@ -1,0 +1,4 @@
+# Built-in face at 26 px (twice its native size) (titles), with Latin-1 for accents and ñ.
+size = 26
+antialias = false
+ranges = [[32, 127], [160, 255]]

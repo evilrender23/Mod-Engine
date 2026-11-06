@@ -35,6 +35,7 @@ proyecto abierto, eso abre el otro en vez de importar).
 | Básico (`basic`, la de `modengine new` sin más) | Un personaje que se mueve con flechas/WASD |
 | Plataformas (`platformer`) | Copia de Coin Climber (`examples/platformer`): gravedad, saltos, enemigos, 4 rooms, sonidos |
 | Top-down (`topdown`) | Vista cenital: muros, gemas que recoger y un marcador |
+| Crawler de cartas (`crawler`) | Copia de Cripta de Naipes (`examples/crawler`): mazmorra en primera persona por casillas, 3 pisos procedurales, combate de cartas por turnos, idiomas y guardado ([plantilla-crawler.md](plantilla-crawler.md)) |
 | Showcase (`showcase`) | Trayectorias, timelines, curvas y secuencias (`examples/showcase_assets_s2`) |
 
 *Pantalla* cambia `[display] width/height/scale` (por defecto, el de la plantilla) y *Paleta*

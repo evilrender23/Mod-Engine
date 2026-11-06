@@ -1,0 +1,7 @@
+# Title screen: menu over a small first-person corridor.
+background = "#272736"
+
+[[layer]]
+name = "Instances"
+type = "instances"
+instances = [{ object = "Title", x = 0, y = 0 }]

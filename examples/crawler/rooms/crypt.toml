@@ -1,0 +1,7 @@
+# The run: Explorer generates each floor (dungeon_*), draws the 3D view and starts the fights.
+background = "#272736"
+
+[[layer]]
+name = "Instances"
+type = "instances"
+instances = [{ object = "Explorer", x = 0, y = 0 }]

@@ -1,0 +1,6 @@
+[synth]
+wave = "noise"
+freq = 300
+freq_end = 80
+duration = 0.12
+volume = 0.32

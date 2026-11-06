@@ -1,0 +1,7 @@
+[synth]
+wave = "triangle"
+freq = 300
+duration = 0.25
+repeat = 3
+repeat_pitch = 0.8
+volume = 0.22

@@ -1,0 +1,8 @@
+[synth]
+wave = "sine"
+freq = 440
+freq_end = 880
+duration = 0.35
+volume = 0.22
+vibrato = 0.03
+vibrato_speed = 10

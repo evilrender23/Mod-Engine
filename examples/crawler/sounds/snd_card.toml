@@ -1,0 +1,6 @@
+[synth]
+wave = "triangle"
+freq = 520
+freq_end = 880
+duration = 0.07
+volume = 0.22
