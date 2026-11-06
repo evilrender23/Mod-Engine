@@ -63,7 +63,7 @@ pub fn check_all(shaders: &[ShaderAsset], only: Option<&str>) -> bool {
     let mut any = false;
     for s in shaders.iter().filter(|s| only.is_none_or(|n| n == s.name)) {
         any = true;
-        for p in s.problems() {
+        for p in s.problems().into_iter().chain(s.warnings()) {
             println!("warning {}: {p}", s.name);
         }
         match compile(Some(s), 0) {

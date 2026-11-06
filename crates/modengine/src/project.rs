@@ -10,10 +10,9 @@
 //!   **/*.ms              ModScript: objects, functions, init code
 //! ```
 
-use crate::draw::parse_color;
 use crate::synth::{render_wav, SynthDef};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 // ------------------------------------------------------------------ game.toml
@@ -83,6 +82,8 @@ pub struct AndroidSection {
     pub virtual_buttons: Vec<String>,
     /// CPU architectures to include: "arm64-v8a", "armeabi-v7a", "x86_64".
     pub abis: Vec<String>,
+    /// Ask for the INTERNET permission. Unset: only when the game uses networking.
+    pub internet: Option<bool>,
 }
 
 impl Default for AndroidSection {
@@ -94,6 +95,7 @@ impl Default for AndroidSection {
             virtual_pad: "none".into(),
             virtual_buttons: vec![],
             abis: vec!["arm64-v8a".into()],
+            internet: None,
         }
     }
 }
@@ -133,6 +135,10 @@ pub struct DisplaySection {
     pub font_size: f32,
     /// Smooth (linear) filtering instead of nearest-neighbour.
     pub smooth: bool,
+    /// How rotated sprites look by default: "nearest", "rotsprite" or "smooth".
+    pub rotation: String,
+    /// Default angle steps per turn for rotated sprites (0 = free).
+    pub rotation_steps: u32,
 }
 
 impl Default for DisplaySection {
@@ -147,6 +153,8 @@ impl Default for DisplaySection {
             letterbox: "#000000".into(),
             font_size: 16.0,
             smooth: false,
+            rotation: "nearest".into(),
+            rotation_steps: 0,
         }
     }
 }
@@ -168,12 +176,16 @@ pub struct Sprite {
     pub bbox: [f64; 4],
     /// Animation frames per second (at anim_speed = 1).
     pub fps: f64,
+    /// How it looks rotated (`rotation`, `rotation_steps`; default from `[display]`).
+    pub rotation: crate::rotsprite::Rotation,
 }
 
 pub struct SoundAsset {
     pub name: String,
     pub data: Vec<u8>,
     pub volume: f64,
+    /// Volume group, loop points and intro of the TOML (see `audio.rs`).
+    pub meta: crate::audio::SoundMeta,
 }
 
 pub use crate::font::FontAsset;
@@ -190,6 +202,11 @@ struct SpriteToml {
     mask: Option<[i32; 4]>,
     palette: BTreeMap<String, String>,
     pixels: Vec<String>,
+    /// Run-length form of `pixels` (see `pixelart.rs`).
+    pixels_rle: Vec<String>,
+    /// "nearest", "rotsprite" or "smooth" (default: `[display] rotation`).
+    rotation: Option<String>,
+    rotation_steps: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -198,6 +215,14 @@ struct SoundToml {
     file: Option<String>,
     synth: Option<SynthDef>,
     volume: Option<f64>,
+    /// Volume group (`audio_group_set_gain`).
+    group: Option<String>,
+    /// Seconds where a looped sound jumps back to (after an intro).
+    loop_start: Option<f64>,
+    /// Seconds where a looped sound jumps back from (default: the end).
+    loop_end: Option<f64>,
+    /// File played once before `file`; then `file` loops (`loop_start` = intro length).
+    intro: Option<String>,
 }
 
 // ------------------------------------------------------------------ rooms (raw)
@@ -262,6 +287,10 @@ pub struct LayerToml {
     /// Tile layers: rows of tile data separated by spaces (`-1` or `.` = empty), an
     /// alternative to `legend` + `map` for big tile sets.
     pub data: Option<String>,
+    /// Tile layers: draw scale of the tiles, a number (`scale = 3`) or `[x, y]`. Cells,
+    /// collisions and `tilemap_*` use the scaled size, so 16 px tiles can fill 48 px cells
+    /// without baking a bigger image.
+    pub scale: Option<toml::Value>,
     // instances
     pub instances: Vec<InstToml>,
 }
@@ -289,8 +318,31 @@ impl Default for LayerToml {
             legend: BTreeMap::new(),
             map: None,
             data: None,
+            scale: None,
             instances: vec![],
         }
+    }
+}
+
+impl LayerToml {
+    /// The tile layer's `scale` as (x, y); (1, 1) when unset.
+    pub fn tile_scale(&self) -> Result<(f64, f64), String> {
+        let n = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
+        let (x, y) = match &self.scale {
+            None => return Ok((1.0, 1.0)),
+            Some(toml::Value::Array(a)) if a.len() == 2 => match (n(&a[0]), n(&a[1])) {
+                (Some(x), Some(y)) => (x, y),
+                _ => return Err("`scale` must be a number or [x, y]".into()),
+            },
+            Some(v) => match n(v) {
+                Some(s) => (s, s),
+                None => return Err("`scale` must be a number or [x, y]".into()),
+            },
+        };
+        if !(x > 0.0 && y > 0.0 && x.is_finite() && y.is_finite()) {
+            return Err(format!("`scale` must be positive, got [{x}, {y}]"));
+        }
+        Ok((x, y))
     }
 }
 
@@ -368,8 +420,20 @@ impl Project {
         let config: GameToml = read_toml(&game_path)?;
 
         let mut sprites = Vec::new();
+        let rot_default = crate::rotsprite::Rotation {
+            mode: crate::rotsprite::RotMode::parse(&config.display.rotation).map_err(|e| format!("{}: [display] {e}", game_path.display()))?,
+            steps: config.display.rotation_steps,
+        };
         for (name, path, is_toml) in asset_files(&dir.join("sprites"), &["png"]) {
-            sprites.push(load_sprite(&name, &path, is_toml, &config.palette)?);
+            let (mut s, (mode_set, steps_set)) = load_sprite_keys(&name, &path, is_toml, &config.palette)?;
+            // sprites without their own `rotation` / `rotation_steps` follow game.toml
+            if !mode_set {
+                s.rotation.mode = rot_default.mode;
+            }
+            if !steps_set {
+                s.rotation.steps = rot_default.steps;
+            }
+            sprites.push(s);
         }
 
         let mut sounds = Vec::new();
@@ -384,10 +448,18 @@ impl Project {
                     (None, Some(s)) => render_wav(s),
                     (None, None) => return Err(format!("{}: needs `file = \"...\"` or a [synth] table", path.display())),
                 };
-                sounds.push(SoundAsset { name, data, volume: t.volume.unwrap_or(1.0) });
+                let intro = match &t.intro {
+                    Some(f) => {
+                        let fp = path.parent().unwrap().join(f);
+                        Some(crate::vfs::read(&fp).map_err(|e| format!("{}: intro: {e}", fp.display()))?)
+                    }
+                    None => None,
+                };
+                let meta = crate::audio::SoundMeta { group: t.group.clone(), loop_start: t.loop_start, loop_end: t.loop_end, intro };
+                sounds.push(SoundAsset { name, data, volume: t.volume.unwrap_or(1.0), meta });
             } else {
                 let data = crate::vfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                sounds.push(SoundAsset { name, data, volume: 1.0 });
+                sounds.push(SoundAsset { name, data, volume: 1.0, meta: Default::default() });
             }
         }
 
@@ -443,10 +515,15 @@ pub fn collect_scripts(root: &Path, dir: &Path, out: &mut Vec<(String, String)>)
 // ------------------------------------------------------------------ sprites
 
 pub fn load_sprite(name: &str, path: &Path, is_toml: bool, global_palette: &BTreeMap<String, String>) -> Result<Sprite, String> {
+    load_sprite_keys(name, path, is_toml, global_palette).map(|(s, _)| s)
+}
+
+/// [`load_sprite`], plus whether the TOML sets `rotation` and `rotation_steps` itself.
+fn load_sprite_keys(name: &str, path: &Path, is_toml: bool, global_palette: &BTreeMap<String, String>) -> Result<(Sprite, (bool, bool)), String> {
     let t: SpriteToml = if is_toml { read_toml(path)? } else { SpriteToml::default() };
     let where_ = path.display().to_string();
 
-    let (fw, fh, frames, sheet_w, sheet_h, rgba) = if !t.pixels.is_empty() {
+    let (fw, fh, frames, sheet_w, sheet_h, rgba) = if !t.pixels.is_empty() || !t.pixels_rle.is_empty() {
         pixel_frames(&t, global_palette).map_err(|e| format!("{where_}: {e}"))?
     } else {
         let img_path = if is_toml {
@@ -488,7 +565,8 @@ pub fn load_sprite(name: &str, path: &Path, is_toml: bool, global_palette: &BTre
         Some([l, tp, r, b]) => [l as f64, tp as f64, r as f64 + 1.0, b as f64 + 1.0],
         None => alpha_bbox(&rgba, sheet_w, &frames, fw, fh),
     };
-    Ok(Sprite {
+    let keys = (t.rotation.is_some(), t.rotation_steps.is_some());
+    let sprite = Sprite {
         name: name.to_string(),
         fw,
         fh,
@@ -499,47 +577,22 @@ pub fn load_sprite(name: &str, path: &Path, is_toml: bool, global_palette: &BTre
         origin,
         bbox,
         fps: t.fps.unwrap_or(10.0),
-    })
+        rotation: crate::rotsprite::Rotation {
+            mode: crate::rotsprite::RotMode::parse(t.rotation.as_deref().unwrap_or("nearest")).map_err(|e| format!("{where_}: {e}"))?,
+            steps: t.rotation_steps.unwrap_or(0),
+        },
+    };
+    Ok((sprite, keys))
 }
 
 type Frames = (u32, u32, Vec<[u32; 4]>, u32, u32, Vec<u8>);
 
 fn pixel_frames(t: &SpriteToml, global: &BTreeMap<String, String>) -> Result<Frames, String> {
-    let mut pal: HashMap<char, [u8; 4]> = HashMap::new();
-    for (k, v) in global.iter().chain(t.palette.iter()) {
-        let ch = k.chars().next().ok_or("empty palette key")?;
-        let c = parse_color(v).ok_or_else(|| format!("bad palette colour '{v}'"))?;
-        pal.insert(ch, [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255]);
-    }
-    let grids: Vec<Vec<Vec<char>>> = t
-        .pixels
-        .iter()
-        .map(|f| f.lines().map(|l| l.trim().chars().collect::<Vec<_>>()).filter(|l| !l.is_empty()).collect())
-        .collect();
-    let fw = grids.iter().flat_map(|g| g.iter().map(|r| r.len())).max().unwrap_or(0) as u32;
-    let fh = grids.iter().map(|g| g.len()).max().unwrap_or(0) as u32;
-    if fw == 0 || fh == 0 {
-        return Err("pixel art is empty".into());
-    }
-    let n = grids.len() as u32;
-    let sheet_w = fw * n;
-    let mut rgba = vec![0u8; (sheet_w * fh * 4) as usize];
-    let mut frames = Vec::new();
-    for (fi, g) in grids.iter().enumerate() {
-        let ox = fi as u32 * fw;
-        frames.push([ox, 0, fw, fh]);
-        for (y, row) in g.iter().enumerate() {
-            for (x, ch) in row.iter().enumerate() {
-                if *ch == '.' || *ch == ' ' {
-                    continue;
-                }
-                let px = pal.get(ch).ok_or_else(|| format!("character '{ch}' is not in the palette"))?;
-                let i = (((y as u32) * sheet_w + ox + x as u32) * 4) as usize;
-                rgba[i..i + 4].copy_from_slice(px);
-            }
-        }
-    }
-    Ok((fw, fh, frames, sheet_w, fh, rgba))
+    let pal = crate::pixelart::palette(global, &t.palette)?;
+    let grids = crate::pixelart::frame_grids(&t.pixels, &t.pixels_rle)?;
+    let (fw, fh, n, rgba) = crate::pixelart::rasterize(&grids, &pal)?;
+    let frames = (0..n).map(|i| [i * fw, 0, fw, fh]).collect();
+    Ok((fw, fh, frames, fw * n, fh, rgba))
 }
 
 fn parse_origin(v: Option<&toml::Value>, fw: u32, fh: u32) -> Result<(f64, f64), String> {

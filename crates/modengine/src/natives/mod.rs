@@ -5,14 +5,26 @@ mod game;
 mod gfx;
 mod particles;
 mod shader;
+mod surface;
 mod extension;
 mod font;
 pub mod tilemap;
 mod animcurve;
+mod art;
 mod path;
 mod sequence;
 mod timeline;
 mod palette;
+pub(crate) mod net;
+mod audio;
+mod coroutine;
+pub(crate) mod rng;
+mod save;
+mod pool;
+pub(crate) mod ui;
+mod raycast;
+pub(crate) mod navgrid;
+mod richtext;
 
 use crate::draw::NAMED_COLORS;
 use crate::engine::Engine;
@@ -38,15 +50,35 @@ pub fn registry() -> HashMap<Sym, NativeFn> {
     gfx::register(&mut r);
     particles::register(&mut r);
     shader::register(&mut r);
+    surface::register(&mut r);
     extension::register(&mut r);
     font::register(&mut r);
     tilemap::register(&mut r);
     animcurve::register(&mut r);
+    art::register(&mut r);
     path::register(&mut r);
     sequence::register(&mut r);
     timeline::register(&mut r);
     palette::register(&mut r);
+    net::register(&mut r);
+    audio::register(&mut r);
+    coroutine::register(&mut r);
+    rng::register(&mut r);
+    save::register(&mut r);
+    pool::register(&mut r);
+    ui::register(&mut r);
+    raycast::register(&mut r);
+    navgrid::register(&mut r);
+    richtext::register(&mut r);
     m
+}
+
+/// Names of the built-in constants (for highlighting / tooling).
+pub fn constant_names() -> Vec<String> {
+    let mut v: Vec<String> = constants().keys().map(|s| s.name().to_string()).collect();
+    v.push("async_load".into());
+    v.sort();
+    v
 }
 
 /// Names of every builtin function (for docs / tooling).
@@ -84,6 +116,39 @@ pub fn constants() -> HashMap<Sym, Value> {
             (intern("reverse"), Value::Num(3.0)),
         ]),
     );
+    // buffers and networking (GameMaker names and values)
+    let num = |c: &mut HashMap<Sym, Value>, n: &str, v: i64| {
+        c.insert(intern(n), Value::Num(v as f64));
+    };
+    for (n, v) in crate::buffer::BufType::NAMES {
+        num(&mut c, n, *v);
+    }
+    num(&mut c, "application_surface", crate::surface::APP as i64);
+    for (n, v) in [("buffer_fixed", 0), ("buffer_grow", 1), ("buffer_wrap", 2), ("buffer_fast", 3), ("buffer_seek_start", 0), ("buffer_seek_relative", 1), ("buffer_seek_end", 2)] {
+        num(&mut c, n, v);
+    }
+    use crate::net as nt;
+    for (n, v) in [
+        ("network_socket_tcp", nt::SOCKET_TCP),
+        ("network_socket_udp", nt::SOCKET_UDP),
+        ("network_socket_ws", nt::SOCKET_WS),
+        ("network_type_connect", nt::TYPE_CONNECT),
+        ("network_type_disconnect", nt::TYPE_DISCONNECT),
+        ("network_type_data", nt::TYPE_DATA),
+        ("network_type_non_blocking_connect", nt::TYPE_NON_BLOCKING_CONNECT),
+        ("network_config_connect_timeout", nt::CONFIG_CONNECT_TIMEOUT),
+        ("network_config_use_non_blocking_socket", nt::CONFIG_USE_NON_BLOCKING_SOCKET),
+        ("network_config_enable_reliable_udp", nt::CONFIG_ENABLE_RELIABLE_UDP),
+        ("network_config_disable_reliable_udp", nt::CONFIG_DISABLE_RELIABLE_UDP),
+        ("network_config_avoid_time_wait", nt::CONFIG_AVOID_TIME_WAIT),
+        ("network_config_enable_multicast", nt::CONFIG_ENABLE_MULTICAST),
+        ("network_config_disable_multicast", nt::CONFIG_DISABLE_MULTICAST),
+    ] {
+        num(&mut c, n, v);
+    }
+    ui::add_constants(&mut c);
+    audio::constants(&mut c);
+    coroutine::constants(&mut c);
     c.insert(intern("pi"), Value::Num(std::f64::consts::PI));
     c.insert(intern("infinity"), Value::Num(f64::INFINITY));
     c

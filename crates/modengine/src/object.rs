@@ -19,6 +19,10 @@ pub enum Ev {
     Draw,
     DrawEnd,
     DrawGui,
+    /// Before draw_begin, over the cleared frame (GUI coordinates).
+    PreDraw,
+    /// After draw_gui, over the finished frame (see `surface.rs`).
+    PostDraw,
     Collision(u32),
     Key(u16),
     KeyPressed(u16),
@@ -40,6 +44,8 @@ pub enum Ev {
     AnimationEnd,
     PathEnded,
     User(u8),
+    /// Async networking event (`async_load` holds what happened).
+    Network,
 }
 
 impl Ev {
@@ -72,6 +78,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "draw",
     "draw_end",
     "draw_gui",
+    "pre_draw",
+    "post_draw",
     "collision(Object)",
     "key(k)",
     "key_pressed(k)",
@@ -93,6 +101,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "animation_end",
     "path_ended",
     "user(n)",
+    "network",
 ];
 
 fn small_int(arg: &Option<Value>, max: u32, what: &str) -> Result<u8, String> {
@@ -133,6 +142,8 @@ pub fn parse_event(name: &str, arg: Option<Value>) -> Result<Ev, String> {
         "draw" => Ev::Draw,
         "draw_end" => Ev::DrawEnd,
         "draw_gui" => Ev::DrawGui,
+        "pre_draw" => Ev::PreDraw,
+        "post_draw" => Ev::PostDraw,
         "collision" => match arg {
             Some(Value::Asset(AssetKind::Object, o)) => Ev::Collision(o),
             _ => return Err("collision needs an object, e.g. `on collision(Wall)`".into()),
@@ -157,6 +168,7 @@ pub fn parse_event(name: &str, arg: Option<Value>) -> Result<Ev, String> {
         "animation_end" => Ev::AnimationEnd,
         "path_ended" => Ev::PathEnded,
         "user" => Ev::User(small_int(&arg, 16, "user events")?),
+        "network" | "async_network" => Ev::Network,
         other => {
             return Err(format!("unknown event '{other}'. Valid events: {}", EVENT_NAMES.join(", ")));
         }

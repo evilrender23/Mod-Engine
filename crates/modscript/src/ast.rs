@@ -10,6 +10,10 @@ pub struct FuncDef {
     pub body: Vec<Stmt>,
     pub file: Rc<str>,
     pub line: u32,
+    /// Names this function (or a function nested in it) reads or writes that are
+    /// not its own parameters: candidates to capture from the enclosing locals.
+    /// Computed on first use.
+    pub free: std::cell::OnceCell<Vec<Sym>>,
 }
 
 #[derive(Debug)]
@@ -69,6 +73,8 @@ pub enum Expr {
     Index(Box<Expr>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     Func(Rc<FuncDef>),
+    /// `super.name`: the parent object's version of method `name`.
+    Super(Sym),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -101,6 +107,8 @@ pub enum StmtKind {
     DoUntil(Box<Stmt>, Expr),
     For(Option<Box<Stmt>>, Option<Expr>, Option<Box<Stmt>>, Box<Stmt>),
     Repeat(Expr, Box<Stmt>),
+    /// `for (x in e)` / `for (k, v in e)`: (first name, second name, collection, body).
+    ForIn(Sym, Option<Sym>, Expr, Box<Stmt>),
     Switch(Expr, Vec<SwitchCase>),
     Block(Vec<Stmt>),
     Break,

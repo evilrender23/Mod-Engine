@@ -3,7 +3,8 @@
 Motor de juegos 2D escrito en Rust y organizado como los motores clásicos de "objetos y eventos":
 defines **objetos** con **eventos** (`create`, `step`, `draw`, `collision`...), colocas **instancias**
 de esos objetos en **rooms** y escribes la lógica en **ModScript**, un lenguaje de script pequeño
-pensado para eso.
+pensado para eso. Exporta a Windows, Linux y Android, y trae **multijugador por red** (host y
+clientes por LAN o Internet, al estilo de GameMaker; ver [docs/red.md](docs/red.md)).
 
 ![Coin Climber, el juego de ejemplo](docs/img/level.png)
 
@@ -48,6 +49,8 @@ cargo build --release
 ```
 
 Controles del ejemplo: flechas/WASD para moverte, ESPACIO para saltar, ESC para volver al título.
+Multijugador: abre `examples/multijugador` en el editor y usa **Juego → ▶▶ Ejecutar 2 instancias**
+(H en una ventana para ser host, J en la otra para unirte).
 En cualquier juego: **F3** muestra la capa de depuración (fps, instancias, cajas de colisión),
 **F4** pantalla completa y **F12** guarda una captura.
 
@@ -142,13 +145,16 @@ map = '''
 - [docs/proyecto.md](docs/proyecto.md): `game.toml`, sprites, sonidos, fuentes y rooms.
 - [docs/funciones.md](docs/funciones.md): todas las funciones integradas.
 - [docs/exportar.md](docs/exportar.md): crear el juego para **Windows (.exe), Linux y Android (.apk)**.
+- [docs/red.md](docs/red.md): **multijugador** por red local o Internet: `net_host`/`net_join`/`net_send`, o sockets y buffers como en GameMaker, y servidores sin ventana.
 - [docs/arquitectura.md](docs/arquitectura.md): cómo está hecho el motor y el orden exacto del bucle de juego.
+- [docs/pruebas.md](docs/pruebas.md): **probar el juego desde la terminal**: ratón simulado, capturas en pasos exactos sin ventana, `--seed`, `--assert`, `--no-save`, objetos de prueba y `--profile`.
 
 ## Línea de comandos
 
 ```text
 modengine run <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--screenshot f.png] [--frames N]
 modengine check <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--steps N] [--watch Objeto]
+modengine server <proyecto> [--room R] [--exec CODIGO] [--input SPEC] [--steps N]   # sin ventana, en tiempo real (multijugador)
 modengine new [--template vacio|basico|plataformas|top-down|showcase] [--name "Nombre"] <carpeta>
 modengine new --template list                     # las plantillas
 modengine export <proyecto> --target windows|linux|android [--out CARPETA] [--release]
@@ -159,7 +165,16 @@ modengine functions
 
 `check` ejecuta el juego sin ventana y falla si hay errores de script: sirve para tests y CI.
 `--input "10-200:right,30:space"` simula teclas (mantener `right` de los pasos 10 a 200, pulsar
-`space` en el paso 30) y `--exec "with Player x = 800"` ejecuta código al arrancar.
+`space` en el paso 30; `40:text=Ana` escribe «Ana») y `--exec "with Player x = 800"` ejecuta
+código al arrancar. `run --instance N` pone la ventana N al lado de las demás para probar el
+multijugador con varias copias; `server` (= `run --headless`) es un servidor dedicado.
+
+Para pruebas automáticas (ver [docs/pruebas.md](docs/pruebas.md)): `--input` también mueve el
+ratón y pulsa botones (`10:mouse=320,200, 20-80:mb_left, 90:wheel_up`), `--screenshot-at 200,500`
+guarda capturas en esos pasos lógicos sin mostrar la ventana (`--crop x,y,w,h`), `--seed N` hace
+reproducible el azar, `--exec-at PASO:CÓDIGO` y `--assert [PASO:]EXPR` (código de salida 3 si
+falla), `--no-save` / `--save-dir DIR` protegen las partidas, `--test-script f.ms` añade objetos de
+prueba y `--profile` mide cada evento. `check` devuelve 1 si hubo errores de ejecución.
 
 ## Estructura del código
 

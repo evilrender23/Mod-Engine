@@ -300,13 +300,31 @@ pub struct Quad {
 }
 
 impl GlyphAtlas {
+    /// The glyph used for `ch`. Sprite fonts often bake only one case and no space: a missing
+    /// letter falls back to the other case, and a missing space to an empty glyph as wide as
+    /// `n` (or half a line), so text still measures, wraps and draws with gaps between words.
+    pub fn glyph(&self, ch: char) -> Option<Glyph> {
+        if let Some(g) = self.glyphs.get(&ch) {
+            return Some(*g);
+        }
+        let other = if ch.is_lowercase() { ch.to_uppercase().next() } else { ch.to_lowercase().next() };
+        if let Some(g) = other.filter(|o| *o != ch).and_then(|o| self.glyphs.get(&o)) {
+            return Some(*g);
+        }
+        if ch == ' ' || ch == '\u{a0}' {
+            let adv = ['n', 'N', '0', 'o', 'O'].iter().find_map(|c| self.glyphs.get(c)).map(|g| g.advance).unwrap_or((self.line_height / 2.0).max(1.0));
+            return Some(Glyph { x: 0, y: 0, w: 0, h: 0, ox: 0.0, oy: 0.0, advance: adv });
+        }
+        None
+    }
+
     /// Width of one line (no line breaks) in pixels at scale 1.
     pub fn line_width(&self, line: &str) -> f32 {
         let mut w = 0.0f32;
         let mut prev: Option<char> = None;
         let mut any = false;
         for ch in line.chars() {
-            let Some(g) = self.glyphs.get(&ch) else { continue };
+            let Some(g) = self.glyph(ch) else { continue };
             if let Some(p) = prev {
                 w += self.kern.get(&(p, ch)).copied().unwrap_or(0.0) + self.spacing;
             }
@@ -334,12 +352,12 @@ impl GlyphAtlas {
         let mut pen = 0.0f32;
         let mut prev: Option<char> = None;
         for ch in line.chars() {
-            let Some(g) = self.glyphs.get(&ch) else { continue };
+            let Some(g) = self.glyph(ch) else { continue };
             if let Some(p) = prev {
                 pen += self.kern.get(&(p, ch)).copied().unwrap_or(0.0) + self.spacing;
             }
             if g.w > 0 && g.h > 0 {
-                out.push(Quad { glyph: *g, x: (pen + g.ox).round(), y: g.oy.round() });
+                out.push(Quad { glyph: g, x: (pen + g.ox).round(), y: g.oy.round() });
             }
             pen += g.advance;
             prev = Some(ch);
@@ -524,7 +542,7 @@ mod tests {
                 rgba[((y * fw * 3 + fw + x) * 4 + 3) as usize] = 255;
             }
         }
-        let spr = Sprite { name: "s".into(), fw, fh, frames: vec![[0, 0, 4, 5], [4, 0, 4, 5], [8, 0, 4, 5]], sheet_w: 12, sheet_h: 5, rgba, origin: (0.0, 0.0), bbox: [0.0, 0.0, 4.0, 5.0], fps: 1.0 };
+        let spr = Sprite { name: "s".into(), fw, fh, frames: vec![[0, 0, 4, 5], [4, 0, 4, 5], [8, 0, 4, 5]], sheet_w: 12, sheet_h: 5, rgba, origin: (0.0, 0.0), bbox: [0.0, 0.0, 4.0, 5.0], fps: 1.0, rotation: Default::default() };
         let a = bake_sprite(&spr, "AB ", true, 0.0);
         assert_eq!(a.glyphs[&'A'].w, 4);
         assert_eq!(a.glyphs[&'B'].w, 2, "proportional glyphs are trimmed");

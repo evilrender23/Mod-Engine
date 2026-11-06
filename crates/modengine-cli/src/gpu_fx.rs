@@ -19,7 +19,10 @@ pub struct GpuFx {
     cur_blend: u8,
 }
 
-fn pipeline(blend: u8) -> PipelineParams {
+/// Blend state of every draw, the default material included. Colour follows the blend
+/// mode; alpha is always `src·1 + dst·(1 − src_alpha)`, so semi-transparent draws never
+/// lower the canvas alpha (an opaque canvas stays opaque) and surfaces get correct coverage.
+pub fn pipeline(blend: u8) -> PipelineParams {
     let sa = BlendFactor::Value(BlendValue::SourceAlpha);
     let (eq, s, d) = match blend {
         1 => (Equation::Add, sa, BlendFactor::One),
@@ -29,7 +32,7 @@ fn pipeline(blend: u8) -> PipelineParams {
     };
     PipelineParams {
         color_blend: Some(BlendState::new(eq, s, d)),
-        alpha_blend: Some(BlendState::new(Equation::Add, BlendFactor::Zero, BlendFactor::One)),
+        alpha_blend: Some(BlendState::new(Equation::Add, BlendFactor::One, BlendFactor::OneMinusValue(BlendValue::SourceAlpha))),
         ..Default::default()
     }
 }
@@ -126,12 +129,10 @@ impl GpuFx {
         self.mats.get(&(sh, blend)).and_then(|m| m.as_ref())
     }
 
-    fn use_current(&mut self) {
+    /// Makes the current shader + blend mode the active material. The default one is ours
+    /// too (not macroquad's, which has no separate alpha blend and lowers the canvas alpha).
+    pub fn use_current(&mut self) {
         let (sh, blend) = (self.cur_shader, self.cur_blend);
-        if sh.is_none() && blend == 0 {
-            gl_use_default_material();
-            return;
-        }
         match self.material(sh, blend) {
             Some(m) => gl_use_material(m),
             // a shader that didn't compile draws with the default one
@@ -142,10 +143,15 @@ impl GpuFx {
         }
     }
 
+    /// A custom shader is drawing (sprites then use their own texture, not the atlas).
+    pub fn shader_active(&self) -> bool {
+        self.cur_shader.is_some()
+    }
+
     pub fn begin_frame(&mut self) {
         self.cur_shader = None;
         self.cur_blend = 0;
-        gl_use_default_material();
+        self.use_current();
     }
 
     pub fn end_frame(&mut self) {

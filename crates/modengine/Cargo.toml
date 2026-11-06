@@ -12,3 +12,5 @@ serde_json = "1"
 toml = "0.8"
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# decoding sounds for the software mixer (audio.rs); same crate quad-snd uses
+audrey = { version = "0.3", default-features = false, features = ["wav", "ogg_vorbis"] }

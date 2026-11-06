@@ -51,11 +51,12 @@ pub fn draw_tiles(e: &mut Engine, li: usize, ox: f64, oy: f64, view: (f64, f64, 
     let (vx, vy, vw, vh) = view;
     let t = e.steps as f64 / e.step_rate().max(1.0);
     let mut out = vec![];
-    if let LayerKind::Tiles { tileset, set, cw, ch, grid, .. } = &e.layers[li].kind {
+    if let LayerKind::Tiles { tileset, set, cw, ch, grid, scale, .. } = &e.layers[li].kind {
         let nframes = e.sprites[*tileset as usize].frames.len() as i32;
         let ts = set.map(|s| &e.tilesets[s as usize]);
         let (cw, ch) = (*cw as f64, *ch as f64);
-        let (tw, th) = (e.sprites[*tileset as usize].fw as f64, e.sprites[*tileset as usize].fh as f64);
+        // tiles of a scaled layer are drawn bigger (no baked copy of the image)
+        let (tw, th) = (e.sprites[*tileset as usize].fw as f64 * scale.0, e.sprites[*tileset as usize].fh as f64 * scale.1);
         let c0 = ((vx - ox) / cw).floor().max(0.0) as usize;
         let r0 = ((vy - oy) / ch).floor().max(0.0) as usize;
         let c1 = ((vx + vw - ox) / cw).ceil().max(0.0) as usize;
@@ -68,6 +69,7 @@ pub fn draw_tiles(e: &mut Engine, li: usize, ox: f64, oy: f64, view: (f64, f64, 
                 }
                 let frame = ts.map(|ts| ts.frame_at(idx as u32, t)).unwrap_or(idx as u32);
                 let (x, y, sx, sy, angle) = tileset::draw_params(d, ox + c as f64 * cw, oy + r as f64 * ch, tw, th);
+                let (sx, sy) = (sx * scale.0, sy * scale.1);
                 out.push(DrawCmd::Sprite { spr: *tileset, frame, x: x as f32, y: y as f32, sx: sx as f32, sy: sy as f32, angle: angle as f32, color: col });
             }
         }
@@ -183,7 +185,7 @@ pub(crate) fn register(r: &mut Reg) {
         let (tileset, set) = tileset_arg(e, &p, 3)?;
         let spr = &e.sprites[tileset as usize];
         let (w, h) = (p.num(4)?.max(0.0) as usize, p.num(5)?.max(0.0) as usize);
-        let kind = LayerKind::Tiles { tileset, set, cw: spr.fw, ch: spr.fh, grid: vec![vec![EMPTY; w]; h], ox: p.num(1)?, oy: p.num(2)? };
+        let kind = LayerKind::Tiles { tileset, set, cw: spr.fw, ch: spr.fh, grid: vec![vec![EMPTY; w]; h], ox: p.num(1)?, oy: p.num(2)?, scale: (1.0, 1.0) };
         e.layers.push(Layer { name, depth: p.num_or(6, 0.0)?, visible: true, alpha: 1.0, kind });
         Ok(Value::Num((e.layers.len() - 1) as f64))
     });
@@ -288,6 +290,38 @@ pub(crate) fn register(r: &mut Reg) {
             *oy = v;
         }
         Ok(Value::Null)
+    });
+    r.f("tilemap_set_scale", |e, _, a| {
+        // tilemap_set_scale(tilemap, scale_x, [scale_y = scale_x]): bigger tiles and cells
+        let p = A(a);
+        let li = tm(e, &p, 0)?;
+        let sx = p.num(1)?;
+        let sy = p.num_or(2, sx)?;
+        if !(sx > 0.0 && sy > 0.0 && sx.is_finite() && sy.is_finite()) {
+            return err(format!("tilemap_set_scale: the scale must be positive, got {sx}, {sy}"));
+        }
+        if let LayerKind::Tiles { cw, ch, scale, .. } = &mut e.layers[li].kind {
+            // the unscaled cell stays the same: 16 px cells at scale 3 are 48 px
+            let (bw, bh) = (*cw as f64 / scale.0, *ch as f64 / scale.1);
+            *cw = (bw * sx).round().max(1.0) as u32;
+            *ch = (bh * sy).round().max(1.0) as u32;
+            *scale = (sx, sy);
+        }
+        Ok(Value::Null)
+    });
+    r.f("tilemap_get_scale_x", |e, _, a| {
+        let li = tm(e, &A(a), 0)?;
+        Ok(Value::Num(match &e.layers[li].kind {
+            LayerKind::Tiles { scale, .. } => scale.0,
+            _ => 1.0,
+        }))
+    });
+    r.f("tilemap_get_scale_y", |e, _, a| {
+        let li = tm(e, &A(a), 0)?;
+        Ok(Value::Num(match &e.layers[li].kind {
+            LayerKind::Tiles { scale, .. } => scale.1,
+            _ => 1.0,
+        }))
     });
     r.f("tilemap_get_tileset", |e, _, a| {
         let li = tm(e, &A(a), 0)?;

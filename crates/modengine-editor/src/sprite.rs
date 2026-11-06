@@ -20,6 +20,9 @@ struct SpriteFile {
     mask: Option<[i32; 4]>,
     palette: BTreeMap<String, String>,
     pixels: Vec<String>,
+    pixels_rle: Vec<String>,
+    rotation: Option<String>,
+    rotation_steps: Option<u32>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -41,6 +44,11 @@ struct Model {
     pix: Vec<Vec<Vec<char>>>,
     w: usize,
     h: usize,
+    /// Save the pixels run-length encoded (`pixels_rle`, much smaller for big sprites).
+    rle: bool,
+    /// `rotation` ("nearest", "rotsprite", "smooth"; None = game.toml's) and `rotation_steps`.
+    rotation: Option<String>,
+    rotation_steps: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -136,14 +144,25 @@ fn write_toml(m: &Model) -> String {
     if let Some([l, t, r, b]) = m.mask {
         s += &format!("mask = [{l}, {t}, {r}, {b}]\n");
     }
+    if let Some(r) = &m.rotation {
+        s += &format!("rotation = {}\n", q(r));
+    }
+    if let Some(n) = m.rotation_steps {
+        s += &format!("rotation_steps = {n}\n");
+    }
     if m.is_pixel() {
         let used: std::collections::BTreeSet<char> = m.pix.iter().flatten().flatten().copied().collect();
         let local: Vec<String> = m.palette.iter().filter(|(c, _)| used.contains(c)).map(|(c, v)| format!("{} = {}", q(&c.to_string()), q(&color_hex(*v)))).collect();
         if !local.is_empty() {
             s += &format!("palette = {{ {} }}\n", local.join(", "));
         }
-        let frames: Vec<String> = m.pix.iter().map(|f| format!("'''\n{}\n'''", f.iter().map(|r| r.iter().collect::<String>()).collect::<Vec<_>>().join("\n"))).collect();
-        s += &format!("pixels = [{}]\n", frames.join(", "));
+        if m.rle {
+            let frames: Vec<String> = m.pix.iter().map(|f| format!("'''\n{}\n'''", modengine::pixelart::encode_rle(f))).collect();
+            s += &format!("pixels_rle = [{}]\n", frames.join(", "));
+        } else {
+            let frames: Vec<String> = m.pix.iter().map(|f| format!("'''\n{}\n'''", f.iter().map(|r| r.iter().collect::<String>()).collect::<Vec<_>>().join("\n"))).collect();
+            s += &format!("pixels = [{}]\n", frames.join(", "));
+        }
     }
     s
 }
@@ -162,10 +181,11 @@ impl SpriteEditor {
                 palette.insert(c, col);
             }
         }
-        let mut pix: Vec<Vec<Vec<char>>> = f
-            .pixels
-            .iter()
-            .map(|fr| fr.lines().map(|l| l.trim().chars().map(|c| if c == ' ' { '.' } else { c }).collect::<Vec<char>>()).filter(|l| !l.is_empty()).collect())
+        let rle = !f.pixels_rle.is_empty();
+        let mut pix: Vec<Vec<Vec<char>>> = modengine::pixelart::frame_grids(&f.pixels, &f.pixels_rle)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .into_iter()
+            .map(|fr| fr.into_iter().map(|r| r.into_iter().map(|c| if c == ' ' { '.' } else { c }).collect()).collect())
             .collect();
         let w = pix.iter().flat_map(|f| f.iter().map(|r| r.len())).max().unwrap_or(0);
         let h = pix.iter().map(|f| f.len()).max().unwrap_or(0);
@@ -179,7 +199,7 @@ impl SpriteEditor {
         if f.image.is_none() && pix.is_empty() {
             pix.push(vec![vec!['.'; w]; h]);
         }
-        let m = Model { image: f.image, frames: f.frames, frame_size: f.frame_size, origin: parse_origin(&f.origin), fps: f.fps, mask: f.mask, palette, pix, w, h };
+        let m = Model { image: f.image, frames: f.frames, frame_size: f.frame_size, origin: parse_origin(&f.origin), fps: f.fps, mask: f.mask, palette, pix, w, h, rle, rotation: f.rotation, rotation_steps: f.rotation_steps };
         Ok(SpriteEditor {
             name: name.into(),
             path: path.into(),
@@ -540,6 +560,30 @@ impl SpriteEditor {
                 }
             });
         }
+        ui.add_space(6.0);
+        ui.strong("Rotación");
+        ui.horizontal(|ui| {
+            let label = |r: &Option<String>| match r.as_deref() {
+                None => "la del juego".to_string(),
+                Some("rotsprite") => "RotSprite (pixel art)".to_string(),
+                Some("smooth") => "suave (lineal)".to_string(),
+                Some(other) => other.to_string(),
+            };
+            egui::ComboBox::from_id_salt("sprite_rotation").selected_text(label(&self.m.rotation)).show_ui(ui, |ui| {
+                for r in [None, Some("nearest".to_string()), Some("rotsprite".to_string()), Some("smooth".to_string())] {
+                    let l = label(&r);
+                    ui.selectable_value(&mut self.m.rotation, r, l);
+                }
+            });
+            let mut steps = self.m.rotation_steps.unwrap_or(0);
+            ui.label("pasos");
+            if ui.add(egui::DragValue::new(&mut steps).range(0..=360)).on_hover_text("Ángulos por vuelta (0 = libre; 16 = de 22,5° en 22,5°)").changed() {
+                self.m.rotation_steps = (steps > 0).then_some(steps);
+            }
+        });
+        if self.m.is_pixel() {
+            ui.checkbox(&mut self.m.rle, "guardar compacto (pixels_rle)").on_hover_text("Codifica las filas por tramos: mucho más pequeño en sprites grandes");
+        }
         if self.m != before {
             self.undo.push(before);
             self.redo.clear();
@@ -822,6 +866,25 @@ mod tests {
         tex: TexCache,
         log: Vec<LogLine>,
         open: Vec<Open>,
+    }
+
+    #[test]
+    fn opens_and_saves_pixels_rle_keeping_rotation() {
+        let dir = std::env::temp_dir().join(format!("modeditor_rle_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("s.toml");
+        std::fs::write(&p, "origin = \"center\"\nrotation = \"rotsprite\"\nrotation_steps = 16\npixels_rle = ['''\nk*6 *2\n.k*4.\n''']\n").unwrap();
+        let ed = SpriteEditor::open("s", &p, true).unwrap();
+        assert_eq!((ed.m.w, ed.m.h, ed.m.rle), (6, 3, true));
+        assert_eq!(ed.m.pix[0][2].iter().collect::<String>(), ".kkkk.");
+        let out = write_toml(&ed.m);
+        assert!(out.contains("pixels_rle = ['''\nk*6 *2\n.k*4.\n''']"), "{out}");
+        assert!(out.contains("rotation = \"rotsprite\"") && out.contains("rotation_steps = 16"), "{out}");
+        // plain again when the box is unticked
+        let mut m = ed.m.clone();
+        m.rle = false;
+        assert!(write_toml(&m).contains("pixels = ['''\nkkkkkk\nkkkkkk\n.kkkk.\n''']"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

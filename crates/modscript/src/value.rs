@@ -56,6 +56,15 @@ pub struct StructObj {
 pub struct Closure {
     pub def: Rc<FuncDef>,
     pub this: Option<Scope>,
+    /// Locals of the enclosing code this function captured, shared by reference.
+    pub captured: Vec<(Sym, Rc<RefCell<Value>>)>,
+}
+
+impl Closure {
+    /// A function with nothing captured.
+    pub fn plain(def: Rc<FuncDef>, this: Option<Scope>) -> Closure {
+        Closure { def, this, captured: Vec::new() }
+    }
 }
 
 #[derive(Clone, Default)]

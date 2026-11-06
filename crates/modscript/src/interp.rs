@@ -6,7 +6,7 @@
 use crate::ast::*;
 use crate::sym::{intern, Sym};
 use crate::value::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::Rc;
 
@@ -96,6 +96,22 @@ pub trait Host {
     fn instances_of(&mut self, v: &Value) -> Vec<u32>;
     /// Read-only names: assets, constants, dynamic values like `mouse_x`.
     fn constant(&mut self, name: Sym) -> Option<Value>;
+    /// Parent's version of a method for `super.name(...)` (`name` = Some) or `inherited()`
+    /// (`name` = None: the method `current` itself), seen from the code of `current`.
+    fn super_method(&mut self, current: &Rc<FuncDef>, name: Option<Sym>) -> SuperMethod {
+        let _ = (current, name);
+        SuperMethod::NotInObject
+    }
+}
+
+/// Answer of [`Host::super_method`].
+pub enum SuperMethod {
+    /// `current` is not a method or event of an object (`inherited()` then falls back
+    /// to the host's `inherited` builtin, which handles events).
+    NotInObject,
+    /// It is, but no ancestor defines that method.
+    Missing,
+    Found(Rc<FuncDef>),
 }
 
 pub enum Flow {
@@ -106,22 +122,90 @@ pub enum Flow {
     Exit,
 }
 
+/// Storage of a local: a plain value, or a shared cell once a closure captured it.
+enum Slot {
+    Val(Value),
+    Cell(Rc<RefCell<Value>>),
+}
+
+struct Local {
+    name: Sym,
+    slot: Slot,
+    /// Captured from the code that created this closure (a `var` of the same name shadows it).
+    outer: bool,
+}
+
 struct Frame {
-    locals: Vec<(Sym, Value)>,
+    locals: Vec<Local>,
     cx: CallCx,
     file: Rc<str>,
+    /// Function being run (None for room code, init code and loose expressions).
+    def: Option<Rc<FuncDef>>,
 }
 
 impl Frame {
-    fn local_index(&self, s: Sym) -> Option<usize> {
-        self.locals.iter().rposition(|(k, _)| *k == s)
+    fn new(cx: CallCx, file: Rc<str>, def: Option<Rc<FuncDef>>, cap: usize) -> Frame {
+        Frame { locals: Vec::with_capacity(cap), cx, file, def }
     }
-    fn set_local(&mut self, s: Sym, v: Value) {
-        match self.local_index(s) {
-            Some(i) => self.locals[i].1 = v,
-            None => self.locals.push((s, v)),
+    fn local_index(&self, s: Sym) -> Option<usize> {
+        self.locals.iter().rposition(|l| l.name == s)
+    }
+    fn get(&self, i: usize) -> Value {
+        match &self.locals[i].slot {
+            Slot::Val(v) => v.clone(),
+            Slot::Cell(c) => c.borrow().clone(),
         }
     }
+    fn put(&mut self, i: usize, v: Value) {
+        match &mut self.locals[i].slot {
+            Slot::Val(x) => *x = v,
+            Slot::Cell(c) => *c.borrow_mut() = v,
+        }
+    }
+    fn push(&mut self, name: Sym, v: Value) {
+        self.locals.push(Local { name, slot: Slot::Val(v), outer: false });
+    }
+    /// `var name = v`.
+    fn declare(&mut self, s: Sym, v: Value) {
+        match self.local_index(s) {
+            Some(i) if !self.locals[i].outer => self.put(i, v),
+            _ => self.push(s, v),
+        }
+    }
+    /// For-in loop variable: a fresh binding every pass, so a closure created in the
+    /// body keeps the value of its own pass.
+    fn bind_fresh(&mut self, s: Sym, v: Value) {
+        match self.local_index(s) {
+            Some(i) if !self.locals[i].outer => self.locals[i].slot = Slot::Val(v),
+            _ => self.push(s, v),
+        }
+    }
+    /// Shared cell of local `i` (boxing it on first capture).
+    fn cell(&mut self, i: usize) -> Rc<RefCell<Value>> {
+        let slot = &mut self.locals[i].slot;
+        if let Slot::Val(v) = slot {
+            *slot = Slot::Cell(Rc::new(RefCell::new(std::mem::take(v))));
+        }
+        match slot {
+            Slot::Cell(c) => c.clone(),
+            Slot::Val(_) => unreachable!(),
+        }
+    }
+}
+
+/// Creates a function value, capturing (by reference) the enclosing locals it uses.
+fn make_closure(fr: &mut Frame, def: &Rc<FuncDef>, this: Option<Scope>) -> Value {
+    let mut captured = Vec::new();
+    for &s in def.free_names() {
+        if let Some(i) = fr.local_index(s) {
+            captured.push((s, fr.cell(i)));
+        }
+    }
+    Value::Func(Rc::new(Closure { def: def.clone(), this, captured }))
+}
+
+thread_local! {
+    static INHERITED: Sym = intern("inherited");
 }
 
 thread_local! {
@@ -133,12 +217,26 @@ const MAX_DEPTH: u32 = 256;
 
 /// Runs a function definition with the given `self`/`other` and arguments.
 pub fn run_def<H: Host>(h: &mut H, def: &Rc<FuncDef>, self_: Scope, other: Scope, args: Vec<Value>) -> RtResult<Value> {
+    run_captured(h, def, &[], self_, other, args)
+}
+
+fn run_captured<H: Host>(
+    h: &mut H,
+    def: &Rc<FuncDef>,
+    captured: &[(Sym, Rc<RefCell<Value>>)],
+    self_: Scope,
+    other: Scope,
+    args: Vec<Value>,
+) -> RtResult<Value> {
     let depth = DEPTH.with(|d| d.get());
     if depth >= MAX_DEPTH {
         return err("stack overflow: too much recursion");
     }
     DEPTH.with(|d| d.set(depth + 1));
-    let mut fr = Frame { locals: Vec::with_capacity(def.params.len() + 4), cx: CallCx { self_, other }, file: def.file.clone() };
+    let mut fr = Frame::new(CallCx { self_, other }, def.file.clone(), Some(def.clone()), captured.len() + def.params.len() + 4);
+    for (s, c) in captured {
+        fr.locals.push(Local { name: *s, slot: Slot::Cell(c.clone()), outer: true });
+    }
     let result = (|| {
         let mut args = args.into_iter();
         for p in &def.params {
@@ -148,7 +246,7 @@ pub fn run_def<H: Host>(h: &mut H, def: &Rc<FuncDef>, self_: Scope, other: Scope
                 (_, Some(d)) => eval(h, &mut fr, d)?,
                 (None, None) => Value::Null,
             };
-            fr.locals.push((p.name, v));
+            fr.push(p.name, v);
         }
         exec_block(h, &mut fr, &def.body)
     })();
@@ -169,7 +267,7 @@ pub fn run_def<H: Host>(h: &mut H, def: &Rc<FuncDef>, self_: Scope, other: Scope
 
 /// Runs a list of statements (object properties, room code, top-level init).
 pub fn run_stmts<H: Host>(h: &mut H, stmts: &[Stmt], file: &Rc<str>, cx: CallCx) -> RtResult<()> {
-    let mut fr = Frame { locals: Vec::new(), cx, file: file.clone() };
+    let mut fr = Frame::new(cx, file.clone(), None, 0);
     match exec_block(h, &mut fr, stmts)? {
         Flow::Break | Flow::Continue => err("'break'/'continue' outside of a loop"),
         _ => Ok(()),
@@ -178,7 +276,7 @@ pub fn run_stmts<H: Host>(h: &mut H, stmts: &[Stmt], file: &Rc<str>, cx: CallCx)
 
 /// Evaluates a standalone expression.
 pub fn eval_expr<H: Host>(h: &mut H, e: &Expr, file: &Rc<str>, cx: CallCx) -> RtResult<Value> {
-    let mut fr = Frame { locals: Vec::new(), cx, file: file.clone() };
+    let mut fr = Frame::new(cx, file.clone(), None, 0);
     eval(h, &mut fr, e)
 }
 
@@ -192,8 +290,8 @@ fn call_with<H: Host>(h: &mut H, f: &Value, cx: &CallCx, args: Vec<Value>, this:
         Value::Func(c) => {
             let bound = c.this.clone().or(this);
             match bound {
-                Some(s) => run_def(h, &c.def, s, cx.self_.clone(), args),
-                None => run_def(h, &c.def, cx.self_.clone(), cx.other.clone(), args),
+                Some(s) => run_captured(h, &c.def, &c.captured, s, cx.self_.clone(), args),
+                None => run_captured(h, &c.def, &c.captured, cx.self_.clone(), cx.other.clone(), args),
             }
         }
         Value::Native(s) => match this {
@@ -233,11 +331,15 @@ fn exec_inner<H: Host>(h: &mut H, fr: &mut Frame, s: &Stmt) -> RtResult<Flow> {
         }
         StmtKind::Var(decls) => {
             for (name, init) in decls {
+                if let Some(Expr::Func(_)) = init {
+                    // declared first so the function can call itself: `var f = function() { f() }`
+                    fr.declare(*name, Value::Null);
+                }
                 let v = match init {
                     Some(e) => eval(h, fr, e)?,
                     None => Value::Null,
                 };
-                fr.set_local(*name, v);
+                fr.declare(*name, v);
             }
         }
         StmtKind::Assign(target, op, rhs) => {
@@ -311,6 +413,38 @@ fn exec_inner<H: Host>(h: &mut H, fr: &mut Frame, s: &Stmt) -> RtResult<Flow> {
                 }
                 if let Some(st) = step {
                     exec(h, fr, st)?;
+                }
+            }
+        }
+        StmtKind::ForIn(a, b, coll, body) => {
+            let c = eval(h, fr, coll)?;
+            let items: Vec<(Value, Value)> = match &c {
+                Value::Array(arr) => arr.borrow().iter().enumerate().map(|(i, v)| (Value::Num(i as f64), v.clone())).collect(),
+                Value::Struct(st) => st.borrow().fields.iter().map(|(k, v)| (Value::Str(k.name()), v.clone())).collect(),
+                Value::Str(s) => s.chars().enumerate().map(|(i, ch)| (Value::Num(i as f64), Value::string(ch.to_string()))).collect(),
+                Value::Inst(_) | Value::All | Value::Asset(AssetKind::Object, _) => {
+                    h.instances_of(&c).into_iter().enumerate().map(|(i, id)| (Value::Num(i as f64), Value::Inst(id))).collect()
+                }
+                other => return err(format!("for-in needs an array, struct, string or object, got {}", other.type_name())),
+            };
+            let keys_first = matches!(c, Value::Struct(_));
+            for (k, v) in items {
+                if let Value::Inst(id) = v {
+                    if !h.inst_alive(id) {
+                        continue;
+                    }
+                }
+                match b {
+                    None => fr.bind_fresh(*a, if keys_first { k } else { v }),
+                    Some(b) => {
+                        fr.bind_fresh(*a, k);
+                        fr.bind_fresh(*b, v);
+                    }
+                }
+                match exec(h, fr, body)? {
+                    Flow::Break => break,
+                    Flow::Normal | Flow::Continue => {}
+                    f => return Ok(f),
                 }
             }
         }
@@ -391,7 +525,7 @@ fn exec_inner<H: Host>(h: &mut H, fr: &mut Frame, s: &Stmt) -> RtResult<Flow> {
                 Scope::Global => None,
                 s => Some(s.clone()),
             };
-            let f = Value::Func(Rc::new(Closure { def: def.clone(), this }));
+            let f = make_closure(fr, def, this);
             let place = match &fr.cx.self_ {
                 Scope::Global => Place::Global(*name),
                 s => Place::Var(s.clone(), *name),
@@ -484,7 +618,7 @@ fn scope_set<H: Host>(h: &mut H, sc: &Scope, name: Sym, v: Value) -> RtResult<()
 
 fn place_get<H: Host>(h: &mut H, fr: &mut Frame, p: &Place) -> RtResult<Option<Value>> {
     Ok(match p {
-        Place::Local(i) => Some(fr.locals[*i].1.clone()),
+        Place::Local(i) => Some(fr.get(*i)),
         Place::Global(s) => h.global_get(*s),
         Place::Var(sc, s) => scope_get(h, sc, *s)?,
         Place::Vars(ids, s) => match ids.first() {
@@ -505,7 +639,7 @@ fn place_get_req<H: Host>(h: &mut H, fr: &mut Frame, p: &Place, target: &Expr) -
 
 fn place_set<H: Host>(h: &mut H, fr: &mut Frame, p: &Place, v: Value) -> RtResult<()> {
     match p {
-        Place::Local(i) => fr.locals[*i].1 = v,
+        Place::Local(i) => fr.put(*i, v),
         Place::Global(s) => h.global_set(*s, v),
         Place::Var(sc, s) => scope_set(h, sc, *s, v)?,
         Place::Vars(ids, s) => {
@@ -580,7 +714,7 @@ fn eval<H: Host>(h: &mut H, fr: &mut Frame, e: &Expr) -> RtResult<Value> {
             let st: StructRef = Default::default();
             for (k, ve) in fields {
                 let v = match ve {
-                    Expr::Func(def) => Value::Func(Rc::new(Closure { def: def.clone(), this: Some(Scope::Struct(st.clone())) })),
+                    Expr::Func(def) => make_closure(fr, def, Some(Scope::Struct(st.clone()))),
                     other => eval(h, fr, other)?,
                 };
                 st.borrow_mut().fields.insert(*k, v);
@@ -650,21 +784,36 @@ fn eval<H: Host>(h: &mut H, fr: &mut Frame, e: &Expr) -> RtResult<Value> {
                 Scope::Global => None,
                 s => Some(s.clone()),
             };
-            Value::Func(Rc::new(Closure { def: def.clone(), this }))
+            make_closure(fr, def, this)
+        }
+        Expr::Super(name) => {
+            let def = super_def(h, fr, Some(*name))?;
+            Value::Func(Rc::new(Closure::plain(def, Some(fr.cx.self_.clone()))))
         }
     })
 }
 
+/// The parent's version of method `name` for `super.name`.
+fn super_def<H: Host>(h: &mut H, fr: &Frame, name: Option<Sym>) -> RtResult<Rc<FuncDef>> {
+    let what = name.map(|n| format!("super.{n}")).unwrap_or_else(|| "inherited()".into());
+    let Some(cur) = fr.def.clone() else { return err(format!("{what} solo se puede usar dentro de un método o evento de un objeto")) };
+    match h.super_method(&cur, name) {
+        SuperMethod::Found(d) => Ok(d),
+        SuperMethod::Missing => err(format!("{what}: ningún objeto padre define ese método")),
+        SuperMethod::NotInObject => err(format!("{what} solo se puede usar dentro de un método o evento de un objeto (no en funciones anónimas ni scripts)")),
+    }
+}
+
 fn read_ident<H: Host>(h: &mut H, fr: &mut Frame, s: Sym) -> RtResult<Value> {
     if let Some(i) = fr.local_index(s) {
-        return Ok(fr.locals[i].1.clone());
+        return Ok(fr.get(i));
     }
     let self_ = fr.cx.self_.clone();
     if let Some(v) = scope_get(h, &self_, s)? {
         return Ok(v);
     }
     if let Some(def) = h.user_function(s) {
-        return Ok(Value::Func(Rc::new(Closure { def, this: None })));
+        return Ok(Value::Func(Rc::new(Closure::plain(def, None))));
     }
     if let Some(v) = h.constant(s) {
         return Ok(v);
@@ -738,7 +887,7 @@ fn eval_call<H: Host>(h: &mut H, fr: &mut Frame, callee: &Expr, args: &[Expr]) -
         Expr::Ident(s) => {
             let s = *s;
             if let Some(i) = fr.local_index(s) {
-                let f = fr.locals[i].1.clone();
+                let f = fr.get(i);
                 let a = eval_args(h, fr, args)?;
                 return call_with(h, &f, &fr.cx.clone(), a, None);
             }
@@ -755,6 +904,23 @@ fn eval_call<H: Host>(h: &mut H, fr: &mut Frame, callee: &Expr, args: &[Expr]) -
             if let Some(def) = h.user_function(s) {
                 let a = eval_args(h, fr, args)?;
                 return run_def(h, &def, fr.cx.self_.clone(), fr.cx.other.clone(), a);
+            }
+            if s == INHERITED.with(|x| *x) {
+                if let Some(cur) = fr.def.clone() {
+                    match h.super_method(&cur, None) {
+                        SuperMethod::NotInObject => {}
+                        SuperMethod::Missing => return Ok(Value::Null),
+                        SuperMethod::Found(def) => {
+                            // no arguments: pass on the current values of this method's parameters
+                            let a = if args.is_empty() {
+                                cur.params.iter().map(|p| fr.local_index(p.name).map(|i| fr.get(i)).unwrap_or_default()).collect()
+                            } else {
+                                eval_args(h, fr, args)?
+                            };
+                            return run_def(h, &def, fr.cx.self_.clone(), fr.cx.other.clone(), a);
+                        }
+                    }
+                }
             }
             if h.has_native(s) {
                 let a = eval_args(h, fr, args)?;
@@ -785,6 +951,11 @@ fn eval_call<H: Host>(h: &mut H, fr: &mut Frame, callee: &Expr, args: &[Expr]) -
             };
             let a = eval_args(h, fr, args)?;
             call_with(h, &f, &fr.cx.clone(), a, this)
+        }
+        Expr::Super(name) => {
+            let def = super_def(h, fr, Some(*name))?;
+            let a = eval_args(h, fr, args)?;
+            run_def(h, &def, fr.cx.self_.clone(), fr.cx.other.clone(), a)
         }
         other => {
             let f = eval(h, fr, other)?;
@@ -864,4 +1035,56 @@ pub fn binary(op: BinOp, a: &Value, b: &Value) -> RtResult<Value> {
         Shl => Value::Num(((num(a)? as i64) << (num(b)? as i64).clamp(0, 63)) as f64),
         Shr => Value::Num(((num(a)? as i64) >> (num(b)? as i64).clamp(0, 63)) as f64),
     })
+}
+
+// ------------------------------------------------------------------ coroutine support (coro.rs)
+
+/// Locals and `self`/`other` of a suspended coroutine.
+pub(crate) struct CoFrame(Frame);
+
+/// Frame for running function value `f` as a coroutine: the same setup as calling it
+/// (bound `self`, captured locals, parameters with defaults).
+pub(crate) fn co_frame<H: Host>(h: &mut H, f: &Value, cx: &CallCx, args: Vec<Value>) -> RtResult<(CoFrame, Rc<FuncDef>)> {
+    let Value::Func(c) = f else { return err(format!("coroutine() needs a script function, got {}", f.type_name())) };
+    let (self_, other) = match c.this.clone() {
+        Some(s) => (s, cx.self_.clone()),
+        None => (cx.self_.clone(), cx.other.clone()),
+    };
+    let def = c.def.clone();
+    let mut fr = Frame::new(CallCx { self_, other }, def.file.clone(), Some(def.clone()), c.captured.len() + def.params.len() + 4);
+    for (s, cell) in &c.captured {
+        fr.locals.push(Local { name: *s, slot: Slot::Cell(cell.clone()), outer: true });
+    }
+    let mut args = args.into_iter();
+    for p in &def.params {
+        let v = match (args.next(), &p.default) {
+            (Some(v), None) => v,
+            (Some(v), Some(_)) if !v.is_null() => v,
+            (_, Some(d)) => eval(h, &mut fr, d)?,
+            (None, None) => Value::Null,
+        };
+        fr.push(p.name, v);
+    }
+    Ok((CoFrame(fr), def))
+}
+
+pub(crate) fn co_exec<H: Host>(h: &mut H, fr: &mut CoFrame, s: &Stmt) -> RtResult<Flow> {
+    exec(h, &mut fr.0, s)
+}
+
+pub(crate) fn co_eval<H: Host>(h: &mut H, fr: &mut CoFrame, e: &Expr) -> RtResult<Value> {
+    eval(h, &mut fr.0, e)
+}
+
+/// Loop variable of a for-in pass.
+pub(crate) fn co_bind(fr: &mut CoFrame, s: Sym, v: Value) {
+    fr.0.bind_fresh(s, v)
+}
+
+pub(crate) fn co_has_local(fr: &CoFrame, s: Sym) -> bool {
+    fr.0.local_index(s).is_some()
+}
+
+pub(crate) fn co_cx(fr: &CoFrame) -> &CallCx {
+    &fr.0.cx
 }

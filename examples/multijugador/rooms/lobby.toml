@@ -1,0 +1,8 @@
+background = "#29366f"
+
+[[layer]]
+type = "instances"
+instances = [
+    { object = "NetManager", x = 0, y = 0 },
+    { object = "Lobby", x = 0, y = 0 },
+]

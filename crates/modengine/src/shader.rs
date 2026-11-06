@@ -113,6 +113,11 @@ impl ShaderAsset {
         out.extend(link_problems(&self.vsh, &self.fsh));
         out
     }
+
+    /// Things that compile but may misbehave on some GPUs (see [`precision_warnings`]).
+    pub fn warnings(&self) -> Vec<String> {
+        precision_warnings(&self.fsh).into_iter().map(|d| format!("fsh:{}: {}", d.line, d.msg)).collect()
+    }
 }
 
 /// `shaders/` of a project. A shader is any name with a `.vsh` and/or `.fsh` file, either
@@ -314,9 +319,15 @@ void main() {{
 }}
 "
         ),
+        // highp by default: pixel-coordinate maths (length() of 1280×720 vectors) overflows
+        // mediump's ±16384 range. GLES devices without highp in fragment shaders fall back.
         Stage::Fragment => format!(
             "#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 uniform sampler2D Texture;
 #define gm_BaseTexture Texture
 #line 1
@@ -444,6 +455,31 @@ pub fn validate(src: &str, stage: Stage) -> Vec<Diag> {
     out
 }
 
+/// Risky precision (warnings, not errors): a fragment shader that asks for `mediump`/`lowp`
+/// and does length()/distance()/dot() with pixel-sized values. mediump only guarantees
+/// ±16384, so `length(vec2(1280.0, 720.0))` (1280² ≈ 1.6 M) gives inf/NaN without an error.
+pub fn precision_warnings(src: &str) -> Vec<Diag> {
+    let clean = strip_comments(src);
+    let low = clean.lines().enumerate().find(|(_, l)| l.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).any(|w| w == "mediump" || w == "lowp"));
+    let Some((line, _)) = low else { return vec![] };
+    let word = |w: &str| clean.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).any(|x| x == w);
+    let math = ["length", "distance", "dot", "pow"].iter().any(|f| word(f));
+    // pixel coordinates: gl_FragCoord or a literal of 256 or more (1280.0, 720.0...)
+    let big_literal = clean
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .any(|t| t.contains(|c: char| c.is_ascii_digit()) && t.parse::<f64>().is_ok_and(|v| v >= 256.0));
+    if math && (word("gl_FragCoord") || big_literal) {
+        return vec![Diag {
+            line: line as u32 + 1,
+            msg: "precisión media (`mediump`/`lowp`) con length()/distance()/dot() sobre coordenadas de píxel: \
+                  mediump solo llega a ±16384 (1280² ≈ 1,6 millones) y el resultado es inf/NaN sin ningún error. \
+                  Quita la declaración (el motor usa highp por defecto) o trabaja en 0..1 (v_vTexcoord)"
+                .into(),
+        }];
+    }
+    vec![]
+}
+
 /// A varying read by the fragment shader must be written by the vertex shader.
 pub fn link_problems(vsh: &str, fsh: &str) -> Vec<String> {
     let v = varyings(vsh);
@@ -544,5 +580,30 @@ mod tests {
         let f = prepare("#version 100\nuniform sampler2D gm_BaseTexture;\nvoid main(){}", Stage::Fragment);
         assert_eq!(f.matches("#version").count(), 1);
         assert_eq!(f.matches("uniform sampler2D").count(), 1);
+    }
+
+    #[test]
+    fn fragment_defaults_to_highp() {
+        let f = prepare(DEFAULT_FSH, Stage::Fragment);
+        let hi = f.find("precision highp float;").expect("highp");
+        let guard = f.find("#ifdef GL_FRAGMENT_PRECISION_HIGH").expect("fallback guard");
+        assert!(guard < hi);
+        assert!(f.contains("#else\nprecision mediump float;\n#endif"));
+    }
+
+    #[test]
+    fn warns_about_mediump_pixel_maths() {
+        let bad = "precision mediump float;\nvarying vec2 v_vTexcoord;\nvoid main() {\n  float d = length(v_vTexcoord * vec2(1280.0, 720.0));\n  gl_FragColor = vec4(d);\n}\n";
+        let w = precision_warnings(bad);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].line, 1);
+        assert!(w[0].msg.contains("16384"));
+        assert_eq!(precision_warnings(&bad.replace("precision mediump float;", "")), vec![]);
+        assert_eq!(precision_warnings(&bad.replace("1280.0, 720.0", "1.0, 0.5")), vec![]);
+        let frag = "precision lowp float;\nvoid main() { gl_FragColor = vec4(distance(gl_FragCoord.xy, vec2(1.0))); }";
+        assert_eq!(precision_warnings(frag).len(), 1);
+        let s = ShaderAsset::new("x", DEFAULT_VSH, bad);
+        assert!(s.problems().is_empty());
+        assert!(s.warnings()[0].starts_with("fsh:1: "));
     }
 }

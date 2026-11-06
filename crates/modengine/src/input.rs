@@ -10,6 +10,9 @@ pub const KEY_NAMES: &[&str] = &[
     "slash",
 ];
 
+/// Index of the backspace key in [`KEY_NAMES`].
+pub const BACKSPACE: usize = 11;
+
 pub fn key_index(name: &str) -> Option<usize> {
     KEY_NAMES.iter().position(|k| *k == name)
 }
@@ -30,6 +33,8 @@ pub struct Input {
     pub wheel: f64,
     /// Fingers on a touch screen, in game-screen (GUI) coordinates.
     pub touches: Vec<(f64, f64)>,
+    /// Text typed since the last step (feeds `keyboard_string`).
+    pub typed: String,
 }
 
 impl Default for Input {
@@ -46,6 +51,7 @@ impl Default for Input {
             mouse_y: 0.0,
             wheel: 0.0,
             touches: vec![],
+            typed: String::new(),
         }
     }
 }
@@ -67,5 +73,6 @@ impl Input {
         self.mouse_pressed = [false; 3];
         self.mouse_released = [false; 3];
         self.wheel = 0.0;
+        self.typed.clear();
     }
 }

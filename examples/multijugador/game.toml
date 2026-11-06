@@ -1,0 +1,24 @@
+# Multijugador — Mod Engine example: 2-4 players on the same room over the network.
+#
+# Try it on one computer:
+#   modengine run examples/multijugador --instance 1     (press H: host)
+#   modengine run examples/multijugador --instance 2     (press J: join 127.0.0.1)
+# or from the editor: Juego → Ejecutar 2 instancias.
+# Dedicated server (no window, it is a player that never moves):
+#   modengine server examples/multijugador --input "5:h"
+[game]
+name = "Multijugador"
+start_room = "lobby"
+rooms = ["lobby", "arena"]
+
+[display]
+width = 480
+height = 270
+scale = 2
+step_rate = 60
+letterbox = "#1a1c2c"
+
+[android]
+package = "com.modengine.multijugador"
+virtual_pad = "dpad"
+virtual_buttons = ["h:Host", "j:Unirse", "t:Chat"]

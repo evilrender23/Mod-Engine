@@ -1,13 +1,12 @@
 //! Window, rendering, input and audio through macroquad.
 
 use crate::script_input::ScriptedInput;
-use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 use modengine::draw::{parse_color, DrawCmd, Rgba};
 use modengine::input::{Input, KEY_NAMES};
-use modengine::project::Sprite;
-use modengine::{AudioCmd, Engine};
+use modengine::Engine;
 
+#[derive(Default)]
 pub struct RunOpts {
     /// Save a PNG of the window after this many rendered frames, then quit.
     pub screenshot: Option<(u64, String)>,
@@ -15,6 +14,11 @@ pub struct RunOpts {
     /// On-screen touch controls from `[android]`: `Some(true)` shows them (the mouse acts
     /// as a finger on desktop), `None` only on Android.
     pub touch: Option<bool>,
+    /// `--instance N` (several copies of the game for multiplayer tests): the window goes
+    /// to its own spot, side by side with the others.
+    pub instance: Option<u32>,
+    /// Terminal test run: screenshots at logic steps, lockstep, hidden window (test_run.rs).
+    pub test: Option<crate::test_run::WindowTest>,
 }
 
 fn col(c: Rgba) -> Color {
@@ -122,6 +126,8 @@ struct InputCollector {
     pad: Option<crate::touch::VirtualPad>,
     /// Desktop testing of the touch pad: the mouse is a finger.
     mouse_finger: bool,
+    /// Characters typed since the last step (`keyboard_string`).
+    typed: String,
 }
 
 const BUTTONS: [MouseButton; 3] = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
@@ -138,6 +144,7 @@ impl InputCollector {
             wheel: 0.0,
             pad: None,
             mouse_finger: false,
+            typed: String::new(),
         }
     }
 
@@ -167,6 +174,11 @@ impl InputCollector {
             self.mreleased[i] |= is_mouse_button_released(*b);
         }
         self.wheel += mouse_wheel().1;
+        while let Some(c) = get_char_pressed() {
+            if self.typed.len() < 256 {
+                self.typed.push(c);
+            }
+        }
         let fingers = self.fingers();
         if let Some(pad) = &mut self.pad {
             pad.layout(screen_width(), screen_height());
@@ -188,6 +200,7 @@ impl InputCollector {
             inp.mouse_released[i] = std::mem::take(&mut self.mreleased[i]);
         }
         inp.wheel = std::mem::take(&mut self.wheel) as f64;
+        inp.typed.push_str(&std::mem::take(&mut self.typed));
         let (mx, my) = mouse_position();
         inp.mouse_x = ((mx - lay.ox) / lay.scale) as f64;
         inp.mouse_y = ((my - lay.oy) / lay.scale) as f64;
@@ -213,7 +226,7 @@ fn layout(rw: f32, rh: f32, pixel_perfect: bool) -> Layout {
     Layout { scale: s, ox: ((sw - w) / 2.0).floor(), oy: ((sh - h) / 2.0).floor(), w, h }
 }
 
-struct Gpu {
+pub(crate) struct Gpu {
     /// Shaders and blend modes (see gpu_fx.rs).
     fx: std::cell::RefCell<crate::gpu_fx::GpuFx>,
     textures: Vec<Texture2D>,
@@ -222,28 +235,90 @@ struct Gpu {
     fonts: Vec<Option<Font>>,
     font_sizes: Vec<f32>,
     default_size: f32,
+    /// Sprite atlases and cached RotSprite images (see sprite_draw.rs).
+    sprites: std::cell::RefCell<crate::sprite_draw::SpriteDraw>,
 }
 
-fn draw_sprite(spr: &Sprite, tex: &Texture2D, frame: u32, x: f32, y: f32, sx: f32, sy: f32, angle: f32, color: Color) {
-    let Some(fr) = spr.frames.get(frame as usize) else { return };
-    let (fw, fh) = (fr[2] as f32, fr[3] as f32);
-    let (ox, oy) = (spr.origin.0 as f32, spr.origin.1 as f32);
-    let left = (x - ox * sx).min(x + (fw - ox) * sx);
-    let top = (y - oy * sy).min(y + (fh - oy) * sy);
-    draw_texture_ex(
-        tex,
-        left,
-        top,
-        color,
-        DrawTextureParams {
-            dest_size: Some(vec2(fw * sx.abs(), fh * sy.abs())),
-            source: Some(Rect::new(fr[0] as f32, fr[1] as f32, fw, fh)),
-            rotation: -angle.to_radians(),
-            flip_x: sx < 0.0,
-            flip_y: sy < 0.0,
-            pivot: Some(vec2(x, y)),
-        },
-    );
+impl Gpu {
+    /// Uploads sprites and fonts and installs the text measuring of the backend.
+    pub(crate) fn new(e: &mut Engine) -> Gpu {
+        let smooth = e.config.display.smooth;
+        let filter = if smooth { FilterMode::Linear } else { FilterMode::Nearest };
+        let textures: Vec<Texture2D> = e
+            .sprites
+            .iter()
+            .map(|s| {
+                let t = Texture2D::from_rgba8(s.sheet_w as u16, s.sheet_h as u16, &s.rgba);
+                t.set_filter(filter);
+                t
+            })
+            .collect();
+        let atlases: Vec<_> = e
+            .fonts
+            .iter()
+            .map(|f| {
+                f.atlas.as_ref().map(|a| {
+                    let t = Texture2D::from_rgba8(a.w as u16, a.h as u16, &a.rgba);
+                    // pixel fonts stay crisp; antialiased ones follow the game's filter
+                    t.set_filter(if f.antialias { filter } else { FilterMode::Nearest });
+                    (t, a.clone())
+                })
+            })
+            .collect();
+        let mut fonts: Vec<Option<Font>> = Vec::new();
+        for f in &e.fonts {
+            if let Some(err) = &f.error {
+                eprintln!("[error] font '{}': {err} (using the default font)", f.name);
+            }
+            if f.atlas.is_some() || f.data.is_empty() || f.error.is_some() {
+                // baked (drawn from its atlas) or the built-in font at another size
+                fonts.push(None);
+                continue;
+            }
+            match load_ttf_font_from_bytes(&f.data) {
+                Ok(mut font) => {
+                    font.set_filter(filter);
+                    fonts.push(Some(font));
+                }
+                Err(err) => {
+                    eprintln!("[error] font '{}': {err:?} (using the default font)", f.name);
+                    fonts.push(None);
+                }
+            }
+        }
+        // particle shapes are smooth textures even in pixel-perfect games
+        for k in 0..modengine::particles::SHAPE_NAMES.len() {
+            if let Some(t) = textures.get(e.parts.shape_base as usize + k) {
+                t.set_filter(FilterMode::Linear);
+            }
+        }
+        let measure_atlases: Vec<_> = atlases.iter().map(|a| a.as_ref().map(|(_, at)| at.clone())).collect();
+        let shapes = e.parts.shape_base as usize..e.parts.shape_base as usize + modengine::particles::SHAPE_NAMES.len();
+        let sprites = std::cell::RefCell::new(crate::sprite_draw::SpriteDraw::new(&e.sprites, &textures, smooth, shapes));
+        let gpu = Gpu {
+            sprites,
+            fx: std::cell::RefCell::new(crate::gpu_fx::GpuFx::new(e)),
+            textures,
+            atlases,
+            font_sizes: e.fonts.iter().map(|f| f.size).collect(),
+            fonts: fonts.clone(),
+            default_size: e.config.display.font_size,
+        };
+        let (sizes, default_size) = (gpu.font_sizes.clone(), gpu.default_size);
+        e.measure = Box::new(move |font, text, scale| {
+            if let Some(Some(a)) = font.and_then(|i| measure_atlases.get(i as usize)) {
+                return a.measure(text, scale);
+            }
+            let (f, size) = match font.and_then(|i| fonts.get(i as usize)).and_then(|f| f.as_ref()) {
+                Some(f) => (Some(f), sizes[font.unwrap() as usize]),
+                None => (None, default_size),
+            };
+            let lines: Vec<&str> = text.split('\n').collect();
+            let w = lines.iter().map(|l| measure_text(l, f, size.round() as u16, scale).width).fold(0.0, f32::max);
+            (w, size * scale * lines.len() as f32)
+        });
+        gpu
+    }
 }
 
 fn text_metrics(gpu: &Gpu, font: Option<u32>) -> (Option<&Font>, f32) {
@@ -313,27 +388,25 @@ fn draw_atlas_text(tex: &Texture2D, atlas: &modengine::font::GlyphAtlas, text: &
     }
 }
 
-fn camera_for(rt: &RenderTarget, x: f32, y: f32, w: f32, h: f32) -> Camera2D {
-    Camera2D {
-        target: vec2(x + w / 2.0, y + h / 2.0),
-        zoom: vec2(2.0 / w, 2.0 / h),
-        render_target: Some(rt.clone()),
-        ..Default::default()
-    }
-}
-
-fn exec(e: &Engine, gpu: &Gpu, rt: &RenderTarget) {
-    let (rw, rh) = (e.cam.w as f32, e.cam.h as f32);
+/// Replays the engine's draw list into the canvas (application_surface, surfaces, post_draw).
+pub(crate) fn exec(e: &Engine, gpu: &Gpu, cv: &mut crate::canvas::Canvas) {
     gpu.fx.borrow_mut().begin_frame();
+    gpu.sprites.borrow_mut().begin_frame();
+    cv.begin(e);
     for c in &e.cmds {
         match c {
             DrawCmd::Shader(_) | DrawCmd::Uniform { .. } | DrawCmd::Sampler { .. } | DrawCmd::Blend(_) => gpu.fx.borrow_mut().apply(c, &gpu.textures),
-            DrawCmd::View { x, y, w, h } => set_camera(&camera_for(rt, *x, *y, *w, *h)),
-            DrawCmd::Gui => set_camera(&camera_for(rt, 0.0, 0.0, rw, rh)),
+            DrawCmd::View { .. } | DrawCmd::Gui | DrawCmd::Target(_) | DrawCmd::PostDraw { .. } => {
+                cv.apply(c, e, &mut gpu.fx.borrow_mut());
+                // a new camera / target starts unclipped
+                crate::scissor::set(None, cv);
+            }
+            DrawCmd::Surface { .. } => cv.apply(c, e, &mut gpu.fx.borrow_mut()),
+            DrawCmd::Scissor(r) => crate::scissor::set(*r, cv),
             DrawCmd::Clear(c) => clear_background(col(*c)),
             DrawCmd::Sprite { spr, frame, x, y, sx, sy, angle, color } => {
-                let s = *spr as usize;
-                draw_sprite(&e.sprites[s], &gpu.textures[s], *frame, *x, *y, *sx, *sy, *angle, col(*color));
+                let shader = gpu.fx.borrow().shader_active();
+                gpu.sprites.borrow_mut().draw(&e.sprites, &gpu.textures[*spr as usize], *spr, *frame, *x, *y, *sx, *sy, *angle, col(*color), shader);
             }
             DrawCmd::Stretched { spr, frame, x, y, w, h, color } => {
                 let s = &e.sprites[*spr as usize];
@@ -379,102 +452,47 @@ fn exec(e: &Engine, gpu: &Gpu, rt: &RenderTarget) {
             }
         }
     }
+    crate::scissor::set(None, cv);
     gpu.fx.borrow_mut().end_frame();
+    cv.end(e);
 }
 
 pub async fn run(mut e: Engine, mut opts: RunOpts) {
-    let smooth = e.config.display.smooth;
-    let filter = if smooth { FilterMode::Linear } else { FilterMode::Nearest };
-    let textures: Vec<Texture2D> = e
-        .sprites
-        .iter()
-        .map(|s| {
-            let t = Texture2D::from_rgba8(s.sheet_w as u16, s.sheet_h as u16, &s.rgba);
-            t.set_filter(filter);
-            t
-        })
-        .collect();
-    let atlases: Vec<_> = e
-        .fonts
-        .iter()
-        .map(|f| {
-            f.atlas.as_ref().map(|a| {
-                let t = Texture2D::from_rgba8(a.w as u16, a.h as u16, &a.rgba);
-                // pixel fonts stay crisp; antialiased ones follow the game's filter
-                t.set_filter(if f.antialias { filter } else { FilterMode::Nearest });
-                (t, a.clone())
-            })
-        })
-        .collect();
-    let mut fonts: Vec<Option<Font>> = Vec::new();
-    for f in &e.fonts {
-        if let Some(err) = &f.error {
-            eprintln!("[error] font '{}': {err} (using the default font)", f.name);
+    // the engine's software mixer (pitch, pan, fades, groups...) plays through the audio
+    // thread of macroquad's quad-snd (see vendor/quad-snd)
+    modengine::audio::decode_all(&mut e);
+    let mixer = modengine::audio::handle(&mut e);
+    mixer.lock().unwrap_or_else(|p| p.into_inner()).realtime = true;
+    quad_snd::set_mix_hook(Some(Box::new(move |buf: &mut [f32]| {
+        if let Ok(mut m) = mixer.lock() {
+            m.render(buf);
         }
-        if f.atlas.is_some() || f.data.is_empty() || f.error.is_some() {
-            // baked (drawn from its atlas) or the built-in font at another size
-            fonts.push(None);
-            continue;
-        }
-        match load_ttf_font_from_bytes(&f.data) {
-            Ok(mut font) => {
-                font.set_filter(filter);
-                fonts.push(Some(font));
-            }
-            Err(err) => {
-                eprintln!("[error] font '{}': {err:?} (using the default font)", f.name);
-                fonts.push(None);
-            }
-        }
-    }
-    let mut sounds: Vec<Option<Sound>> = Vec::new();
-    for s in &e.sounds {
-        match load_sound_from_bytes(&s.data).await {
-            Ok(snd) => sounds.push(Some(snd)),
-            Err(err) => {
-                eprintln!("[error] sound '{}': {err:?}", s.name);
-                sounds.push(None);
-            }
-        }
-    }
-    // particle shapes are smooth textures even in pixel-perfect games
-    for k in 0..modengine::particles::SHAPE_NAMES.len() {
-        if let Some(t) = textures.get(e.parts.shape_base as usize + k) {
-            t.set_filter(FilterMode::Linear);
-        }
-    }
-    let measure_atlases: Vec<_> = atlases.iter().map(|a| a.as_ref().map(|(_, at)| at.clone())).collect();
-    let gpu = Gpu {
-        fx: std::cell::RefCell::new(crate::gpu_fx::GpuFx::new(&mut e)),
-        textures,
-        atlases,
-        font_sizes: e.fonts.iter().map(|f| f.size).collect(),
-        fonts: fonts.clone(),
-        default_size: e.config.display.font_size,
-    };
-    let (sizes, default_size) = (gpu.font_sizes.clone(), gpu.default_size);
-    e.measure = Box::new(move |font, text, scale| {
-        if let Some(Some(a)) = font.and_then(|i| measure_atlases.get(i as usize)) {
-            return a.measure(text, scale);
-        }
-        let (f, size) = match font.and_then(|i| fonts.get(i as usize)).and_then(|f| f.as_ref()) {
-            Some(f) => (Some(f), sizes[font.unwrap() as usize]),
-            None => (None, default_size),
-        };
-        let lines: Vec<&str> = text.split('\n').collect();
-        let w = lines.iter().map(|l| measure_text(l, f, size.round() as u16, scale).width).fold(0.0, f32::max);
-        (w, size * scale * lines.len() as f32)
-    });
+    })));
+    let gpu = Gpu::new(&mut e);
+    let filter = if e.config.display.smooth { FilterMode::Linear } else { FilterMode::Nearest };
+
 
     let (rw, rh) = (e.config.display.width, e.config.display.height);
-    let rt = render_target(rw, rh);
-    rt.texture.set_filter(filter);
+    let mut canvas = crate::canvas::Canvas::new(rw, rh, filter);
     let letterbox = parse_color(&e.config.display.letterbox).unwrap_or(0);
     let pixel_perfect = e.config.display.pixel_perfect;
 
     prevent_quit();
+    if let Some(n) = opts.instance {
+        let d = &e.config.display;
+        let w = d.width * d.scale.max(1);
+        let x = 20 + (n.max(1) - 1) % 3 * (w + 16);
+        let y = 40 + (n.max(1) - 1) / 3 * (d.height * d.scale.max(1) + 48);
+        macroquad::miniquad::window::set_window_position(x, y);
+    }
+    if opts.test.as_ref().is_some_and(|t| t.hidden) {
+        crate::test_run::hide_window();
+    }
+    e.test_starting();
     e.start();
+    e.test_started();
     let mut collector = InputCollector::new();
+    let mut cursor = crate::scissor::CursorState::new();
     if opts.touch.unwrap_or(cfg!(target_os = "android")) {
         collector.pad = crate::touch::VirtualPad::from_config(&e.config.android);
         collector.mouse_finger = !cfg!(target_os = "android");
@@ -501,13 +519,17 @@ pub async fn run(mut e: Engine, mut opts: RunOpts) {
 
         let dt = 1.0 / e.step_rate();
         acc += (get_frame_time() as f64).min(0.25);
+        if opts.test.as_ref().is_some_and(|t| t.lockstep) {
+            // one logic step per frame, whatever the real time
+            acc = dt;
+        }
         let mut ticks = 0;
         while acc >= dt && ticks < 5 {
             collector.apply(&mut e.input, &lay);
             if let Some(si) = &opts.input {
-                si.apply(e.steps + 1, &mut e.input);
+                si.apply_to(e.steps + 1, &mut e);
             }
-            e.tick();
+            e.test_tick();
             acc -= dt;
             ticks += 1;
             if e.quit {
@@ -518,36 +540,26 @@ pub async fn run(mut e: Engine, mut opts: RunOpts) {
             acc = 0.0;
         }
         e.fps = get_fps() as f64;
+        cursor.update(&e);
 
-        for cmd in e.audio.drain(..) {
-            match cmd {
-                AudioCmd::Play { snd, looped, volume } => {
-                    if let Some(Some(s)) = sounds.get(snd as usize) {
-                        play_sound(s, PlaySoundParams { looped, volume: volume as f32 });
-                    }
-                }
-                AudioCmd::Stop(snd) => {
-                    if let Some(Some(s)) = sounds.get(snd as usize) {
-                        stop_sound(s);
-                    }
-                }
-                AudioCmd::StopAll => sounds.iter().flatten().for_each(stop_sound),
-                AudioCmd::Volume(snd, v) => {
-                    if let Some(Some(s)) = sounds.get(snd as usize) {
-                        set_sound_volume(s, v as f32);
-                    }
-                }
-            }
-        }
+        // audio already went to the mixer; e.audio is only a log (tests)
+        e.audio.clear();
 
         if ticks > 0 || frames == 0 {
-            e.render();
-            exec(&e, &gpu, &rt);
+            e.test_render();
+            exec(&e, &gpu, &mut canvas);
         }
 
         set_default_camera();
+        if let Some(t) = &mut opts.test {
+            // the canvas is flushed: screenshots of this step, end of a test run
+            if t.after_frame(&e, canvas.output()) {
+                e.shutdown();
+                break;
+            }
+        }
         clear_background(col(Rgba::from_rgb(letterbox, 1.0)));
-        draw_texture_ex(&rt.texture, lay.ox, lay.oy, WHITE, DrawTextureParams { dest_size: Some(vec2(lay.w, lay.h)), ..Default::default() });
+        canvas.present(lay.ox, lay.oy, lay.w, lay.h);
         if let Some(pad) = &collector.pad {
             pad.draw();
         }
@@ -574,6 +586,7 @@ pub async fn run(mut e: Engine, mut opts: RunOpts) {
         }
         next_frame().await;
     }
+    crate::test_run::finish_window(&mut e);
 }
 
 fn overlay(e: &Engine) {

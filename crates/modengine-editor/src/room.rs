@@ -51,6 +51,12 @@ impl LayerM {
         &self.t.kind
     }
 
+    /// Cell size in room pixels: `cell` times the tile layer's `scale` (as the engine does).
+    fn cell_px(&self) -> (f32, f32) {
+        let (sx, sy) = if self.t.kind == "tiles" { self.t.tile_scale().unwrap_or((1.0, 1.0)) } else { (1.0, 1.0) };
+        ((self.cell[0] as f64 * sx).round().max(1.0) as f32, (self.cell[1] as f64 * sy).round().max(1.0) as f32)
+    }
+
     fn get_obj(&self, c: i32, r: i32) -> &[String] {
         if c < 0 || r < 0 {
             return &[];
@@ -365,6 +371,12 @@ fn write_room(m: &RoomModel) -> String {
                 if let Some(ts) = &t.tileset {
                     s += &format!("tileset = {}\n", q(ts));
                 }
+                let (x, y) = t.tile_scale().unwrap_or((1.0, 1.0));
+                if x != y {
+                    s += &format!("scale = [{}, {}]\n", num(x), num(y));
+                } else if x != 1.0 {
+                    s += &format!("scale = {}\n", num(x));
+                }
             }
             _ => {}
         }
@@ -526,8 +538,9 @@ impl RoomEditor {
         let (mut w, mut h) = (d.width as f32, d.height as f32);
         for l in &self.m.layers {
             let (cw, ch) = l.extent();
-            w = w.max(cw as f32 * l.cell[0] as f32 + l.t.x as f32);
-            h = h.max(ch as f32 * l.cell[1] as f32 + l.t.y as f32);
+            let (pw, ph) = l.cell_px();
+            w = w.max(cw as f32 * pw + l.t.x as f32);
+            h = h.max(ch as f32 * ph + l.t.y as f32);
         }
         (self.m.width.map(|v| v as f32).unwrap_or(w), self.m.height.map(|v| v as f32).unwrap_or(h))
     }
@@ -705,6 +718,20 @@ impl RoomEditor {
                     ui.end_row();
                 }
                 if l.t.kind == "tiles" {
+                    // draw scale of the tiles: 16 px tiles at ×3 fill 48 px cells
+                    ui.label("Escala");
+                    let (mut sx, mut sy) = l.t.tile_scale().unwrap_or((1.0, 1.0));
+                    let before = (sx, sy);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut sx).range(0.25..=16.0).speed(0.05).prefix("×"));
+                        ui.add(egui::DragValue::new(&mut sy).range(0.25..=16.0).speed(0.05).prefix("×"));
+                    })
+                    .response
+                    .on_hover_text("Los tiles se dibujan a esta escala; celdas, colisiones y tilemap_* usan el tamaño escalado.");
+                    if (sx, sy) != before {
+                        l.t.scale = Some(if sx == sy { toml::Value::Float(sx) } else { toml::Value::Array(vec![toml::Value::Float(sx), toml::Value::Float(sy)]) });
+                    }
+                    ui.end_row();
                     ui.label("Tile set");
                     let sets: Vec<(String, [u32; 2])> = cx.project.tilesets.iter().filter_map(|s| s.data.as_ref().ok()).map(|s| (s.name.clone(), [s.tile_w, s.tile_h])).collect();
                     let before = l.t.tileset.clone();
@@ -1127,7 +1154,7 @@ impl RoomEditor {
             let a = (l.t.alpha.clamp(0.0, 1.0) * 255.0) as u8;
             let tint = Color32::from_white_alpha(a);
             let off = Vec2::new(l.t.x as f32, l.t.y as f32);
-            let (cw, ch) = (l.cell[0] as f32, l.cell[1] as f32);
+            let (cw, ch) = l.cell_px();
             match l.t.kind.as_str() {
                 "background" => {
                     if let Some(c) = l.t.color.as_deref().and_then(parse_hex) {
@@ -1193,7 +1220,7 @@ impl RoomEditor {
         let active = self.m.layers.get(self.layer).cloned();
         if let Some(l) = &active {
             if self.show_grid && l.t.kind != "background" {
-                let (cw, ch) = (l.cell[0] as f32, l.cell[1] as f32);
+                let (cw, ch) = l.cell_px();
                 if cw * z >= 5.0 && ch * z >= 5.0 {
                     let st = Stroke::new(1.0, Color32::from_white_alpha(22));
                     let mut x = l.t.x as f32;
@@ -1258,7 +1285,7 @@ impl RoomEditor {
         let pointer = resp.hover_pos().or(resp.interact_pointer_pos());
         let (primary, secondary, pressed, released) =
             ui.input(|i| (i.pointer.primary_down(), i.pointer.secondary_down(), i.pointer.button_pressed(PointerButton::Primary) || i.pointer.button_pressed(PointerButton::Secondary), i.pointer.any_released()));
-        let (cw, ch) = (l.cell[0] as f32, l.cell[1] as f32);
+        let (cw, ch) = l.cell_px();
         let off = Vec2::new(l.t.x as f32, l.t.y as f32);
         let tiles = l.t.kind == "tiles";
         let autos = l.t.tileset.as_deref().and_then(|s| project.tileset(s)).map(|s| s.autotiles.clone()).unwrap_or_default();
@@ -1828,6 +1855,23 @@ pub(crate) mod tests {
             for (a, b) in m.layers.iter().zip(&m2.layers) {
                 assert_eq!(a.extent(), b.extent());
             }
+        }
+    }
+
+    #[test]
+    fn tile_layer_scale_is_kept_and_scales_cells() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/platformer");
+        let project = Project::open(&dir).unwrap();
+        for (scale, written) in [("3", "scale = 3\n"), ("[2, 4]", "scale = [2, 4]\n"), ("1", "")] {
+            let text = format!("[[layer]]\nname = \"T\"\ntype = \"tiles\"\ntileset = \"ground\"\ncell = [16, 16]\nscale = {scale}\ndata = '''\n0 1\n'''\n");
+            let m = load_model(toml::from_str(&text).unwrap(), &project);
+            let out = write_room(&m);
+            assert!(written.is_empty() || out.contains(written), "{out}");
+            assert!(!written.is_empty() || !out.contains("scale"), "scale 1 is not written: {out}");
+            let back = load_model(toml::from_str(&out).unwrap(), &project);
+            assert_eq!(back.layers[0].cell, [16, 16], "cell stays the tile size");
+            let (sx, sy) = m.layers[0].t.tile_scale().unwrap();
+            assert_eq!(back.layers[0].cell_px(), ((16.0 * sx) as f32, (16.0 * sy) as f32));
         }
     }
 }

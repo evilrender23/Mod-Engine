@@ -3,7 +3,10 @@
 Todo son ficheros de texto (TOML y ModScript), fáciles de editar a mano y de versionar con git.
 Los assets se identifican por el nombre del fichero sin extensión, y **todos comparten el mismo
 espacio de nombres**: no puede haber un sprite `coin` y un sonido `coin`. Una convención útil es
-`snd_` para sonidos y nombres en `PascalCase` para objetos.
+`snd_` para sonidos y nombres en `PascalCase` para objetos. Si dos chocan, el proyecto no carga
+y el error dice qué ficheros son:
+`nombre de asset duplicado 'vestibulo': sprite `sprites/vestibulo.toml` y room `rooms/vestibulo.toml``
+(para un objeto, el script y la línea donde se declara).
 
 ## game.toml
 
@@ -22,6 +25,8 @@ step_rate = 60       # pasos lógicos por segundo
 letterbox = "#000000"
 font_size = 16       # tamaño del texto por defecto
 smooth = false       # filtrado suave en vez de píxeles nítidos
+rotation = "nearest" # cómo se ven los sprites girados: nearest, rotsprite o smooth (ver «Rotación»)
+rotation_steps = 0   # ángulos por vuelta de los sprites girados (0 = libre)
 fullscreen = false
 
 [palette]            # caracteres que pueden usar todos los sprites de pixel art
@@ -48,6 +53,7 @@ orientation = "landscape"              # landscape, portrait o sensor
 virtual_pad = "arrows"                 # mando táctil: none, arrows (← →) o dpad
 virtual_buttons = ["space:A", "enter:OK"]  # botones redondos: tecla[:etiqueta]
 abis = ["arm64-v8a"]                   # y/o armeabi-v7a, x86_64 (emulador)
+# internet = true                      # permiso INTERNET; sin poner: solo si el juego usa la red
 ```
 
 ## Sprites (`sprites/`)
@@ -62,6 +68,8 @@ frames = 4               # tira horizontal de 4 frames...
 origin = "center"        # [x, y] o "top_left", "top", "center", "left", "bottom"
 fps = 10                 # velocidad de la animación con anim_speed = 1
 mask = [4, 2, 11, 15]    # caja de colisión (izq, arriba, der, abajo) incluida. Por defecto: píxeles no transparentes
+rotation = "rotsprite"   # cómo se ve girado: nearest, rotsprite o smooth (por defecto, el de game.toml)
+rotation_steps = 16      # ángulos por vuelta (0 = libre); por defecto, el de game.toml
 ```
 
 O dibujado directamente en el TOML. Cada carácter es un píxel según la paleta (la de
@@ -82,6 +90,70 @@ gggggggg
 gggggggg
 ''']
 ```
+
+### Pixel art compacto (`pixels_rle`) y `sprite-bake`
+
+Un sprite grande escrito con `pixels` ocupa un carácter por píxel (un suelo de 288×288 son
+más de 80 KB de TOML). `pixels_rle` es la misma imagen por tramos, con la misma paleta:
+
+```toml
+origin = "center"
+pixels_rle = ['''
+.*4R*8.*4
+.*2R*12.*2 *3
+0*3V*6U*3 7
+''']
+```
+
+- `C*N` son N píxeles del carácter `C` (`R*8` = `RRRRRRRR`). Un carácter suelto es un píxel,
+  así que una fila normal también es RLE válido.
+- Una fila que acaba en un espacio y `*N` se repite N veces (` *3` = la fila y dos copias).
+- Los espacios no son píxeles (el transparente es `.`): solo separan un tramo de un color que
+  sea un dígito (`R*8 3` = ocho `R` y un `3`) y la fila de su repetición.
+- El carácter `*` como color se escribe siempre con cuenta: `**1`, `**5`.
+- `pixels` y `pixels_rle` no pueden ir juntos en el mismo sprite. Se cargan igual: mismo
+  tamaño de frame, origen, máscara y `fps`.
+
+El editor de sprites abre los dos formatos; la casilla **guardar compacto (pixels_rle)** del
+panel de origen/máscara elige cómo se guarda.
+
+Para pasar sprites de texto grandes a PNG (o a `pixels_rle`) desde la terminal:
+
+```sh
+modengine sprite-bake <proyecto> --dry-run       # qué cambiaría y cuánto ocupa antes/después
+modengine sprite-bake <proyecto>                 # todos los sprites de texto de 8 KB o más
+modengine sprite-bake <proyecto> suelo ruleta    # solo esos
+modengine sprite-bake <proyecto> --rle           # a pixels_rle en vez de PNG
+modengine sprite-bake <proyecto> --min-kb 2
+```
+
+Cada sprite queda como `sprites/<nombre>.png` (una tira con sus frames) y un TOML corto con
+`image` y `frames` que conserva el resto de claves (`origin`, `mask`, `fps`, `rotation`...). Si
+ya existe un PNG con ese nombre, el sprite no se toca. Los comentarios del TOML se pierden.
+
+### Rotación de pixel art (`rotation`)
+
+Girar pixel art con el muestreo «nearest» de la GPU deja bordes dentados y píxeles sueltos,
+sobre todo en sprites grandes o escalados. Cada sprite elige cómo se ve girado (`rotation` en
+su TOML, o el valor por defecto de `[display]`):
+
+| `rotation` | Cómo se ve | Coste |
+|---|---|---|
+| `"nearest"` (por defecto) | la GPU gira la textura sin suavizar: bordes dentados | ninguno |
+| `"rotsprite"` | RotSprite: el frame se amplía 8× con Scale2x, se gira y se reduce eligiendo el color más frecuente de cada píxel. Líneas limpias, sin colores nuevos | una imagen por (frame, ángulo), calculada la primera vez y guardada |
+| `"smooth"` | filtrado lineal para ese sprite: suave pero borroso | ninguno |
+
+- Con `rotsprite`, los ángulos se agrupan de 1° en 1° (o en los pasos de `rotation_steps`).
+  Los múltiplos de 90° y los sprites sin girar se dibujan como siempre (son exactos).
+  Funciona con cualquier escala uniforme (`image_xscale == image_yscale`, también negativa
+  para espejar); con escalas distintas en x e y se usa la rotación normal.
+- Cada ángulo nuevo se calcula una vez (unos milisegundos en un sprite de 64×64). El motor
+  dedica como mucho ~6 ms por fotograma a ángulos nuevos: los que no caben ese fotograma se
+  dibujan con la rotación normal y se calculan en los siguientes. Se guardan hasta ~96 MB de
+  imágenes giradas; las que hace más tiempo que no se usan se descartan.
+- `rotation_steps = N` redondea el ángulo a N pasos por vuelta en cualquier modo (giro «por
+  pasos», como en muchos juegos de pixel art): `16` = de 22,5° en 22,5°.
+- Con un shader activo, un sprite `rotsprite` girado usa la imagen ya girada como textura.
 
 ### Paleta (`[palette]`) y Pear36
 
@@ -163,6 +235,20 @@ modengine import mijuego ~/Descargas/pack --credit "Kenney (kenney.nl), CC0" --j
 file = "music.ogg"
 volume = 0.6
 ```
+
+Más campos (todos opcionales):
+
+```toml
+file = "boss_main.wav"
+intro = "boss_intro.wav"   # suena una vez antes de `file`; luego solo `file` se repite
+group = "musica"           # grupo de volumen (audio_group_set_gain); por defecto "default"
+loop_start = 3.5           # segundos donde vuelve el bucle (por defecto: el final de la intro, o 0)
+loop_end = 61.2            # segundos donde salta atrás (por defecto: el final)
+```
+
+`loop_start` y `loop_end` se miden desde el principio del sonido, intro incluida, y solo cuentan
+cuando el sonido se toca en bucle (`play_sound(snd, true)`); sin bucle se oye entero una vez. Ver
+[funciones.md](funciones.md#audio).
 
 o un efecto retro sintetizado, sin ficheros de audio:
 
@@ -296,6 +382,14 @@ data = '''
 3 11 11 9
 '''                       # una línea por fila: datos de tile separados por espacios, `.` = vacío
 
+[[layer]]                 # tiles de 16 px dibujados a 48 px: sin hornear un PNG más grande
+type = "tiles"
+tileset = "ts_casino"     # tile set de 16×16
+scale = 3                 # o [3, 2]; celdas de 48×48 en la room
+data = '''
+0 1 1 2
+'''
+
 [[layer]]                 # el formato de mapa también vale para tiles: cada carácter es un tile
 type = "tiles"
 tileset = "tiles"
@@ -326,6 +420,14 @@ instances = [
 En los mapas, `.` y el espacio son celdas vacías. Las instancias de un mapa se colocan
 centradas en su celda; si el sprite es más alto que la celda, se apoya en el borde inferior
 (así una bandera de 24 px queda de pie sobre el suelo).
+
+**Escala de una capa de tiles** (`scale = 3` o `scale = [x, y]`): los tiles se dibujan a esa
+escala sin crear otra imagen, y la capa entera trabaja en píxeles escalados: la celda es
+`cell × scale` (`cell` sigue siendo el tamaño del tile en el tile set), y las colisiones
+(`tile_meeting`), `tile_at`, `tilemap_get_at_pixel`, `tilemap_get_tile_width`, el tamaño de
+la room calculado a partir de las capas y la vista del editor usan ese tamaño. En el juego se
+cambia con `tilemap_set_scale(capa, 3)` (ver `docs/funciones.md`); el editor la muestra en las
+propiedades de la capa como **Escala**.
 
 `tile_at(x, y)` y `tile_set(x, y, n)` leen y cambian tiles durante el juego; las funciones
 `tilemap_*` de GameMaker (ver `docs/funciones.md`) trabajan con capas de tiles por nombre. El
@@ -540,6 +642,18 @@ Se escriben con los nombres de GameMaker: atributos `in_Position`, `in_Colour`,
 `MATRIX_VIEW`, `MATRIX_PROJECTION`, `MATRIX_WORLD`, `MATRIX_WORLD_VIEW`) y la textura
 `gm_BaseTexture`. No hace falta `precision` ni `#version`. Los números de línea de los errores
 son los del fichero.
+
+**Precisión.** El fragment shader usa `precision highp float` por defecto (en móviles sin highp
+en fragment cae a `mediump`). Con `mediump` (±16384 garantizado) cualquier cuenta con
+coordenadas de píxel desborda: `length(vec2(1280.0, 720.0))` eleva 1280² ≈ 1,6 millones y da
+inf/NaN sin ningún error. Si un `.fsh` declara `precision mediump float` (o `lowp`) y hace
+`length`/`distance`/`dot`/`pow` con `gl_FragCoord` o números ≥ 256, `modengine check` y
+`modengine shader --check` lo avisan (`[aviso] shader '...': fsh:N: ...`), sin fallar.
+
+**Mezcla.** Todos los dibujos, con shader o sin él, usan la misma mezcla: el color según el modo
+(`gpu_set_blendmode`) y el alfa con `origen + destino·(1 − alfa_origen)`, así que el lienzo no
+pierde opacidad con lo semitransparente, y se vuelca a la ventana opaco. Post-proceso de
+pantalla completa: evento `post_draw` y surfaces (ver funciones.md, «Surfaces y post-proceso»).
 
 Los shaders se compilan en la GPU al arrancar el juego (`modengine run`); si uno falla, el
 error sale en la consola y en pantalla y se dibuja con el shader por defecto.

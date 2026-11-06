@@ -51,12 +51,19 @@ pub fn window_conf(e: &Engine) -> macroquad::window::Conf {
 
 /// Opens the window and plays `e` until it quits.
 pub fn play(e: Engine, opts: RunOpts) {
-    let conf = window_conf(&e);
+    let mut conf = window_conf(&e);
+    if let Some(n) = opts.instance {
+        conf.window_title = format!("{} [{n}]", conf.window_title);
+    }
+    if opts.test.as_ref().is_some_and(|t| t.hidden) {
+        crate::test_run::prepare_hidden(&mut conf);
+    }
     macroquad::Window::from_config(conf, backend::run(e, opts));
 }
 
 /// Flags an exported game accepts (for testing and support): `--screenshot F.png`,
-/// `--frames N`, `--touch`, `--input SPEC`, `--pack FILE`.
+/// `--frames N`, `--touch`, `--input SPEC`, `--pack FILE`, `--headless` (dedicated server,
+/// no window), `--steps N` (with --headless), `--instance N` (window N of several).
 #[derive(Default, Debug, PartialEq)]
 pub struct RunnerArgs {
     pub screenshot: Option<String>,
@@ -64,6 +71,9 @@ pub struct RunnerArgs {
     pub touch: bool,
     pub input: Option<String>,
     pub pack: Option<PathBuf>,
+    pub headless: bool,
+    pub steps: Option<u64>,
+    pub instance: Option<u32>,
 }
 
 pub fn parse_runner_args(raw: &[String]) -> Result<RunnerArgs, String> {
@@ -77,6 +87,9 @@ pub fn parse_runner_args(raw: &[String]) -> Result<RunnerArgs, String> {
             "--touch" => a.touch = true,
             "--input" => a.input = Some(value()?),
             "--pack" => a.pack = Some(PathBuf::from(value()?)),
+            "--headless" | "--server" => a.headless = true,
+            "--steps" => a.steps = Some(value()?.parse().map_err(|_| "--steps needs a number".to_string())?),
+            "--instance" => a.instance = Some(value()?.parse().map_err(|_| "--instance needs a number".to_string())?),
             // macOS adds -psn_... when started from Finder; ignore unknown flags
             _ => {}
         }
@@ -201,7 +214,12 @@ pub fn desktop_main() {
     };
     let e = Engine::load_pack(&pack).unwrap_or_else(|m| fatal(&format!("Could not load the game:\n{m}")));
     let input = args.input.as_ref().map(|s| crate::script_input::ScriptedInput::parse(s).unwrap_or_else(|m| fatal(&m)));
-    let opts = RunOpts { screenshot: args.screenshot.map(|p| (args.frames.unwrap_or(120), p)), input, touch: args.touch.then_some(true) };
+    if args.headless {
+        // a dedicated server: no window (and no message boxes; errors go to the console)
+        let code = crate::headless::run(e, crate::headless::HeadlessOpts { input, steps: args.steps, watch: vec![], realtime: true });
+        std::process::exit(code);
+    }
+    let opts = RunOpts { screenshot: args.screenshot.map(|p| (args.frames.unwrap_or(120), p)), input, touch: args.touch.then_some(true), instance: args.instance, test: None };
     play(e, opts);
 }
 
@@ -220,7 +238,7 @@ pub fn android_main() {
         };
         let src = modengine::vfs::mount(Path::new(PACK_FILE), pack);
         match Engine::load_source(&src) {
-            Ok(e) => backend::run(e, RunOpts { screenshot: None, input: None, touch: Some(true) }).await,
+            Ok(e) => backend::run(e, RunOpts { screenshot: None, input: None, touch: Some(true), instance: None, test: None }).await,
             Err(e) => android_error(e).await,
         }
     });
@@ -259,6 +277,8 @@ mod tests {
         assert_eq!((a.screenshot.as_deref(), a.frames, a.touch), (Some("a.png"), Some(90), true));
         assert!(parse_runner_args(&s(&["--frames", "x"])).is_err());
         assert!(parse_runner_args(&s(&["--pack"])).is_err());
+        let a = parse_runner_args(&s(&["--headless", "--steps", "600", "--instance", "2"])).unwrap();
+        assert_eq!((a.headless, a.steps, a.instance), (true, Some(600), Some(2)));
     }
 
     #[test]

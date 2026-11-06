@@ -43,6 +43,18 @@ pub enum DrawCmd {
     Sampler { shader: u32, name: String, spr: u32 },
     /// Blend mode of following commands: 0 normal, 1 add, 2 subtract, 3 max.
     Blend(u8),
+    /// Clips following commands to `[x, y, w, h]` in the current coordinates (room under a
+    /// `View`, screen under `Gui`); None = no clipping. `View` and `Gui` also reset it.
+    Scissor(Option<[f32; 4]>),
+    /// Following commands draw into surface `id` (`w`×`h`, its own pixel coordinates,
+    /// created by the backend if needed); `None` goes back to the frame and its camera.
+    Target(Option<(u32, u32, u32)>),
+    /// Draws surface `id` (0 = application_surface). `src` = part in surface pixels
+    /// (None: all of it); `w`/`h` = size on screen (negative flips); rotation around (x, y).
+    Surface { id: u32, src: Option<[f32; 4]>, x: f32, y: f32, w: f32, h: f32, angle: f32, color: Rgba },
+    /// The game frame is finished: following commands (`post_draw`) draw on the final image,
+    /// in GUI coordinates. `app`: start from a copy of application_surface (else black).
+    PostDraw { app: bool },
 }
 
 /// Current drawing settings (`set_color`, `set_alpha`, `set_font`, `set_align`).

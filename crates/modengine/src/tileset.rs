@@ -102,6 +102,7 @@ impl TileSetAsset {
             origin: s.origin,
             bbox: s.bbox,
             fps: s.fps,
+            rotation: s.rotation,
         }
     }
 
@@ -185,7 +186,7 @@ pub fn from_toml<'s>(name: &str, t: &TileSetToml, folder: &Path, sprite: &dyn Fn
             return Err(format!("autotile '{}': tile {bad} does not exist (the set has {n})", a.name));
         }
     }
-    let sprite = Sprite { name: format!("tileset:{name}"), fw: tw, fh: th, frames, sheet_w, sheet_h, rgba, origin: (0.0, 0.0), bbox: [0.0, 0.0, tw as f64, th as f64], fps: 0.0 };
+    let sprite = Sprite { name: format!("tileset:{name}"), fw: tw, fh: th, frames, sheet_w, sheet_h, rgba, origin: (0.0, 0.0), bbox: [0.0, 0.0, tw as f64, th as f64], fps: 0.0, rotation: Default::default() };
     Ok(TileSetAsset {
         name: name.to_string(),
         sprite,

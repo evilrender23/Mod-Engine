@@ -501,6 +501,8 @@ pub fn step(e: &mut Engine) {
                 if let Some(snd) = def.assets[ti] {
                     let volume = tr.keys.first().and_then(|k| k.alpha).unwrap_or(1.0);
                     e.audio.push(AudioCmd::Play { snd, looped: false, volume });
+                    crate::audio::ensure_decoded(e, snd);
+                    crate::audio::lock(e).play(snd, crate::audio::PlayOpts { gain: volume as f32, ..Default::default() });
                 }
             }
         }

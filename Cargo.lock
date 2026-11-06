@@ -2009,6 +2009,7 @@ dependencies = [
 name = "modengine"
 version = "0.1.0"
 dependencies = [
+ "audrey",
  "fontdue",
  "image 0.25.10",
  "modscript",
@@ -2027,6 +2028,7 @@ dependencies = [
  "macroquad",
  "modengine",
  "modscript",
+ "quad-snd",
  "serde_json",
  "toml 0.8.23",
 ]
@@ -2887,8 +2889,6 @@ checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
 [[package]]
 name = "quad-snd"
 version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cba0c4943fc67147fbe9d1eb731fb9e678bfc9d926507eebbbfe0103e154e5b0"
 dependencies = [
  "audir-sles",
  "audrey",

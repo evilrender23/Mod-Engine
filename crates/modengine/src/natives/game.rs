@@ -1,6 +1,5 @@
 //! Instances, collisions, motion, rooms, camera, input, audio, events and saving.
 
-use super::core::{from_json, to_json};
 use super::{me, Reg, A};
 use crate::engine::{AudioCmd, Engine, LayerKind};
 use crate::object::Ev;
@@ -458,32 +457,9 @@ pub(super) fn register(r: &mut Reg) {
         Ok(Value::Null)
     });
 
-    // ---------------------------------------------------------------- saving
-    r.f("save_data", |e, _, a| {
-        let name = safe_name(&A(a).text(0)?)?;
-        let json = to_json(A(a).val(1)?)?;
-        let dir = e.save_dir.clone();
-        let ok = std::fs::create_dir_all(&dir).is_ok()
-            && std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(&json).unwrap_or_default()).is_ok();
-        Ok(Value::Bool(ok))
-    });
-    r.f("load_data", |e, _, a| {
-        let name = safe_name(&A(a).text(0)?)?;
-        let path = e.save_dir.join(format!("{name}.json"));
-        let fallback = a.get(1).cloned().unwrap_or(Value::Null);
-        match std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
-            Some(j) => Ok(from_json(&j)),
-            None => Ok(fallback),
-        }
-    });
+    // saving: see natives/save.rs (atomic writes, backups, defaults)
 }
 
-fn safe_name(s: &str) -> RtResult<String> {
-    if s.is_empty() || !s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-        return err(format!("save name '{s}' may only contain letters, digits, '_' and '-'"));
-    }
-    Ok(s.to_string())
-}
 
 fn pick(e: &mut Engine, cx: &modscript::CallCx, a: &[Value], far: bool) -> RtResult<Value> {
     let p = A(a);

@@ -1,0 +1,6 @@
+background = "#333c57"
+
+# a simple floor grid drawn by Arena; players are created by code
+[[layer]]
+type = "instances"
+instances = [ { object = "Arena", x = 0, y = 0 } ]

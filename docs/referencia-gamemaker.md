@@ -50,7 +50,8 @@ Observado (tipos y literales):
 | `part_system_*`, `part_type_*`, `part_emitter_*`, `part_particles_*` | ✅ (ver funciones.md); sin `part_emitter_relative` ni unidades de tiempo en segundos (todo en pasos) |
 | Shaders GLSL ES / HLSL / GLSL por plataforma, editor de código del IDE (`GMShaderAdapter`) | ✅ GLSL ES 1.00 con los nombres de GameMaker; ❌ HLSL y GLSL 3 |
 | Errores de compilación al ejecutar | ✅ al ejecutar, más comprobación estática en el editor y `modengine shader --check` en la GPU |
-| `shader_set_uniform_*`, `texture_set_stage`, `gpu_set_blendmode` | ✅ (sin `gpu_set_blendmode_ext` ni `surface_*`) |
+| `shader_set_uniform_*`, `texture_set_stage`, `gpu_set_blendmode` | ✅ (sin `gpu_set_blendmode_ext`); el alfa del lienzo no baja con lo semitransparente y se vuelca opaco |
+| `surface_*`, `draw_surface*`, `draw_clear(_alpha)`, `application_surface`, `application_surface_draw_enable`, eventos Pre-Draw / Post-Draw | ✅ (ver funciones.md); `pre_draw`/`post_draw` dibujan sobre el fotograma del juego, no sobre la ventana; sin `surface_getpixel`, `surface_copy` ni `gpu_set_blendmode_ext_sepalpha` |
 | Extensiones con ficheros nativos DLL/dylib/so/JS por plataforma (`FilePropsWindow`, `AndroidPropsWindow`, `IosPropsWindow`, `HTML5PropsWindow`) | ❌ fuera de alcance: solo ModScript (portátil y seguro) |
 | Funciones exportadas con nombre externo y tipos (`FunctionPropsWindow`), constantes (`ConstantPropsWindow`), init/final | ✅ funciones exportadas (documentación + comprobación), constantes, `init`/`final`, orden de ficheros |
 | Opciones de extensión editables por proyecto (`ExtensionOptionsWindow`, variables label/number/string/path/boolean/list) | ⚠️ solo constantes (valores TOML) |
@@ -69,6 +70,43 @@ Observado (tipos y literales):
 | Auto tiles de 16 y 47 (`Add16TileSet`, `Add47TileSet`), de transición | ⚠️ 16 por vecinos en cruz (arriba/derecha/abajo/izquierda), no la plantilla por esquinas de GameMaker; ❌ 47 y transición |
 | Pinceles (`BrushBuilder`), espejo/volteo/giro (X/Y/Z), rellenar, rectángulo | ✅ pincel de varios tiles arrastrando en la paleta, X/Y/Z, rectángulo que repite el pincel, relleno, cuentagotas; ❌ pinceles guardados con nombre, línea, selección + mover |
 | `tilemap_*`, `tile_*`, `layer_tilemap_*`, `draw_tile(map)`, `tileset_get_info` | ✅ (ver funciones.md); además `tile_meeting` y `tilemap_autotile`. Diferencia: el vacío es `-1`, no el tile 0 |
+
+## Red (Async - Networking)
+
+Comparado con el manual de GameMaker (funciones `network_*`, `buffer_*` y el evento
+*Async - Networking*), no con el IDE:
+
+| GameMaker | Mod Engine |
+|---|---|
+| Evento *Async - Networking* con el `ds_map` `async_load` | ✅ `on network` con el struct `async_load` (mismos campos: `type`, `id`, `socket`, `ip`, `port`, `buffer`, `size`, `succeeded`); en el editor **+ Evento → Red (network)** |
+| `network_create_server[_raw]`, `network_create_socket[_ext]`, `network_destroy` | ✅ TCP y UDP, IPv4 e IPv6 |
+| `network_connect[_raw]` (bloqueante salvo `network_config_use_non_blocking_socket`) / `network_connect_async` | ✅ siempre asíncrono: devuelve `0` y el resultado llega como `network_type_non_blocking_connect` |
+| `network_send_packet`, `network_send_raw`, `network_send_udp[_raw]`, `network_send_broadcast` | ✅ (el formato de paquete es propio: 4 bytes de longitud + datos; no habla con servidores GameMaker en modo no-raw) |
+| `network_set_config`, `network_set_timeout`, `network_resolve` | ✅ `connect_timeout`; el resto de opciones se aceptan sin efecto. `set_timeout` desconecta por inactividad |
+| `network_socket_ws` / `wss`, `network_socket_bluetooth` | ❌ |
+| Buffers (`buffer_create`, `buffer_write/read`, `peek/poke`, `seek/tell`, `fixed/grow/wrap/fast`, alineación, `base64`, `save/load`, `copy`, `fill`, `resize`) | ✅ mismos tipos y valores de constantes; ❌ `buffer_vbuffer`, `buffer_md5/sha1/crc32`, `buffer_compress`, `buffer_async_*` |
+| `keyboard_string` (variable) | ✅ variable (lectura y escritura), además de `keyboard_string()` / `keyboard_string_set(t)`; también `keyboard_lastchar` |
+| `window_set_cursor`, `cursor_sprite` | ✅ (constantes `cr_*`) |
+| `mp_grid_*` | ✅ más `mp_grid_path_points`, mapas de distancias y campos de flujo (`mp_flow_*`) |
+| `place_meeting`, `instance_place(_list)`, `collision_line(_list)`, `collision_point/rectangle/circle(_list)` | ✅ (cajas, sin precisión por píxel); rayos con `raycast*` y `line_of_sight` |
+| `gpu_set_scissor`, `draw_roundrect*` | ✅ (más `gpu_push_scissor` / `gpu_pop_scissor`) |
+| `show_debug_message` | ✅ |
+| Rollback netcode (`rollback_*`, GameMaker 2023+) | ❌; en su lugar la capa sencilla `net_host` / `net_join` / `net_send` (jugadores numerados, mensajes JSON con cualquier valor), que GameMaker no tiene |
+| Probar con varias instancias | ✅ **Juego → Ejecutar 2 instancias** (en GameMaker hay que lanzar el ejecutable a mano) y `modengine server` para servidores sin ventana |
+
+## Audio, tiempo, aleatorio y guardado
+
+| GameMaker | Mod Engine |
+|---|---|
+| `audio_play_sound`, `_at`, `_on`, voces como números, `audio_stop_sound`, pausa, `audio_is_playing` | ✅ mismos argumentos (la `z` se acepta y se ignora: el audio es 2D) |
+| `audio_sound_gain(…, time)`, `audio_sound_pitch`, `audio_sound_get_track_position` / `set_`, `audio_sound_length`, `audio_sound_loop_start/end`, `audio_master_gain` | ✅ (mezclador propio: mismo resultado en todas las plataformas y en `--headless`) |
+| Grupos de audio (`audio_group_set_gain`, `audio_group_stop_all`) | ✅ por nombre (`group = "musica"` en el TOML del sonido); ❌ `audio_group_load/unload` (no hace falta: todo está en memoria) |
+| Emisores (`audio_emitter_*`) y oyente (`audio_listener_position`) | ✅ modelo de caída «lineal con límites»; el oyente sigue la vista si no lo colocas. ❌ otros modelos de caída, `audio_listener_orientation`, efectos/buses (`audio_bus_*`), sonidos en streaming (`audio_create_stream`) y `audio_sync_group_*` |
+| Intro + bucle | ✅ `intro = "…"` / `loop_start` en el TOML, o `audio_play_sound_intro_loop` (GameMaker no lo trae) |
+| `call_later` / `call_cancel` (2023+) | ✅ mismas unidades (`time_source_units_frames` / `_seconds`); ❌ el resto de `time_source_*` (usa corrutinas) |
+| Corrutinas | ✅ `coroutine()` + `wait` / `yield` (GameMaker no las tiene) |
+| `random_set_seed`, `randomize`, `irandom`… | ✅ con otros nombres (`seed`, `randomize`, `irand`…); además generadores separados `rng_*` (GameMaker solo tiene uno) |
+| `ini_*`, `file_text_*` para partidas | ⚠️ `save_data` / `load_data` con JSON, guardado atómico, `.bak` y valores por defecto fusionados |
 
 ## Hoja de ruta propuesta (por valor / esfuerzo)
 

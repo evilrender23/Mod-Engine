@@ -41,6 +41,7 @@ pub fn shape_sprites() -> Vec<Sprite> {
             origin: (n as f64 / 2.0, n as f64 / 2.0),
             bbox: [0.0, 0.0, n as f64, n as f64],
             fps: 0.0,
+            rotation: Default::default(),
         })
         .collect()
 }
@@ -67,7 +68,7 @@ pub(crate) fn link(e: &mut Engine, errors: &mut Vec<String>) {
     let register = |e: &mut Engine, name: &str, v: Value, errors: &mut Vec<String>| {
         let s = intern(name);
         if let Some(prev) = e.assets.get(&s) {
-            errors.push(format!("duplicate asset name '{name}' ({} and {})", prev.type_name(), v.type_name()));
+            errors.push(crate::lint::clash_message(&e.dir, name, prev, &v, &[]));
         }
         e.assets.insert(s, v);
     };
@@ -99,6 +100,9 @@ pub(crate) fn link(e: &mut Engine, errors: &mut Vec<String>) {
                 // static check (the GPU compiles them when the game starts)
                 for p in s.problems() {
                     e.report(modscript::RtError::new(format!("shader '{}': {p}", s.name)));
+                }
+                for w in s.warnings() {
+                    eprintln!("[aviso] shader '{}': {w}", s.name);
                 }
             }
             e.shaders = Shaders::new(list);

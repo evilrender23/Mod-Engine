@@ -45,6 +45,10 @@ pub struct Instance {
     pub path: crate::path::PathFollow,
     /// timeline_index, timeline_position...
     pub timeline: crate::timeline::TimelineRun,
+    /// Collision layers this instance is on (bit mask, `collision_layer`).
+    pub col_layer: u32,
+    /// Layers it collides with (`collision_mask`).
+    pub col_mask: u32,
 }
 
 impl Instance {
@@ -89,6 +93,8 @@ impl Instance {
             mouse_over: false,
             path: Default::default(),
             timeline: Default::default(),
+            col_layer: 1,
+            col_mask: u32::MAX,
         }
     }
 
@@ -166,6 +172,8 @@ pub enum Bv {
     SpriteHeight,
     Path(crate::path::PathVar),
     Timeline(crate::timeline::TlVar),
+    /// Engine-wide or collision-layer variables (see `ui_state::ExtVar`).
+    Ext(crate::ui_state::ExtVar),
 }
 
 pub const BUILTIN_VARS: &[(&str, Bv)] = &[
@@ -217,4 +225,9 @@ pub const BUILTIN_VARS: &[(&str, Bv)] = &[
     ("timeline_speed", Bv::Timeline(crate::timeline::TlVar::Speed)),
     ("timeline_running", Bv::Timeline(crate::timeline::TlVar::Running)),
     ("timeline_loop", Bv::Timeline(crate::timeline::TlVar::Loop)),
+    ("collision_layer", Bv::Ext(crate::ui_state::ExtVar::CollisionLayer)),
+    ("collision_mask", Bv::Ext(crate::ui_state::ExtVar::CollisionMask)),
+    ("keyboard_string", Bv::Ext(crate::ui_state::ExtVar::KeyboardString)),
+    ("keyboard_lastchar", Bv::Ext(crate::ui_state::ExtVar::KeyboardLastchar)),
+    ("cursor_sprite", Bv::Ext(crate::ui_state::ExtVar::CursorSprite)),
 ];

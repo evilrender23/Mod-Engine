@@ -35,6 +35,8 @@ const SIMPLE_EVENTS: &[(&str, &str)] = &[
     ("draw", "dibujar (sustituye al sprite)"),
     ("draw_end", "después de dibujar"),
     ("draw_gui", "dibujar encima de todo, en pantalla"),
+    ("pre_draw", "antes de dibujar nada, sobre la pantalla borrada"),
+    ("post_draw", "post-proceso: sobre el fotograma terminado (application_surface)"),
     ("room_start", "al entrar en la room"),
     ("room_end", "al salir de la room"),
     ("game_start", "al empezar el juego"),
@@ -44,7 +46,11 @@ const SIMPLE_EVENTS: &[(&str, &str)] = &[
     ("animation_end", "la animación termina"),
     ("mouse_enter", "el ratón entra"),
     ("mouse_leave", "el ratón sale"),
+    ("network", "Red (multijugador): conexiones, desconexiones y mensajes; los datos están en async_load"),
 ];
+
+/// Events that have their own entry in the + Evento menu instead of the plain list.
+const OWN_MENU_ENTRY: &[&str] = &["network"];
 
 fn key_arg(k: &str) -> String {
     if k.chars().all(|c| c.is_ascii_digit()) {
@@ -600,13 +606,17 @@ fn inherited_events(p: &crate::project::Project, m: &ObjectSrc) -> Vec<(String, 
 fn add_event_menu(ui: &mut egui::Ui, objects: &[String]) -> Option<(String, Option<String>)> {
     let mut picked = None;
     ui.menu_button("+ Evento", |ui| {
-        for (n, d) in SIMPLE_EVENTS {
+        for (n, d) in SIMPLE_EVENTS.iter().filter(|(n, _)| !OWN_MENU_ENTRY.contains(n)) {
             if ui.button(*n).on_hover_text(*d).clicked() {
                 picked = Some((n.to_string(), None));
                 ui.close();
             }
         }
         ui.separator();
+        if ui.button("Red (network)").on_hover_text("multijugador: se ejecuta cada vez que pasa algo en la red (alguien se conecta, se va o llega un mensaje); los datos están en async_load").clicked() {
+            picked = Some(("network".into(), None));
+            ui.close();
+        }
         ui.menu_button("collision(…)", |ui| {
             egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                 for o in objects {
@@ -707,6 +717,38 @@ mod tests {
         assert!(text.contains("object Spike {\n    sprite = spike\n    solid = true\n\n    on step {\n    }\n}"), "{text}");
         assert!(p.scripts[o.script].dirty());
         modscript::parse_file("x.ms", text).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_the_network_event() {
+        let dir = crate::room::tests::temp_project("object_net");
+        let project = Project::open(&dir).unwrap();
+        let st = St { ed: ObjectEditor::new("Spike"), project, tex: TexCache::default(), log: vec![], open: vec![] };
+        let mut h = Harness::builder().with_size([1200.0, 800.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut St| {
+                let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+                s.ed.ui(ui, &mut cx);
+            },
+            st,
+        );
+        h.run();
+        h.get_by_label("+ Evento").click();
+        h.run();
+        h.get_by_label("Red (network)").click();
+        h.run();
+        let p = &h.state().project;
+        let o = p.object("Spike").unwrap();
+        let text = &p.scripts[o.script].text;
+        assert!(text.contains("    on network {\n    }"), "{text}");
+        // the engine accepts it
+        let file = modscript::parse_file("x.ms", text).unwrap();
+        let spike = file.objects.iter().find(|o| &*o.name.name() == "Spike").unwrap();
+        let ev = spike.events.iter().find(|e| &*e.name.name() == "network").expect("on network");
+        assert_eq!(modengine::object::parse_event(&ev.name.name(), None).unwrap(), modengine::object::Ev::Network);
+        // and the editor shows what it is for
+        h.run();
+        let _ = h.get_by_label("on network");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

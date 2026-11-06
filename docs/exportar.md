@@ -133,6 +133,13 @@ Ajustes en `game.toml` (`[android]`, ver [proyecto.md](proyecto.md#gametoml)) o 
 paquete, código de versión, orientación (horizontal, vertical o girar con el móvil), mando táctil y
 arquitecturas. `arm64-v8a` sirve para casi todos los móviles; `x86_64` es para el emulador.
 
+#### Juegos en red
+
+Si algún script usa la red (`net_host`, `net_join`, `network_create_*`, `network_connect`,
+`network_send*`), el manifiesto pide `android.permission.INTERNET` y `ACCESS_NETWORK_STATE`
+(permisos normales: Android no pregunta al jugador). `[android] internet = true/false` lo fuerza.
+Ver [red.md](red.md).
+
 #### Controles táctiles
 
 Un toque mueve el ratón (`mouse_pressed`, `gui_mouse_x`…) y `touch_count()`, `touch_x(i)`,
@@ -184,6 +191,10 @@ modengine export --setup linux|windows|android
 modengine export --doctor [--json]
 ```
 
+Un juego exportado de escritorio acepta `--headless [--steps N]` para correr como **servidor
+dedicado** sin ventana (ver [red.md](red.md#servidor-dedicado-sin-ventana)) e `--instance N`
+para colocar su ventana junto a otras copias.
+
 La salida tiene líneas `PASO n/total …` y acaba en `LISTO <ruta>` o `ERROR <motivo>` (el editor
 las usa para la barra de progreso).
 
@@ -199,6 +210,7 @@ las usa para la barra de progreso).
 | El APK no instala: «versión anterior» | Sube `[android] version_code`. |
 | Linux: `GLIBC_2.35 not found` | El sistema de destino es demasiado antiguo para el runner compilado aquí. |
 | Windows SmartScreen avisa | Los .exe sin firma de código lo provocan; «Más información → Ejecutar de todas formas». |
+| Windows pregunta por el cortafuegos al abrir el juego | Es normal en juegos multijugador que hacen de host (abren un puerto): hay que **permitir** el acceso, al menos en redes privadas. Ver [red.md](red.md#jugar-por-internet-cortafuegos-nat-y-puertos). |
 | El juego exportado no arranca | Ejecútalo desde una terminal (o con `windows_console = true`) para ver el error; `modengine check <proyecto>` encuentra los fallos de script antes de exportar. |
 
 ## Lo que no hace (todavía)

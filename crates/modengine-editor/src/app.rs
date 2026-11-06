@@ -119,6 +119,8 @@ pub struct Auto {
     pub new_project: Option<String>,
     /// Open the Abrir proyecto browser at this folder.
     pub open_project: Option<PathBuf>,
+    /// Launch this many copies of the game once the editor is up (`--run 2`).
+    pub run: Option<u32>,
     frames: u32,
     shot: bool,
     done: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -350,8 +352,9 @@ enum Dialog {
     Switch { to: Option<PathBuf> },
 }
 
+/// The game(s) launched with ▶ Ejecutar (several for multiplayer tests).
 struct Runner {
-    child: Child,
+    children: Vec<Child>,
     rx: Receiver<String>,
 }
 
@@ -634,37 +637,65 @@ impl EditorApp {
     }
 
     fn run_game(&mut self) {
+        self.run_games(1);
+    }
+
+    /// Launches `count` copies of the game (`--instance N` places them side by side and
+    /// tags their output `[N]`): the quick way to try multiplayer on one computer.
+    fn run_games(&mut self, count: u32) {
         if self.runner.is_some() {
             self.stop_game();
         }
         self.save_all();
-        let Some(p) = &self.project else { return };
+        let Some(dir) = self.project.as_ref().map(|p| p.dir.clone()) else { return };
         let exe = std::env::current_exe().ok().map(|e| e.with_file_name(if cfg!(windows) { "modengine.exe" } else { "modengine" }));
         let Some(exe) = exe.filter(|e| e.exists()) else {
             self.info(LogKind::Error, "no encuentro el ejecutable `modengine` junto al editor: compílalo con `cargo build -p modengine-cli`");
             return;
         };
-        match Command::new(exe).arg("run").arg(&p.dir).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
-            Ok(mut child) => {
-                let (tx, rx) = mpsc::channel();
-                if let Some(out) = child.stdout.take() {
-                    let tx = tx.clone();
-                    std::thread::spawn(move || BufReader::new(out).lines().map_while(Result::ok).for_each(|l| drop(tx.send(l))));
-                }
-                if let Some(err) = child.stderr.take() {
-                    std::thread::spawn(move || BufReader::new(err).lines().map_while(Result::ok).for_each(|l| drop(tx.send(l))));
-                }
-                self.info(LogKind::Info, "▶ juego en marcha");
-                self.runner = Some(Runner { child, rx });
+        let (tx, rx) = mpsc::channel();
+        let mut children = Vec::new();
+        for n in 1..=count.max(1) {
+            if n > 1 {
+                // starting two OpenGL windows at the very same moment garbled the text of
+                // the second one (NVIDIA): give the first a head start
+                std::thread::sleep(std::time::Duration::from_millis(600));
             }
-            Err(e) => self.info(LogKind::Error, format!("no se pudo lanzar el juego: {e}")),
+            let mut cmd = Command::new(&exe);
+            cmd.arg("run").arg(&dir);
+            if count > 1 {
+                cmd.arg("--instance").arg(n.to_string());
+            }
+            match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+                Ok(mut child) => {
+                    // with several copies every line says which one it comes from
+                    let tag = if count > 1 { format!("[{n}] ") } else { String::new() };
+                    if let Some(out) = child.stdout.take() {
+                        let (tx, tag) = (tx.clone(), tag.clone());
+                        std::thread::spawn(move || BufReader::new(out).lines().map_while(Result::ok).for_each(|l| drop(tx.send(format!("{tag}{l}")))));
+                    }
+                    if let Some(err) = child.stderr.take() {
+                        let tx = tx.clone();
+                        std::thread::spawn(move || BufReader::new(err).lines().map_while(Result::ok).for_each(|l| drop(tx.send(format!("{tag}{l}")))));
+                    }
+                    children.push(child);
+                }
+                Err(e) => self.info(LogKind::Error, format!("no se pudo lanzar el juego: {e}")),
+            }
         }
+        if children.is_empty() {
+            return;
+        }
+        self.info(LogKind::Info, if count > 1 { format!("▶ {count} copias del juego en marcha (multijugador)") } else { "▶ juego en marcha".to_string() });
+        self.runner = Some(Runner { children, rx });
     }
 
     fn stop_game(&mut self) {
         if let Some(mut r) = self.runner.take() {
-            let _ = r.child.kill();
-            let _ = r.child.wait();
+            for c in &mut r.children {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
             self.info(LogKind::Info, "■ juego detenido");
         }
     }
@@ -773,11 +804,15 @@ impl EditorApp {
         }
         if let Some(r) = &mut self.runner {
             for l in r.rx.try_iter() {
-                let kind = if l.starts_with("[error]") { LogKind::Error } else { LogKind::Game };
+                let kind = if l.starts_with("[error]") || l.contains("] [error]") { LogKind::Error } else { LogKind::Game };
                 self.log.push(LogLine { kind, text: l });
             }
-            if let Ok(Some(status)) = r.child.try_wait() {
-                let msg = format!("■ el juego terminó ({status})");
+            let statuses: Vec<Option<std::process::ExitStatus>> = r.children.iter_mut().map(|c| c.try_wait().ok().flatten()).collect();
+            if statuses.iter().all(|s| s.is_some()) {
+                let msg = match statuses.last() {
+                    Some(Some(status)) if statuses.len() == 1 => format!("■ el juego terminó ({status})"),
+                    _ => "■ las copias del juego terminaron".to_string(),
+                };
                 self.runner = None;
                 self.info(LogKind::Info, msg);
             }
@@ -915,6 +950,10 @@ impl EditorApp {
             ui.menu_button("Juego", |ui| {
                 if ui.button("▶ Ejecutar    F5").clicked() {
                     self.run_game();
+                    ui.close();
+                }
+                if ui.button("▶▶ Ejecutar 2 instancias").on_hover_text("multijugador: dos copias del juego, una al lado de la otra (en una pulsa H para ser host y en la otra J para unirte)").clicked() {
+                    self.run_games(2);
                     ui.close();
                 }
                 if ui.button("✔ Comprobar    F6").clicked() {
@@ -1857,6 +1896,11 @@ impl EditorApp {
         }
         if let (Some(what), Some(p), 3) = (&self.auto.agent_demo, &self.project, self.auto.frames) {
             self.agent.demo(what, &p.dir, &p.game.game.name);
+        }
+        if self.auto.frames == 3 {
+            if let Some(n) = self.auto.run.take() {
+                self.run_games(n);
+            }
         }
         if self.auto.frames == 2 {
             if let Some(k) = self.auto.new.take() {

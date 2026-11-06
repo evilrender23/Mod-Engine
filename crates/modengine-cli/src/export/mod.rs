@@ -908,7 +908,16 @@ pub fn export(a: &ExportArgs, log: Log) -> Result<PathBuf, String> {
             log(&format!("PASO 4/{total} Creando el APK"));
             let apk = out.join(format!("{name}.apk"));
             let work = tools::cache_dir().join("apk").join(g.android_package());
-            let apk = android::build_apk(&t, android::ApkInput { game: &g, pack: &pack_bytes, libs, icon, signing, work, out: apk }, log)?;
+            // multiplayer games need the INTERNET permission (game.toml [android] internet overrides)
+            let internet = g.android.internet.unwrap_or_else(|| {
+                pack::Pack::parse(pack_bytes.clone())
+                    .map(|p| p.files().any(|(n, d)| (n.ends_with(".ms") || n.ends_with(".toml")) && modengine::net::source_uses_network(&String::from_utf8_lossy(d))))
+                    .unwrap_or(false)
+            });
+            if internet {
+                log("permiso INTERNET (el juego usa la red)");
+            }
+            let apk = android::build_apk(&t, android::ApkInput { game: &g, pack: &pack_bytes, libs, icon, signing, internet, work, out: apk }, log)?;
             log(&format!("{} ({})", apk.display(), human(std::fs::metadata(&apk).map(|m| m.len()).unwrap_or(0))));
             if a.install {
                 let adb = t.adb().ok_or("no se encuentra adb (platform-tools)")?;

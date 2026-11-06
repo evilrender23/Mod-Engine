@@ -275,3 +275,126 @@ fn typed_object_variables() {
     assert!(parse_file("t.ms", "object A { s: num }").unwrap_err().msg.contains("initial value"));
     assert!(parse_file("t.ms", "object A { s: num = 1\n s: num = 2 }").unwrap_err().msg.contains("twice"));
 }
+
+// ---------------------------------------------------------------- closures and for-in
+
+const MAP_HELPERS: &str = r#"
+    function my_map(a, f) { var out = []; for (var i = 0; i < len(a); i++) out[i] = f(a[i]); return out }
+    function each(a, f) { for (var i = 0; i < len(a); i++) f(a[i]) }
+"#;
+
+#[test]
+fn closures_capture_locals() {
+    let src = format!(
+        "{MAP_HELPERS}{}",
+        r#"
+        var k = 3
+        print(my_map([1, 2], function(x) { return x * k }))
+        var total = 0
+        each([1, 2, 3], function(x) { total += x })
+        print(total)
+        k = 10
+        var times_k = function(x) { return x * k }
+        k = 20
+        print(times_k(2))
+    "#
+    );
+    assert_eq!(run(&src), ["[3, 6]", "6", "40"], "captured by reference: later changes are seen");
+}
+
+#[test]
+fn closures_outlive_their_frame() {
+    let src = r#"
+        function counter() { var n = 0; return function() { n += 1; return n } }
+        var a = counter()
+        var b = counter()
+        a(); a()
+        print(a(), b())
+        function adder(base) { return function(x) { return function() { return base + x } } }
+        print(adder(1)(2)())
+    "#;
+    assert_eq!(run(src), ["3 1", "3"]);
+}
+
+#[test]
+fn closure_scoping_rules() {
+    let src = r#"
+        var a = 1
+        var f = function() { var a = 5; return a }
+        print(f(), a)
+        var g = function(a) { return a * 2 }
+        print(g(4), a)
+        var h = function() { a = 7 }
+        h()
+        print(a)
+        var gs = []
+        for (var i = 0; i < 3; i++) gs[i] = function() { return i }
+        print(gs[0](), gs[2]())
+        var fs = []
+        for (x in [1, 2, 3]) fs[len(fs)] = function() { return x }
+        print(fs[0](), fs[2]())
+        var fact = function(n) { return n <= 1 ? 1 : n * fact(n - 1) }
+        print(fact(5))
+    "#;
+    // a C-style loop variable is one variable for the whole function; for-in makes one per pass
+    assert_eq!(run(src), ["5 1", "8 1", "7", "3 3", "1 3", "120"]);
+}
+
+#[test]
+fn closure_in_struct_and_with_see_locals() {
+    let src = r#"
+        var bonus = 4
+        var s = { v: 1, get: function() { return v + bonus } }
+        print(s.get())
+        with (all) {
+            hp = 10
+            heal = function(n) { hp += n + bonus }
+        }
+        bonus = 1
+        with (all) heal(2)
+        with (all) print(hp)
+    "#;
+    assert_eq!(run(src), ["5", "13", "13"]);
+}
+
+#[test]
+fn for_in_loops() {
+    let src = r#"
+        var out = ""
+        for (x in [1, 2, 3, 4, 5]) { if x == 2 continue; if x == 4 break; out += x }
+        print(out)
+        for (i, x in ["a", "b"]) print(i, x)
+        var st = { hp: 3, name: "orc" }
+        for (k in st) print(k)
+        for (k, v in st) print(k, v)
+        for (var ch in "hé") print(ch)
+        var arr = [1, 2]
+        for (x in arr) { arr[len(arr)] = x * 10 }
+        print(arr)
+        for (k, v in st) { st.extra = 1; v = 99 }
+        print(st)
+        function first_big(a) { for (x in a) if x > 10 return x; return -1 }
+        print(first_big([3, 30, 40]), first_big([]))
+        var n = 0
+        for (a in [[1, 2], [3]]) for (b in a) n += b
+        print(n)
+        for (e in all) print("inst", e)
+        var in = 2
+        print(in)
+    "#;
+    assert_eq!(
+        run(src),
+        [
+            "13", "0 a", "1 b", "hp", "name", "hp 3", "name orc", "h", "é", "[1, 2, 10, 20]",
+            "{hp: 3, name: \"orc\", extra: 1}", "30 -1", "6", "inst <instance 1>", "inst <instance 2>", "2"
+        ]
+    );
+    assert!(run_err("for (x in null) print(x)").contains("for-in needs"));
+    assert!(parse_file("t.ms", "for (x in [1]) print(x)").is_ok());
+    assert!(parse_file("t.ms", "for (var k, v in {}) print(k)").is_ok());
+}
+
+#[test]
+fn super_outside_objects_is_an_error() {
+    assert!(run_err("function f() { return super.g() }\nf()").contains("super.g"));
+}

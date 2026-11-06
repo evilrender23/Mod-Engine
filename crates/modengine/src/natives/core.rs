@@ -119,6 +119,10 @@ pub(super) fn register(r: &mut Reg) {
         Ok(Value::Null)
     });
     r.f("randomize", |e, _, _| {
+        if e.seeded_randomize() {
+            // --seed: reproducible runs
+            return Ok(Value::Null);
+        }
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
         e.rng = t | 1;
         Ok(Value::Null)
@@ -381,10 +385,12 @@ pub(super) fn register(r: &mut Reg) {
     r.f("remove_key", |_, _, a| Ok(A(a).strukt(0)?.borrow_mut().fields.shift_remove(&intern(&A(a).text(1)?)).unwrap_or(Value::Null)));
 
     // ---------------------------------------------------------------- debug & misc
-    r.f("print", |_, _, a| {
-        println!("{}", a.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
-        Ok(Value::Null)
-    });
+    for name in ["print", "show_debug_message"] {
+        r.f(name, |_, _, a| {
+            println!("{}", a.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
+            Ok(Value::Null)
+        });
+    }
     r.f("error", |_, _, a| err(A(a).text(0)?));
     r.f("call", |e, cx, a| {
         let f = A(a).val(0)?.clone();
@@ -398,6 +404,14 @@ pub(super) fn register(r: &mut Reg) {
 }
 
 pub(crate) fn to_json(v: &Value) -> RtResult<serde_json::Value> {
+    to_json_at(v, 0)
+}
+
+fn to_json_at(v: &Value, depth: u32) -> RtResult<serde_json::Value> {
+    if depth > 64 {
+        return err("data nested more than 64 levels (does a struct contain itself?)");
+    }
+    let to_json = |v: &Value| to_json_at(v, depth + 1);
     Ok(match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),

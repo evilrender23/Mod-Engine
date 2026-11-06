@@ -7,17 +7,22 @@
 //! instances, assets and built-in functions.
 
 pub mod ast;
+pub mod coro;
+mod freevars;
 pub mod interp;
 pub mod lexer;
 pub mod parser;
 pub mod sym;
 pub mod value;
 
-pub use ast::{EventDecl, Expr, FileAst, FuncDef, ObjectDecl, Stmt, UnOp, VarDecl, VarType};
-pub use interp::{call_value, eval_expr, run_def, run_stmts, CallCx, Host, RtError, RtResult, Scope};
+pub use coro::{Coroutine, Resume};
+pub use ast::{EventDecl, Expr, FileAst, FuncDef, ObjectDecl, Stmt, StmtKind, UnOp, VarDecl, VarType};
+pub use interp::{call_value, eval_expr, run_def, run_stmts, CallCx, Host, RtError, RtResult, Scope, SuperMethod};
 pub use parser::{parse_expr, parse_file, parse_stmts, parse_var_type, CompileError};
 pub use sym::{intern, Sym};
 pub use value::{fmt_num, ArrayRef, AssetKind, Closure, StructObj, StructRef, Value};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod coro_tests;

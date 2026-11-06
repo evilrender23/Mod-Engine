@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 const KEYWORDS: &[&str] = &[
     "var", "if", "else", "while", "do", "until", "for", "repeat", "switch", "case", "default", "break", "continue", "return",
-    "exit", "with", "function", "and", "or", "not", "mod", "div", "object", "on",
+    "exit", "with", "function", "and", "or", "not", "mod", "div", "object", "on", "in", "super",
 ];
 const VALUES: &[&str] = &["true", "false", "null", "none", "self", "other", "all", "global"];
 
@@ -15,6 +15,8 @@ fn builtins() -> &'static HashSet<String> {
     static B: OnceLock<HashSet<String>> = OnceLock::new();
     B.get_or_init(|| {
         let mut s: HashSet<String> = modengine::natives::names().into_iter().collect();
+        // network_type_data, buffer_u8, async_load...
+        s.extend(modengine::natives::constant_names().into_iter().filter(|n| n.contains('_')));
         for (n, _) in modengine::instance::BUILTIN_VARS {
             s.insert(format!("@{n}"));
         }

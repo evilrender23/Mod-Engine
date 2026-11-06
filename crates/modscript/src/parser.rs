@@ -222,7 +222,7 @@ impl Parser {
                         name: ev,
                         arg,
                         line: l,
-                        body: Rc::new(FuncDef { name: fname, params: vec![], body, file: self.file.clone(), line: l }),
+                        body: Rc::new(FuncDef { name: fname, params: vec![], body, file: self.file.clone(), line: l, free: Default::default() }),
                     });
                 }
                 Tok::Ident(n) if *self.peek2() == Tok::Colon => {
@@ -360,7 +360,7 @@ impl Parser {
             }
         }
         let body = self.block()?;
-        Ok(Rc::new(FuncDef { name, params, body, file: self.file.clone(), line }))
+        Ok(Rc::new(FuncDef { name, params, body, file: self.file.clone(), line, free: Default::default() }))
     }
 
     fn block(&mut self) -> PResult<Vec<Stmt>> {
@@ -424,6 +424,9 @@ impl Parser {
             Tok::For => {
                 self.bump();
                 self.expect(Tok::LParen, "'(' after for")?;
+                if let Some(k) = self.for_in()? {
+                    return Ok(Stmt { kind: k, line });
+                }
                 let init = if *self.peek() == Tok::Semi {
                     None
                 } else if *self.peek() == Tok::Var {
@@ -515,6 +518,36 @@ impl Parser {
             }
         };
         Ok(Stmt { kind, line })
+    }
+
+    /// After `for (`: parses `[var] x in e) body` or `[var] k, v in e) body` if the header
+    /// has that shape (`in` is contextual, not a reserved word); otherwise consumes nothing.
+    fn for_in(&mut self) -> PResult<Option<StmtKind>> {
+        let start = self.pos;
+        let is_in = |t: &Tok| matches!(t, Tok::Ident(s) if &*s.name() == "in");
+        let at = |p: &Self, i: usize| p.t[(p.pos + i).min(p.t.len() - 1)].tok.clone();
+        let skip = usize::from(*self.peek() == Tok::Var);
+        let shape = match (at(self, skip), at(self, skip + 1), at(self, skip + 2), at(self, skip + 3)) {
+            (Tok::Ident(_), t, _, _) if is_in(&t) => 1,
+            (Tok::Ident(_), Tok::Comma, Tok::Ident(_), t) if is_in(&t) => 2,
+            _ => 0,
+        };
+        if shape == 0 {
+            return Ok(None);
+        }
+        self.pos = start + skip;
+        let a = self.ident("loop variable")?;
+        let b = if shape == 2 {
+            self.bump(); // ','
+            Some(self.ident("loop variable")?)
+        } else {
+            None
+        };
+        self.bump(); // `in`
+        let coll = self.expr()?;
+        self.expect(Tok::RParen, "')' to close the for header")?;
+        let body = self.stmt()?;
+        Ok(Some(StmtKind::ForIn(a, b, coll, Box::new(body))))
     }
 
     fn var_decl(&mut self) -> PResult<StmtKind> {
@@ -693,6 +726,11 @@ impl Parser {
             Tok::Null | Tok::NoneKw => {
                 self.bump();
                 Expr::Null
+            }
+            Tok::Ident(s) if &*s.name() == "super" && *self.peek2() == Tok::Dot => {
+                self.bump();
+                self.bump();
+                Expr::Super(self.ident("method name after 'super.'")?)
             }
             Tok::Ident(s) => {
                 self.bump();

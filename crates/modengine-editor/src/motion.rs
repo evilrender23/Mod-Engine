@@ -510,6 +510,8 @@ pub fn draw_room(painter: &egui::Painter, cx: &mut Cx, ctx: &egui::Context, view
                 let (Some(ts), Some(map)) = (l.tileset.as_deref(), l.map.as_deref()) else { continue };
                 let Some(t) = cx.tex.get(ctx, p, ts) else { continue };
                 let [cw, ch] = l.cell.unwrap_or([t.spr.fw, t.spr.fh]);
+                let (sx, sy) = l.tile_scale().unwrap_or((1.0, 1.0));
+                let (cw, ch) = ((cw as f64 * sx).round() as u32, (ch as f64 * sy).round() as u32);
                 for (r, row) in map.lines().filter(|r| !r.trim().is_empty()).enumerate() {
                     for (c, chr) in row.chars().enumerate() {
                         let Some(tile) = l.legend.get(&chr.to_string()).and_then(|v| v.as_integer()) else { continue };

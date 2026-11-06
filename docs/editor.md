@@ -62,6 +62,10 @@ ubicación en `new_project_dir.txt` y los favoritos del explorador en `project_f
 
 Los paneles laterales se ocultan desde **Ver**, donde también está el panel **Agente** (ver [Agente](#agente)).
 
+**Juego → ▶▶ Ejecutar 2 instancias** lanza dos copias del juego, una al lado de la otra (`[1]` y
+`[2]` en el título), para probar el multijugador en un solo ordenador; en la Salida cada línea
+lleva delante `[1]` o `[2]`, y ■ Detener cierra las dos. Ver [red.md](red.md#probar-en-un-solo-ordenador).
+
 ### Menú Crear y atajos Alt
 
 Como el menú *Create* de GameMaker, **Crear** (en la barra de menús, con clic derecho en el
@@ -179,7 +183,8 @@ caracteres de la leyenda y reutiliza los que ya había); las libres, en la lista
 - **Eventos**: **+ Evento** ofrece todos (colisión con cada objeto, cada tecla, alarmas, ratón,
   eventos de usuario…). Debajo, en gris, los eventos que el objeto **hereda** de sus padres:
   al seleccionarlos se ve su código y *Sobrescribir aquí* crea uno propio que empieza con
-  `inherited()`.
+  `inherited()`. **Red (network)** añade el evento de multijugador (conexiones, desconexiones y
+  mensajes, con los datos en `async_load`; ver [red.md](red.md)).
 - **Métodos** y **Variables**: cada variable tiene nombre, tipo opcional (`num`, `int`, `bool`,
   `str`, `color`, `list`, o un tipo de asset) y valor inicial con el control de su tipo:
   deslizador si el número tiene límites, casilla, selector de color, desplegable... Si el valor
@@ -204,7 +209,13 @@ Para sprites de pixel art: lápiz, borrador, relleno, cuentagotas y herramienta 
 rejilla, papel cebolla (el fotograma anterior en transparencia), voltear, fotogramas (nuevo,
 duplicar, eliminar, reordenar), vista previa animada con sus fps, colores de la paleta común
 más colores propios del sprite, cambio de tamaño, origen y máscara de colisión manual o
-automática.
+automática. Abre también los sprites escritos con `pixels_rle`; la casilla **guardar compacto
+(pixels_rle)** decide si se guardan por tramos (mucho más pequeño en sprites grandes) o con
+`pixels`.
+
+**Rotación** (pixel art y PNG): cómo se ve el sprite girado — *la del juego* (lo que diga
+`[display] rotation`), `nearest`, **RotSprite (pixel art)** o *suave (lineal)* — y los **pasos**
+por vuelta (0 = ángulo libre). Ver «Rotación de pixel art» en proyecto.md.
 
 Para sprites PNG: tira o rejilla de fotogramas, fps, origen y máscara.
 
@@ -265,6 +276,10 @@ un tile set la paleta muestra la imagen entera:
   transformación) funcionan como con los objetos. Los tiles animados se mueven en el editor.
 
 Estas capas se guardan como `data` (filas de números) en vez de `legend` + `map`.
+
+**Escala** (propiedades de una capa de tiles, ×x ×y): dibuja los tiles más grandes sin hornear
+otra imagen (`scale = 3` en la room). La rejilla, la pintura, el tamaño de la room y el juego
+usan celdas de `Celda × Escala` píxeles; `Celda` sigue siendo el tamaño del tile.
 
 ## Paletas (Lospec)
 

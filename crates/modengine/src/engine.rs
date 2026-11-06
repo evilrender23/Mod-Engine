@@ -36,11 +36,15 @@ pub enum LayerKind {
         tileset: u32,
         /// Tile set asset (animated tiles, `tilemap_get_tileset`); None for a plain sprite.
         set: Option<u32>,
+        /// Cell size in room pixels (the layer's `cell` times its `scale`).
         cw: u32,
         ch: u32,
         grid: Vec<Vec<i32>>,
         ox: f64,
         oy: f64,
+        /// Draw scale of the tiles (`scale = 3` in the room): tiles, cells, collisions and
+        /// the `tilemap_*` functions all work in scaled room pixels.
+        scale: (f64, f64),
     },
     Instances,
 }
@@ -113,6 +117,7 @@ struct DynSyms {
     room: Sym,
     room_width: Sym,
     room_height: Sym,
+    async_load: Sym,
 }
 
 pub type MeasureFn = Box<dyn Fn(Option<u32>, &str, f32) -> (f32, f32)>;
@@ -169,9 +174,11 @@ pub struct Engine {
     pub audio: Vec<AudioCmd>,
     /// Recent runtime errors (also printed to stderr once each).
     pub errors: Vec<String>,
-    seen_errors: HashSet<String>,
+    pub(crate) seen_errors: HashSet<String>,
     event_stack: Vec<(Ev, u32)>,
     pub(crate) rng: u64,
+    /// Methods by declaring object (super / inherited() in methods).
+    pub methods: crate::methods::MethodTable,
     pub steps: u64,
     /// Real frames per second, set by the backend.
     pub fps: f64,
@@ -182,8 +189,32 @@ pub struct Engine {
     pub parts: crate::effects::EngineParts,
     /// Shaders and the blend mode.
     pub shaders: crate::shader::Shaders,
+    /// Surfaces (`surface_*`) and application_surface settings.
+    pub surfaces: crate::surface::Surfaces,
     /// `extensions/` of the project.
     pub extensions: Vec<crate::extension::Extension>,
+    /// Sockets (`network_*`) and the multiplayer session (`net_*`).
+    pub net: crate::net::Net,
+    /// Binary buffers (`buffer_*`).
+    pub buffers: crate::buffer::Buffers,
+    /// Text typed by the player (`keyboard_string()`).
+    pub keyboard_string: String,
+    /// Cursor, last typed character, scissor stack (see `ui_state.rs`).
+    pub ui: crate::ui_state::UiState,
+    /// Navigation grids and flow fields (`mp_grid_*`, `mp_flow_*`).
+    pub nav: crate::navgrid::NavState,
+    /// `async_load` while a `network` event runs (null otherwise).
+    pub async_load: Value,
+    /// Test hooks from the terminal (`--seed`, `--assert`, `--profile`...; see testing.rs).
+    pub testing: crate::testing::Testing,
+    /// Software mixer shared with the audio thread (`audio.rs`).
+    pub audio_mix: crate::audio::AudioState,
+    /// `coroutine()` and `call_later()` (`coroutine.rs`).
+    pub coros: crate::coroutine::Coroutines,
+    /// `rng_create()` random streams.
+    pub rngs: crate::natives::rng::Streams,
+    /// `instance_pool_create()` / `pool_spawn()` (`pool.rs`).
+    pub pools: crate::pool::Pools,
 }
 
 fn overlap(a: [f64; 4], b: [f64; 4]) -> bool {
@@ -222,7 +253,7 @@ impl Engine {
         let mut register = |name: &str, v: Value, errors: &mut Vec<String>| {
             let s = intern(name);
             if let Some(prev) = assets.get(&s) {
-                errors.push(format!("duplicate asset name '{name}' ({} and {})", prev.type_name(), v.type_name()));
+                errors.push(crate::lint::clash_message(&p.dir, name, prev, &v, &p.scripts));
             }
             assets.insert(s, v);
         };
@@ -330,6 +361,7 @@ impl Engine {
                 room: intern("room"),
                 room_width: intern("room_width"),
                 room_height: intern("room_height"),
+                async_load: intern("async_load"),
             },
             init_code,
             startup_code: None,
@@ -365,6 +397,7 @@ impl Engine {
             seen_errors: HashSet::new(),
             event_stack: vec![],
             rng: 0x9E37_79B9_7F4A_7C15,
+            methods: Default::default(),
             steps: 0,
             fps: 0.0,
             debug: false,
@@ -375,7 +408,19 @@ impl Engine {
             }),
             parts: Default::default(),
             shaders: Default::default(),
+            surfaces: Default::default(),
             extensions: vec![],
+            net: Default::default(),
+            buffers: Default::default(),
+            keyboard_string: String::new(),
+            ui: Default::default(),
+            nav: Default::default(),
+            async_load: Value::Null,
+            testing: Default::default(),
+            audio_mix: Default::default(),
+            coros: Default::default(),
+            rngs: Default::default(),
+            pools: Default::default(),
         };
         // particle systems, shaders and extensions
         crate::effects::link(&mut e, &mut errors);
@@ -477,6 +522,7 @@ impl Engine {
         }
 
         crate::anim_assets::resolve_sequences(&mut e, motion.sequences, &mut errors);
+        e.methods = crate::methods::MethodTable::build(&e.objects);
 
         // ---- rooms
         for (name, path, rt) in &p.rooms {
@@ -611,7 +657,9 @@ impl Engine {
                         None => self.sprite_by_name(ts).map_err(|_| format!("tile set or sprite '{ts}' does not exist"))?,
                     };
                     let spr = &self.sprites[tileset as usize];
+                    let scale = l.tile_scale().map_err(|e| format!("layer '{lname}': {e}"))?;
                     let [cw, ch] = l.cell.unwrap_or([spr.fw, spr.fh]);
+                    let (cw, ch) = ((cw as f64 * scale.0).round().max(1.0) as u32, (ch as f64 * scale.1).round().max(1.0) as u32);
                     let mut grid = Vec::new();
                     if let Some(data) = &l.data {
                         grid = crate::natives::tilemap::parse_data(data).map_err(|e| format!("layer '{lname}': {e}"))?;
@@ -636,7 +684,7 @@ impl Engine {
                     }
                     max_w = max_w.max(grid.iter().map(|r| r.len()).max().unwrap_or(0) as f64 * cw as f64 + l.x);
                     max_h = max_h.max(grid.len() as f64 * ch as f64 + l.y);
-                    LayerKind::Tiles { tileset, set, cw, ch, grid, ox: l.x, oy: l.y }
+                    LayerKind::Tiles { tileset, set, cw, ch, grid, ox: l.x, oy: l.y, scale }
                 }
                 "instances" => {
                     for it in &l.instances {
@@ -743,11 +791,24 @@ impl Engine {
         Ok(())
     }
 
+    /// Runs ModScript in the global scope right now (tools, tests, consoles).
+    /// Runtime errors are reported like any other and also returned.
+    pub fn run_code(&mut self, src: &str) -> Result<(), String> {
+        let stmts = parse_stmts("<exec>", src).map_err(|e| e.to_string())?;
+        run_stmts(self, &stmts, &Rc::from("<exec>"), CallCx::global()).map_err(|e| {
+            let msg = e.to_string();
+            self.report(e);
+            msg
+        })
+    }
+
     /// Call when the window closes.
     pub fn shutdown(&mut self) {
         let ids = self.ids();
         self.dispatch(&ids, Ev::GameEnd);
         self.extensions_final();
+        // sockets are global: they live until destroyed or the game ends (like GameMaker)
+        self.net.close_all();
     }
 
     pub fn step_rate(&self) -> f64 {
@@ -792,6 +853,7 @@ impl Engine {
                 }
             }
         }
+        self.test_room_entered();
         let ids = self.ids();
         if first {
             self.dispatch(&ids, Ev::GameStart);
@@ -815,6 +877,9 @@ impl Engine {
 
     fn restart_game(&mut self) {
         self.audio.push(AudioCmd::StopAll);
+        crate::audio::stop_all(self);
+        self.coros.clear();
+        self.pools.clear();
         self.insts.clear();
         self.index.clear();
         self.seqs.list.clear();
@@ -822,6 +887,9 @@ impl Engine {
         self.parts.world.systems.clear();
         self.globals.clear();
         self.saved_rooms.clear();
+        self.net.close_all();
+        self.buffers.clear();
+        self.keyboard_string.clear();
         self.start();
     }
 
@@ -979,16 +1047,17 @@ impl Engine {
     /// Would instance `i` overlap `target` if it stood at (x, y)?
     pub fn hits_at(&self, i: usize, x: f64, y: f64, target: &Value, first: bool) -> Vec<u32> {
         match self.bbox_at(i, x, y) {
-            Some(bb) => self.hits_rect(bb, target, Some(self.insts[i].id), first),
+            // only instances on a layer of the caller's `collision_mask` count
+            Some(bb) => self.hits_rect_mask(bb, target, Some(self.insts[i].id), first, self.insts[i].col_mask),
             None => vec![],
         }
     }
 
     pub fn solid_at(&self, i: usize, x: f64, y: f64) -> bool {
         let Some(bb) = self.bbox_at(i, x, y) else { return false };
-        let me = self.insts[i].id;
+        let (me, mask) = (self.insts[i].id, self.insts[i].col_mask);
         self.insts.iter().enumerate().any(|(j, o)| {
-            o.alive && o.solid && o.id != me && self.bbox(j).map(|ob| overlap(bb, ob)).unwrap_or(false)
+            o.alive && o.solid && o.id != me && o.col_layer & mask != 0 && self.bbox(j).map(|ob| overlap(bb, ob)).unwrap_or(false)
         })
     }
 
@@ -1007,7 +1076,9 @@ impl Engine {
 
     fn exec_event(&mut self, id: u32, ev: Ev, owner: u32, def: &Rc<FuncDef>, other: Scope) {
         self.event_stack.push((ev, owner));
+        let prof = crate::testing::prof_begin(self, id);
         let r = run_def(self, def, Scope::Inst(id), other, vec![]);
+        crate::testing::prof_end(self, prof, ev);
         self.event_stack.pop();
         if let Err(e) = r {
             self.report(e);
@@ -1057,6 +1128,8 @@ impl Engine {
             inst.xprev = inst.x;
             inst.yprev = inst.y;
         }
+        self.typing();
+        self.network_events();
         let ids = self.ids();
 
         self.dispatch(&ids, Ev::StepBegin);
@@ -1064,6 +1137,7 @@ impl Engine {
         self.alarms(&ids);
         self.input_events(&ids);
         self.dispatch(&ids, Ev::Step);
+        crate::coroutine::step(self);
         self.motion();
         crate::anim_assets::step_paths(self, &ids);
         self.collisions(&ids);
@@ -1079,6 +1153,7 @@ impl Engine {
             }
         }
         self.update_camera(false);
+        crate::audio::step(self);
         if self.insts.iter().any(|i| !i.alive) {
             self.insts.retain(|i| i.alive);
             self.rebuild_index();
@@ -1092,6 +1167,48 @@ impl Engine {
         } else if let Some(r) = self.pending_room.take() {
             self.leave_room();
             self.enter_room(r, false);
+        }
+    }
+
+    /// `keyboard_string`: what the player types (backspace deletes).
+    fn typing(&mut self) {
+        let held = self.input.down[crate::input::BACKSPACE];
+        if self.ui.backspace_repeat(held) || self.input.pressed[crate::input::BACKSPACE] {
+            self.keyboard_string.pop();
+        }
+        if self.input.typed.is_empty() {
+            return;
+        }
+        let typed = std::mem::take(&mut self.input.typed);
+        for c in typed.chars() {
+            if c == '\u{8}' {
+                // some backends send backspace as a character too; the key already did it
+                continue;
+            }
+            if !c.is_control() && self.keyboard_string.chars().count() < crate::natives::net::KEYBOARD_MAX {
+                self.keyboard_string.push(c);
+                self.ui.lastchar = c.to_string();
+            }
+        }
+    }
+
+    /// The `network` event: once per thing that happened on the network, for every
+    /// instance that has it, with `async_load` describing it.
+    fn network_events(&mut self) {
+        if self.net.is_idle() && self.net.log.is_empty() {
+            return;
+        }
+        for (load, tmp) in crate::natives::net::poll(self) {
+            self.async_load = load;
+            let ids = self.ids();
+            for id in ids {
+                self.run_event(id, Ev::Network, Scope::Global);
+            }
+            self.async_load = Value::Null;
+            if let Some(b) = tmp {
+                // the received data only lives during the event (copy it to keep it)
+                self.buffers.remove(b);
+            }
         }
     }
 
@@ -1285,7 +1402,8 @@ impl Engine {
 
     /// Runs the draw events and fills `self.cmds`.
     pub fn render(&mut self) {
-        self.cmds.clear();
+        crate::surface::begin_render(self);
+        self.ui.clip.clear();
         self.draw = DrawState::default();
         // the backend starts every frame with the default shader and blend mode
         self.shaders.current = None;
@@ -1309,6 +1427,7 @@ impl Engine {
         order.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
         let inst_ids: Vec<u32> = order.iter().map(|o| o.2).collect();
 
+        crate::surface::pre_draw(self, &inst_ids, &view);
         self.dispatch_visible(&inst_ids, Ev::DrawBegin);
 
         // layers and instances interleaved by depth (layers first on ties)
@@ -1368,12 +1487,15 @@ impl Engine {
             }
         }
 
+        self.ui.clip.clear();
         self.cmds.push(DrawCmd::Gui);
         self.draw = DrawState::default();
         self.dispatch_visible(&inst_ids, Ev::DrawGui);
+        crate::natives::ui::draw_cursor(self);
+        crate::surface::end_render(self, &inst_ids);
     }
 
-    fn dispatch_visible(&mut self, ids: &[u32], ev: Ev) {
+    pub(crate) fn dispatch_visible(&mut self, ids: &[u32], ev: Ev) {
         for &id in ids {
             if let Some(i) = self.idx(id) {
                 if self.insts[i].alive && self.insts[i].visible {
@@ -1521,6 +1643,7 @@ impl Engine {
             Bv::SpriteHeight => n(inst.sprite.map(|s| self.sprites[s as usize].fh as f64 * inst.scale_y.abs()).unwrap_or(0.0)),
             Bv::Path(v) => crate::path::get_var(inst, v),
             Bv::Timeline(v) => crate::timeline::get_var(inst, v),
+            Bv::Ext(v) => crate::natives::ui::get_ext(self, Some(i), v),
         }
     }
 
@@ -1573,6 +1696,7 @@ impl Engine {
             },
             Bv::Path(pv) => return crate::path::set_var(inst, pv, v),
             Bv::Timeline(tv) => return crate::timeline::set_var(inst, tv, v),
+            Bv::Ext(xv) => return crate::natives::ui::set_ext(self, Some(i), xv, name, v),
             _ => return Err(RtError::new(format!("'{name}' is read-only"))),
         }
         Ok(())
@@ -1672,6 +1796,13 @@ impl Host for Engine {
     }
 
     fn global_set(&mut self, name: Sym, v: Value) {
+        if let Some(Bv::Ext(x)) = self.builtin(name).filter(|b| matches!(b, Bv::Ext(x) if x.is_global())) {
+            // keyboard_string, cursor_sprite... set from room code or a script
+            if let Err(e) = crate::natives::ui::set_ext(self, None, x, name, v) {
+                self.report(e);
+            }
+            return;
+        }
         self.globals.insert(name, v);
     }
 
@@ -1718,8 +1849,16 @@ impl Host for Engine {
             Some(Value::Num(self.room_w))
         } else if name == d.room_height {
             Some(Value::Num(self.room_h))
+        } else if name == d.async_load {
+            Some(self.async_load.clone())
+        } else if let Some(Bv::Ext(x)) = self.builtin(name).filter(|b| matches!(b, Bv::Ext(x) if x.is_global())) {
+            Some(crate::natives::ui::get_ext(self, None, x))
         } else {
             None
         }
+    }
+
+    fn super_method(&mut self, current: &Rc<FuncDef>, name: Option<Sym>) -> modscript::SuperMethod {
+        crate::methods::super_method(self, current, name)
     }
 }

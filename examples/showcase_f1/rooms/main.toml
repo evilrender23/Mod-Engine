@@ -1,0 +1,58 @@
+# Una sala con muros de tiles, fosos (capa de colisión 2), enemigos que siguen un campo de
+# flujo, una torreta que lanza rayos y un panel con recorte y texto enriquecido.
+width = 560
+height = 272
+background = "#323e4f"
+
+code = '''
+global.nav = mp_grid_create(0, 0, 30, 17, 16, 16)
+mp_grid_add_tilemap(global.nav, "Muros")
+mp_grid_add_instances(global.nav, Foso)
+var j = find(Jugador, 0)
+global.flujo = mp_flow_create(global.nav, j.x, j.y)
+// la vista empieza 24 px a la derecha: el recorte en coordenadas de room la sigue
+camera_set(24, 0)
+'''
+
+[[layer]]
+name = "Muros"
+type = "tiles"
+tileset = "spr_muro"
+depth = 50
+data = '''
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+0 . . . . . . . 0 . . . . . . . . . . . . . . . . . . . . 0
+0 . . . . . . . 0 . . . . . . . . . . . . . . . . . . . . 0
+0 . . . . . . . 0 . . . . . . . . . . . . . . . . . . . . 0
+0 . . . . . . . 0 . . . . . . . . . . . . . . . . . . . . 0
+0 . . . . . . . 0 . . . . . . . . . 0 0 0 0 0 0 0 0 0 . . 0
+0 . . . . . . . 0 . . . . . . 0 . . . . . . . . . . . . . 0
+0 . . . . . . . 0 . . . . . . 0 . . . . . . . . . . . . . 0
+0 . . . . . . . 0 . . . . . . 0 . . . . . . . . . . . . . 0
+0 . . . . . . . 0 . . . . . . 0 . . . . . . 0 . . . . . . 0
+0 . . . . . . . 0 . . . . . . 0 . . . . . . 0 . . . . . . 0
+0 . . . . . . . . . . . . . . 0 . . . . . . 0 . . . . . . 0
+0 . . . . . . . . . . . . . . 0 . . . . . . 0 . . . . . . 0
+0 . . . . . . . . . . . . . . 0 . . . . . . 0 . . . . . . 0
+0 . . . . . . . . . . . . . . 0 . . . . . . . . . . . . . 0
+0 . . . . . . . . . . . . . . 0 . . . . . . . . . . . . . 0
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+'''
+
+[[layer]]
+type = "instances"
+instances = [
+    { object = "Foso", x = 160, y = 176 },
+    { object = "Foso", x = 176, y = 176 },
+    { object = "Foso", x = 160, y = 192 },
+    { object = "Foso", x = 176, y = 192 },
+    { object = "Foso", x = 304, y = 32 },
+    { object = "Foso", x = 304, y = 48 },
+    { object = "Jugador", x = 392, y = 200 },
+    { object = "Enemigo", x = 40, y = 40 },
+    { object = "Enemigo", x = 40, y = 230 },
+    { object = "Enemigo", x = 200, y = 40 },
+    { object = "Enemigo", x = 100, y = 140 },
+    { object = "Torreta", x = 200, y = 120 },
+    { object = "Demo", x = 0, y = 0 },
+]

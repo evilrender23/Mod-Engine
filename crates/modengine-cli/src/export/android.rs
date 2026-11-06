@@ -47,7 +47,8 @@ pub fn orientation_attr(o: &str) -> &'static str {
 }
 
 /// `debuggable`: debug-signed APKs can be inspected with `adb shell run-as <package>`.
-pub fn manifest(g: &GameToml, debuggable: bool) -> String {
+/// `internet`: the game uses networking (multiplayer), so it needs the INTERNET permission.
+pub fn manifest(g: &GameToml, debuggable: bool, internet: bool) -> String {
     let pkg = g.android_package();
     let version = if g.game.version.trim().is_empty() { "1.0" } else { g.game.version.trim() };
     format!(
@@ -57,7 +58,7 @@ pub fn manifest(g: &GameToml, debuggable: bool) -> String {
     android:versionCode="{code}"
     android:versionName="{vname}">
     <uses-sdk android:minSdkVersion="{MIN_SDK}" android:targetSdkVersion="{TARGET_SDK}" />
-    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />{perms}
     <application
         android:label="{label}"
         android:icon="@mipmap/ic_launcher"
@@ -83,6 +84,11 @@ pub fn manifest(g: &GameToml, debuggable: bool) -> String {
         vname = xml_escape(version),
         label = xml_escape(&g.game.name),
         orient = orientation_attr(&g.android.orientation),
+        perms = if internet {
+            "\n    <uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\" />"
+        } else {
+            ""
+        },
         debug = if debuggable { "\n        android:debuggable=\"true\"" } else { "" },
     )
 }
@@ -144,6 +150,8 @@ pub struct ApkInput<'a> {
     /// 512×512 RGBA icon.
     pub icon: image::RgbaImage,
     pub signing: Signing,
+    /// Add the INTERNET permission (the game uses networking).
+    pub internet: bool,
     pub work: PathBuf,
     pub out: PathBuf,
 }
@@ -172,7 +180,7 @@ pub fn build_apk(t: &Tools, a: ApkInput, log: Log) -> Result<PathBuf, String> {
     log(&format!("APK {pkg} (SDK {}, build-tools {})", sdk.display(), bt.file_name().unwrap_or_default().to_string_lossy()));
 
     // ---- resources: manifest, launcher icons, assets/game.dat
-    write(w.join("AndroidManifest.xml"), manifest(a.game, matches!(a.signing, Signing::Debug(_))).as_bytes())?;
+    write(w.join("AndroidManifest.xml"), manifest(a.game, matches!(a.signing, Signing::Debug(_)), a.internet).as_bytes())?;
     for (dpi, n) in MIPMAPS {
         let img = image::imageops::resize(&a.icon, *n, *n, image::imageops::FilterType::Lanczos3);
         let mut png = Vec::new();
@@ -265,8 +273,9 @@ mod tests {
     #[test]
     fn manifest_from_game_toml() {
         let mut g: GameToml = toml::from_str("[game]\nname = \"Coin <Climber> & co\"\nversion = \"1.2.3\"\n[android]\norientation = \"portrait\"\nversion_code = 7\n").unwrap();
-        let m = manifest(&g, true);
+        let m = manifest(&g, true, false);
         assert!(m.contains("package=\"com.modengine.coin_climber_co\""), "{m}");
+        assert!(!m.contains("android.permission.INTERNET"), "no network, no permission");
         assert!(m.contains("android:debuggable=\"true\""));
         assert!(m.contains("android:versionCode=\"7\"") && m.contains("android:versionName=\"1.2.3\""));
         assert!(m.contains("android:label=\"Coin &lt;Climber&gt; &amp; co\""));
@@ -275,8 +284,9 @@ mod tests {
         assert!(m.contains(&format!("android:targetSdkVersion=\"{TARGET_SDK}\"")));
         g.android.package = Some("org.ana.juego".into());
         g.android.orientation = "landscape".into();
-        let m = manifest(&g, false);
+        let m = manifest(&g, false, true);
         assert!(m.contains("package=\"org.ana.juego\"") && m.contains("sensorLandscape"));
+        assert!(m.contains("<uses-permission android:name=\"android.permission.INTERNET\" />"), "{m}");
         assert!(!m.contains("debuggable"), "release APKs are not debuggable");
     }
 

@@ -2,9 +2,14 @@
 //! `modengine-runner` of exported games and the Android library (`libmodengine_cli.so`).
 
 pub mod backend;
+pub mod canvas;
 pub mod gpu_fx;
+pub mod headless;
 pub mod runner;
+pub mod scissor;
 pub mod script_input;
+pub mod sprite_draw;
+pub mod test_run;
 pub mod touch;
 
 #[cfg(not(target_os = "android"))]
@@ -13,6 +18,8 @@ pub mod export;
 pub mod import_cli;
 #[cfg(not(target_os = "android"))]
 pub mod shader_tool;
+#[cfg(not(target_os = "android"))]
+pub mod sprite_bake;
 
 /// Entry point miniquad's Android activity calls (see `android/MainActivity.java`).
 #[cfg(target_os = "android")]

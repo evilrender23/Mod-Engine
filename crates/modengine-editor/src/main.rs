@@ -83,6 +83,8 @@ fn main() -> eframe::Result {
             "--select" => auto.select = true,
             "--fit" => auto.fit = true,
             "--agent" => auto.agent = true,
+            // --run 2 : press ▶ Ejecutar (2 = Ejecutar 2 instancias) once the project is open
+            "--run" => auto.run = args.next().and_then(|n| n.parse().ok()),
             // --new font: open the New dialog of a kind · --click 60,14: click there (menus)
             "--new" => auto.new = args.next().and_then(|k| kinds::parse_kind(&k)),
             "--click" => auto.click = args.next().and_then(|s| s.split_once(',').and_then(|(x, y)| Some(eframe::egui::Pos2::new(x.trim().parse().ok()?, y.trim().parse().ok()?)))),
