@@ -803,6 +803,9 @@ impl EditorApp {
                 let names: Vec<String> = agent.changed.iter().map(|f| f.strip_prefix(&dir).unwrap_or(f).display().to_string()).collect();
                 self.info(LogKind::Info, format!("el agente cambió: {}", names.join(", ")));
             }
+            if let Some(t) = &agent.turn {
+                self.open_turn_workspace(t);
+            }
             self.check(false);
         }
         if let Some(r) = &mut self.runner {
@@ -859,6 +862,37 @@ impl EditorApp {
             Err(Some(e)) => self.info(LogKind::Error, e),
             Err(None) => {}
         }
+    }
+
+    /// Opens what an agent turn added or changed in a new workspace, laid out by kind.
+    fn open_turn_workspace(&mut self, t: &crate::agent_panel::TurnResult) {
+        let Some(p) = &self.project else { return };
+        let mut opens = crate::agent_workspace::assets_for(p, &t.files, &t.lines);
+        if opens.is_empty() {
+            return;
+        }
+        let more = opens.len().saturating_sub(crate::agent_workspace::MAX_WINDOWS);
+        opens.truncate(crate::agent_workspace::MAX_WINDOWS);
+        let mut items = vec![];
+        let mut labels = vec![];
+        for o in &opens {
+            let item = match self.ws.find(o) {
+                Some(id) => crate::workspace::Placed::Existing(id),
+                None => match make_tab(p, o) {
+                    Ok(tab) => crate::workspace::Placed::New(tab),
+                    Err(_) => continue,
+                },
+            };
+            items.push(item);
+            labels.push(crate::agent_attach::asset_label(o));
+        }
+        if items.is_empty() {
+            return;
+        }
+        let name = crate::agent_workspace::workspace_name(&t.prompt);
+        let i = self.ws.add_arranged(&name, items);
+        let extra = if more > 0 { format!(" (y {more} más en el árbol)") } else { String::new() };
+        self.info(LogKind::Info, format!("Workspace «{}»: {}{extra}", self.ws.list[i].name, labels.join(", ")));
     }
 
     fn close_win(&mut self, id: u64) {
@@ -1899,6 +1933,25 @@ impl EditorApp {
         }
         if let (Some(what), Some(p), 3) = (&self.auto.agent_demo, &self.project, self.auto.frames) {
             self.agent.demo(what, &p.dir, &p.game.game.name);
+            // --agent-demo workspace: a finished turn that added a few assets opens them
+            if what == "workspace" {
+                let rel = |path: &Path| path.strip_prefix(&p.dir).unwrap_or(path).to_string_lossy().replace('\\', "/");
+                let mut files: Vec<String> = p.rooms.iter().take(1).map(|r| rel(&r.path)).collect();
+                files.extend(p.sprites.iter().take(3).map(|s| rel(&s.path)));
+                files.extend(p.sounds.iter().take(1).map(|s| rel(&s.path)));
+                files.push("CREDITS.md".into());
+                // one object of a shared script changed, the rest are new files
+                let mut lines = std::collections::BTreeMap::new();
+                if let Some(o) = p.objects.iter().find(|o| o.name == "Slime") {
+                    if let Some(s) = p.scripts.get(o.script) {
+                        let at = crate::objsrc::find_objects(&s.text).iter().find(|f| f.name == "Slime").map(|f| s.text[..f.span.start].matches('\n').count() + 2).unwrap_or(1);
+                        files.push(rel(&s.path));
+                        lines.insert(rel(&s.path), vec![at]);
+                    }
+                }
+                let t = crate::agent_panel::TurnResult { prompt: "Añade un enemigo slime con su sprite y sonido".into(), files, lines };
+                self.open_turn_workspace(&t);
+            }
         }
         if self.auto.frames == 3 {
             if let Some(n) = self.auto.run.take() {

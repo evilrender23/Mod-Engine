@@ -131,6 +131,35 @@ impl Default for Workspaces {
     }
 }
 
+/// A window for [`Workspaces::add_arranged`]: one that is open already, or a new one.
+pub enum Placed {
+    Existing(u64),
+    New(Tab),
+}
+
+/// Positions for windows of `sizes`, left to right in rows aligned at the top, a row breaking
+/// before it gets wider than about the screen (so the whole set fits when zoomed out).
+pub fn shelf(sizes: &[Vec2], screen_w: f32) -> Vec<Pos2> {
+    let area: f32 = sizes.iter().map(|s| (s.x + GAP) * (s.y + GAP)).sum();
+    // Rows about as wide as the set is tall at the screen's aspect ratio, never narrower
+    // than the widest window.
+    let widest = sizes.iter().map(|s| s.x).fold(0.0, f32::max);
+    let max_w = (area * 16.0 / 9.0).sqrt().max(widest).max(screen_w.min(widest * 2.0 + GAP));
+    let mut out = vec![];
+    let (mut x, mut y, mut row_h) = (0.0f32, 0.0f32, 0.0f32);
+    for s in sizes {
+        if x > 0.0 && x + s.x > max_w + 1.0 {
+            x = 0.0;
+            y += row_h + GAP;
+            row_h = 0.0;
+        }
+        out.push(Pos2::new(x, y));
+        x += s.x + GAP;
+        row_h = row_h.max(s.y);
+    }
+    out
+}
+
 pub fn default_size(open: &Open) -> Vec2 {
     match open {
         Open::Room(_) => Vec2::new(940.0, 580.0),
@@ -283,6 +312,50 @@ impl Workspaces {
         }
         self.list.push(Workspace::new(format!("Workspace {n}")));
         self.active = self.list.len() - 1;
+    }
+
+    /// Opens a new workspace named `name` (made unique) with `items` laid out in rows, in
+    /// order, and shows it whole. Windows already open elsewhere are moved into it.
+    pub fn add_arranged(&mut self, name: &str, items: Vec<Placed>) -> usize {
+        let mut unique = name.to_string();
+        let mut n = 2;
+        while self.list.iter().any(|w| w.name == unique) {
+            unique = format!("{name} ({n})");
+            n += 1;
+        }
+        let mut wins: Vec<Win> = vec![];
+        for it in items {
+            match it {
+                Placed::Existing(id) => {
+                    if let Some(mut w) = self.remove(id) {
+                        w.parent = None;
+                        w.collapsed = false;
+                        w.maximized = false;
+                        wins.push(w);
+                    }
+                }
+                Placed::New(tab) => {
+                    let size = default_size(&tab.open_key());
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    wins.push(Win { id, tab, pos: Pos2::ZERO, size, collapsed: false, maximized: false, parent: None });
+                }
+            }
+        }
+        let sizes: Vec<Vec2> = wins.iter().map(|w| w.size).collect();
+        for (w, p) in wins.iter_mut().zip(shelf(&sizes, self.canvas.width().max(800.0))) {
+            w.pos = p;
+        }
+        let first = wins.first().map(|w| w.id);
+        let mut ws = Workspace::new(unique);
+        ws.wins = wins;
+        self.list.push(ws);
+        self.active = self.list.len() - 1;
+        if let Some(id) = first {
+            self.focus(id);
+        }
+        self.fit_all();
+        self.active
     }
 
     /// Removes an (empty) workspace tab; there is always at least one.
@@ -817,6 +890,27 @@ pub fn layout_path(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     }
     let name = canon.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(format!(".config/modengine/layouts/{name}-{h:016x}.toml")))
+}
+
+#[cfg(test)]
+mod shelf_tests {
+    use super::*;
+
+    #[test]
+    fn shelf_packs_rows_without_overlap() {
+        let sizes = vec![Vec2::new(940.0, 580.0), Vec2::new(780.0, 500.0), Vec2::new(780.0, 520.0), Vec2::new(440.0, 420.0), Vec2::new(600.0, 400.0)];
+        let pos = shelf(&sizes, 1600.0);
+        assert_eq!(pos[0], Pos2::ZERO);
+        let rects: Vec<Rect> = pos.iter().zip(&sizes).map(|(p, s)| Rect::from_min_size(*p, *s)).collect();
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                assert!(!a.intersects(*b), "{a:?} overlaps {b:?}");
+            }
+        }
+        let bb = rects.iter().copied().reduce(|a, b| a.union(b)).unwrap();
+        assert!(bb.width() / bb.height() > 1.0 && bb.width() / bb.height() < 3.5, "roughly screen-shaped: {bb:?}");
+        assert_eq!(shelf(&[Vec2::new(500.0, 300.0)], 1600.0), vec![Pos2::ZERO]);
+    }
 }
 
 #[cfg(test)]

@@ -568,6 +568,7 @@ envía un mensaje que empieza por `/`.
 | `/exportar` | Guarda la conversación como Markdown en Descargas y la copia |
 | `/renombrar <título>` | Cambia el título |
 | `/autocompactar <50-98\|no>` | Umbral para compactar solo |
+| `/workspace on\|off` (`/ventanas`) | Abre (o no) lo que crea cada tarea en un workspace nuevo |
 | `/internet on\|off` (`/web`) | Deja (o no) que el agente busque en internet y lea páginas; sin nada, dice cómo está |
 | `/coste` | Contexto, tokens y coste |
 | `/ayuda` | La lista de comandos |
@@ -600,6 +601,23 @@ Al terminar, si algo cambió, la conversación muestra **Archivos cambiados** co
   cambios. El editor recarga lo revertido.
 - Las fotos son de esta sesión del editor (los 12 últimos turnos con cambios): en una
   conversación reabierta del historial la lista se ve, pero ya no se puede revertir.
+
+#### Un workspace por tarea
+
+Cuando el agente termina una tarea que creó o cambió assets, el editor abre una pestaña de
+workspace nueva, **«Agente: <primeras palabras del mensaje>»**, con todo lo nuevo abierto en
+ventanas, ordenadas en filas por tipo (rooms, objetos, sprites, tile sets, trayectorias, efectos,
+sonidos, fuentes, scripts, notas, ajustes) y con la vista encajada para verlo todo. Salida lo
+anota (`Workspace «Agente: …»: ◆ Slime, ▣ slime, ♪ snd_slime`).
+
+- Un fichero de objetos que define varios objetos solo abre los que el turno tocó (por las líneas
+  cambiadas); si el fichero es nuevo, abre todos.
+- Lo que ya estaba abierto en otro workspace se mueve al nuevo. Los ficheros que no son assets
+  (`CREDITS.md`, notas sueltas) no abren ventana.
+- Como mucho 12 ventanas; si hay más, Salida dice cuántas quedan en el árbol.
+- Se apaga por proyecto en **⋯ → Abrir lo nuevo en un workspace** o con `/workspace off`
+  (`/workspace on` lo vuelve a encender). Un workspace que ya no quieras se cierra como cualquier
+  otro al vaciarlo.
 
 ### Adjuntar contexto
 

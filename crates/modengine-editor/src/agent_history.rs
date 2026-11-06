@@ -157,6 +157,9 @@ pub struct ProjectState {
     /// 🌐 Internet switched off for this project (on by default).
     #[serde(default)]
     pub no_internet: bool,
+    /// "Abrir lo nuevo en un workspace" switched off for this project (on by default).
+    #[serde(default)]
+    pub no_turn_workspace: bool,
 }
 
 pub fn now() -> u64 {

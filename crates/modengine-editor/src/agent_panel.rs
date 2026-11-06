@@ -283,6 +283,40 @@ pub struct Polled {
     pub downloaded: Vec<String>,
     /// Project files the agent reported writing during the run that ended.
     pub changed: Vec<PathBuf>,
+    /// The chat turn that ended (when it was one): its request and the files it added or
+    /// modified (project-relative), for "a workspace per turn".
+    pub turn: Option<TurnResult>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TurnResult {
+    pub prompt: String,
+    pub files: Vec<String>,
+    /// Lines (1-based, in the new text) a modified text file changed at, so a script that
+    /// defines several objects only opens the ones that changed. Missing: the whole file.
+    pub lines: BTreeMap<String, Vec<usize>>,
+}
+
+/// Lines of `new` that `old` -> `new` added or changed (a deletion counts at the line after it).
+pub fn changed_lines(old: &str, new: &str) -> Vec<usize> {
+    let mut out: Vec<usize> = vec![];
+    let mut next = 1;
+    for l in snapshot::unified(old, new, 0) {
+        if l.header {
+            continue;
+        }
+        match l.op {
+            snapshot::Op::Add => out.extend(l.new_no),
+            snapshot::Op::Del => out.push(next),
+            snapshot::Op::Same => {}
+        }
+        if let Some(n) = l.new_no {
+            next = n + 1;
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 enum Msg {
@@ -447,6 +481,12 @@ pub struct AgentPanel {
     pub autocompact: u8,
     /// 🌐 Internet: the agent may search the web and read pages (per project, on by default).
     pub internet: bool,
+    /// After each turn, open what it added or changed in a new workspace (per project, on).
+    pub turn_workspace: bool,
+    /// The request of the chat turn that is running.
+    turn_prompt: String,
+    /// The chat turn that ended, until `poll` hands it over.
+    turn_result: Option<TurnResult>,
 
     // -- views
     pub view: View,
@@ -540,6 +580,9 @@ impl AgentPanel {
             store: None,
             autocompact: 0,
             internet: true,
+            turn_workspace: true,
+            turn_prompt: String::new(),
+            turn_result: None,
             view: View::Chat,
             history: vec![],
             history_query: String::new(),
@@ -770,6 +813,7 @@ impl AgentPanel {
         let st = store.state();
         self.autocompact = st.autocompact;
         self.internet = !st.no_internet;
+        self.turn_workspace = !st.no_turn_workspace;
         if let Some(k) = Kind::from_id(&st.agent) {
             self.kind = k;
             self.locate();
@@ -793,6 +837,7 @@ impl AgentPanel {
                 permission: self.permission.key().into(),
                 autocompact: self.autocompact,
                 no_internet: !self.internet,
+                no_turn_workspace: !self.turn_workspace,
             });
         }
     }
@@ -1285,6 +1330,7 @@ impl AgentPanel {
         }
         let root = self.project.as_ref().map(|(r, _)| r.clone()).unwrap_or_else(|| root.to_path_buf());
         let before = Snapshot::take(&root);
+        self.turn_prompt = text.clone();
         if self.start(&text, attachments.clone(), Purpose::Chat(turn.id), false, fork_at, Some(before), turn.entry) {
             self.next_turn += 1;
             self.turns.push(turn);
@@ -1522,6 +1568,7 @@ impl AgentPanel {
                 self.finish(r, st);
                 out.imported = std::mem::take(&mut self.imported);
                 out.downloaded = std::mem::take(&mut self.downloaded);
+                out.turn = self.turn_result.take();
                 out.reload = true;
                 out.finished = true;
                 if self.compact_requested {
@@ -1585,6 +1632,17 @@ impl AgentPanel {
                     let credits = Path::new(modengine_store::credits::FILE);
                     let text = |b: Option<&[u8]>| b.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
                     self.downloaded = store_downloads(&text(before.bytes(credits)), &text(after.bytes(credits)));
+                    let new: Vec<String> = files.iter().filter(|f| f.kind != ChangeKind::Deleted).map(|f| f.rel.clone()).collect();
+                    if self.turn_workspace && !new.is_empty() {
+                        let mut lines = BTreeMap::new();
+                        for f in files.iter().filter(|f| f.kind == ChangeKind::Modified && !f.binary) {
+                            let rel = Path::new(&f.rel);
+                            if let (Some(a), Some(b)) = (before.bytes(rel), after.bytes(rel)) {
+                                lines.insert(f.rel.clone(), changed_lines(&String::from_utf8_lossy(a), &String::from_utf8_lossy(b)));
+                            }
+                        }
+                        self.turn_result = Some(TurnResult { prompt: self.turn_prompt.clone(), files: new, lines });
+                    }
                     if !files.is_empty() {
                         self.entries.push(Entry::Changes { turn, files });
                         self.snaps.push((turn, before));
@@ -1912,6 +1970,14 @@ impl AgentPanel {
             Slash::Internet(Some(on)) => {
                 self.set_internet(on);
                 self.notice(if on { "🌐 Internet: sí. El agente puede buscar en la web y leer páginas." } else { "🌐 Internet: no. El agente no busca en la web (solo lee las URLs que adjuntes)." }, Tone::Muted);
+            }
+            Slash::TurnWorkspace(Some(on)) => {
+                self.turn_workspace = on;
+                self.save_state();
+                self.notice(if on { "Al terminar cada tarea se abre un workspace con lo nuevo." } else { "Lo nuevo ya no se abre en un workspace al terminar." }, Tone::Muted);
+            }
+            Slash::TurnWorkspace(None) => {
+                self.notice(format!("Workspace por tarea: {}. Usa /workspace on o /workspace off.", if self.turn_workspace { "sí" } else { "no" }), Tone::Muted);
             }
             Slash::Internet(None) => {
                 self.notice(format!("🌐 Internet: {}. Usa /internet on o /internet off.", if self.internet { "sí" } else { "no" }), Tone::Muted);
@@ -2450,6 +2516,12 @@ impl AgentPanel {
         ui.set_min_width(240.0);
         let running = self.running();
         let has_session = !self.session.is_empty();
+        let mut ws = self.turn_workspace;
+        if ui.checkbox(&mut ws, "Abrir lo nuevo en un workspace").on_hover_text("Al terminar cada tarea, lo que el agente creó o cambió se abre en ventanas, ordenadas en un workspace nuevo (/workspace)").changed() {
+            self.turn_workspace = ws;
+            self.save_state();
+        }
+        ui.separator();
         if ui.add_enabled(has_session, egui::Button::new("✂ Compactar conversación")).on_hover_text("Resume la conversación para liberar contexto (/compactar)").clicked() {
             self.command(Slash::Compact, None);
             ui.close();
@@ -4406,9 +4478,11 @@ echo '{{"type":"result","subtype":"success","session_id":"S-imp","result":"Impor
         assert!(text.contains("«Arte del usuario»") && text.contains("modengine import") && text.contains("--credit"), "{text}");
         p.send(&text, &project, "x");
         let ctx = egui::Context::default();
-        let (mut imported, start) = (vec![], Instant::now());
+        let (mut imported, mut turn, start) = (vec![], None, Instant::now());
         while p.running() && start.elapsed() < Duration::from_secs(30) {
-            imported.extend(p.poll(&ctx).imported);
+            let out = p.poll(&ctx);
+            imported.extend(out.imported);
+            turn = turn.or(out.turn);
             std::thread::sleep(Duration::from_millis(20));
         }
         let args = lines(&dir.join("args.txt"));
@@ -4424,6 +4498,14 @@ echo '{{"type":"result","subtype":"success","session_id":"S-imp","result":"Impor
         assert!(game.tilesets.iter().any(|t| t.name == "ts_cave_tiles"));
         assert!(std::fs::read_to_string(project.join("CREDITS.md")).unwrap().contains("CC0, by Tester"));
         assert_eq!(imported, ["sprite 'hero'", "sprite 'spr_cave_tiles'", "tile set 'ts_cave_tiles'"]);
+        // the turn hands over its request and new files, which open as these windows
+        let turn = turn.expect("the turn's new files, for its workspace");
+        assert_eq!(turn.prompt, text.trim());
+        let ed = crate::project::Project::open(&project).unwrap();
+        assert_eq!(
+            crate::agent_workspace::assets_for(&ed, &turn.files, &turn.lines),
+            [Open::Sprite("hero".into()), Open::Sprite("spr_cave_tiles".into()), Open::TileSet("ts_cave_tiles".into())]
+        );
         // listed as created in the turn's changes, binaries included...
         let Some(Entry::Changes { files, .. }) = p.entries.iter().rev().find(|e| matches!(e, Entry::Changes { .. })).cloned() else { panic!("{:?}", p.entries) };
         let added: Vec<(&str, bool)> = files.iter().filter(|f| f.kind == ChangeKind::Added).map(|f| (f.rel.as_str(), f.binary)).collect();

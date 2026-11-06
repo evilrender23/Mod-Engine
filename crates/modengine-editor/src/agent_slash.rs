@@ -27,6 +27,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec { name: "exportar", aliases: &["export"], arg: "", help: "Guarda la conversación como Markdown (y la copia)" },
     Spec { name: "renombrar", aliases: &["rename"], arg: "<título>", help: "Cambia el título de la conversación" },
     Spec { name: "autocompactar", aliases: &["autocompact"], arg: "<70-95|no>", help: "Compacta sola al pasar ese % del contexto" },
+    Spec { name: "workspace", aliases: &["ventanas"], arg: "<on|off>", help: "Abre (o no) lo que crea cada tarea en un workspace nuevo" },
     Spec { name: "internet", aliases: &["web"], arg: "<on|off>", help: "Deja (o no) que el agente busque en internet y lea páginas web" },
     Spec { name: "coste", aliases: &["cost", "usage", "contexto"], arg: "", help: "Muestra el contexto usado, los tokens y el coste" },
     Spec { name: "ayuda", aliases: &["help", "?"], arg: "", help: "Lista estos comandos" },
@@ -52,6 +53,8 @@ pub enum Command {
     AutoCompact(Option<u8>),
     /// 🌐 Internet on/off; `None`: show it.
     Internet(Option<bool>),
+    /// Open what a turn made in a new workspace, on/off; `None`: show it.
+    TurnWorkspace(Option<bool>),
     Cost,
     Help,
     /// Not a command we know (the name as typed).
@@ -94,6 +97,11 @@ pub fn parse(text: &str) -> Option<Command> {
             }
         })),
         "internet" => Command::Internet(arg_opt().and_then(|a| match a.to_lowercase().as_str() {
+            "on" | "si" | "sí" | "yes" | "1" | "true" | "activar" | "encender" => Some(true),
+            "off" | "no" | "0" | "false" | "desactivar" | "apagar" => Some(false),
+            _ => None,
+        })),
+        "workspace" => Command::TurnWorkspace(arg_opt().and_then(|a| match a.to_lowercase().as_str() {
             "on" | "si" | "sí" | "yes" | "1" | "true" | "activar" | "encender" => Some(true),
             "off" | "no" | "0" | "false" | "desactivar" | "apagar" => Some(false),
             _ => None,
@@ -175,6 +183,8 @@ mod tests {
         assert_eq!(parse("/internet on"), Some(Command::Internet(Some(true))));
         assert_eq!(parse("/web sí"), Some(Command::Internet(Some(true))));
         assert_eq!(parse("/internet"), Some(Command::Internet(None)));
+        assert_eq!(parse("/workspace off"), Some(Command::TurnWorkspace(Some(false))));
+        assert_eq!(parse("/ventanas sí"), Some(Command::TurnWorkspace(Some(true))));
         assert_eq!(parse("/stop"), Some(Command::Cancel));
         assert_eq!(parse("/frobnicar"), Some(Command::Unknown("frobnicar".into())));
         assert!(help().contains("/compactar") && help().contains("/deshacer"));
