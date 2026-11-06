@@ -6,7 +6,10 @@ de esos objetos en **rooms** y escribes la lógica en **ModScript**, un lenguaje
 pensado para eso. Exporta a Windows, Linux y Android, y trae **multijugador por red** (host y
 clientes por LAN o Internet, al estilo de GameMaker; ver [docs/red.md](docs/red.md)).
 
-![Coin Climber, el juego de ejemplo](docs/img/level.png)
+![RogueShot, un roguelike completo hecho con Mod Engine](docs/img/rogueshot_combate.png)
+
+*RogueShot*, un roguelike de disparos en un casino, es la demo técnica: menús con cartas, salas
+generadas, combate con ratón, efectos de shader y música con intro y bucle, todo en ModScript.
 
 ![El editor: workspace con una room y un objeto abiertos](docs/img/editor_workspace.png)
 
@@ -74,7 +77,8 @@ carpeta de un proyecto o su `game.toml`. Desde la terminal:
 | ![Tiles](docs/img/editor_tiles.png) **Tile sets:** pinta tiles en las capas, con auto tile y tiles animados. | ![Secuencias](docs/img/editor_secuencia.png) **Secuencias:** pistas, claves y suavizado con vista previa. |
 | ![Partículas](docs/img/editor_particulas.png) **Partículas:** emisores y tipos con vista previa animada. | ![Agente](docs/img/editor_agente.png) **Agente:** Claude Code, Codex o Antigravity trabajando en el proyecto, con historial. |
 | ![Tienda de assets](docs/img/editor_tienda.png) **Tienda:** assets gratuitos de OpenGameArt con sus licencias y créditos. | ![Exportar](docs/img/editor_exportar.png) **Exportar:** Windows, Linux y Android. |
-| ![Juego con partículas y shaders](docs/img/juego_efectos.png) Partículas, shaders y extensiones en juego. | ![Trayectorias y secuencias](docs/img/juego_secuencias.png) Trayectorias, curvas y secuencias en juego. |
+| ![RogueShot: menú](docs/img/rogueshot_menu.png) **RogueShot:** menú principal con cartas. | ![RogueShot: vestíbulo](docs/img/rogueshot_vestibulo.png) **RogueShot:** el vestíbulo del casino. |
+| ![RogueShot: plantas](docs/img/rogueshot_plantas.png) **RogueShot:** elegir planta en el ascensor. | ![RogueShot: sala](docs/img/rogueshot_sala.png) **RogueShot:** combate en una sala generada. |
 
 ## Cómo es un proyecto
 
