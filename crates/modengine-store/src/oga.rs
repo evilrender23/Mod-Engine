@@ -760,7 +760,7 @@ pub fn parse_detail(html: &str, slug: &str) -> Result<Asset, String> {
             let name = attr(tag, "download")
                 .filter(|n| !n.trim().is_empty())
                 .or_else(|| Some(plain_text(inner)).filter(|n| !n.is_empty()))
-                .unwrap_or_else(|| crate::import::percent_decode(url.rsplit('/').next().unwrap_or("file")));
+                .unwrap_or_else(|| modengine::import::percent_decode(url.rsplit('/').next().unwrap_or("file")));
             a.files.push(FileLink { url, name, mime, size });
         }
     }

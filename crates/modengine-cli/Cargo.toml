@@ -21,6 +21,8 @@ path = "src/runner_main.rs"
 [dependencies]
 modengine = { path = "../modengine" }
 modscript = { path = "../modscript" }
+# `modengine store`: the editor's asset store (OpenGameArt) from the command line
+modengine-store = { path = "../modengine-store" }
 macroquad = { version = "0.4", features = ["audio"] }
 # the audio output macroquad uses (patched: vendor/quad-snd) to feed the engine's mixer
 quad-snd = "0.2"

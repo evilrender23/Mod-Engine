@@ -2027,6 +2027,7 @@ dependencies = [
  "image 0.25.10",
  "macroquad",
  "modengine",
+ "modengine-store",
  "modscript",
  "quad-snd",
  "serde_json",
@@ -2038,18 +2039,28 @@ name = "modengine-editor"
 version = "0.1.0"
 dependencies = [
  "arboard",
- "crc32fast",
  "eframe",
  "egui_kittest",
- "flate2",
  "image 0.25.10",
  "modengine",
+ "modengine-store",
  "modscript",
  "rfd",
  "serde",
  "serde_json",
  "toml 0.8.23",
  "toml_edit 0.22.27",
+]
+
+[[package]]
+name = "modengine-store"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "image 0.25.10",
+ "modengine",
+ "toml 0.8.23",
 ]
 
 [[package]]

@@ -105,15 +105,15 @@ pub struct Run {
     /// What a new session should know of the conversation so far (a compacted summary or the
     /// transcript up to an edited message); put in front of the prompt.
     pub seed: String,
-    /// The `modengine` command line: the agent imports art with `modengine import` (allowed
-    /// even in Editar archivos, not in Solo planificar).
+    /// The `modengine` command line: the agent imports art with `modengine import` and gets
+    /// assets from the store with `modengine store` (allowed even in Editar archivos; in Solo
+    /// planificar only `store search` / `store show`).
     pub tool: Option<PathBuf>,
-}
-
-/// The `modengine` executable the agent may run to import art in this run (`None` in
-/// Solo planificar, for raw slash commands, or when it was not found).
-pub fn import_tool(run: &Run) -> Option<&Path> {
-    run.tool.as_deref().filter(|_| run.permission != Permission::Plan && !run.raw)
+    /// 🌐 Internet: the agent may search the web and read pages (every mode: it is read-only).
+    pub internet: bool,
+    /// The asset store's cache (`~/.cache/modengine/store`): previews the agent downloads with
+    /// `modengine store download` land there and it may read them.
+    pub store_cache: Option<PathBuf>,
 }
 
 /// How the agent should type `tool` in a shell command (quoted when it has spaces).
@@ -126,12 +126,21 @@ pub fn tool_command(tool: &Path) -> String {
     }
 }
 
-/// The subcommands of `modengine` the agent may always run.
-pub const IMPORT_SUBCOMMANDS: [&str; 2] = ["import", "inspect-image"];
+/// The subcommands of `modengine` the agent may always run outside Solo planificar: the
+/// importer and the asset store.
+pub const IMPORT_SUBCOMMANDS: [&str; 3] = ["import", "inspect-image", "store"];
 
-/// Claude Code rules allowing just `modengine import` and `modengine inspect-image` (as
-/// typed, quoted or not).
-pub fn claude_import_rules(tool: &Path) -> Vec<String> {
+/// The read-only part of the store, allowed in Solo planificar too.
+pub const PLAN_SUBCOMMANDS: [&str; 2] = ["store search", "store show"];
+
+/// The `modengine` subcommands this run may use (`None`: none; see [`IMPORT_SUBCOMMANDS`]).
+pub fn tool_subcommands(run: &Run) -> Option<(&Path, &'static [&'static str])> {
+    let tool = run.tool.as_deref().filter(|_| !run.raw)?;
+    Some((tool, if run.permission == Permission::Plan { &PLAN_SUBCOMMANDS } else { &IMPORT_SUBCOMMANDS }))
+}
+
+/// Claude Code rules allowing just those `modengine` subcommands (as typed, quoted or not).
+pub fn claude_tool_rules(tool: &Path, subs: &[&str]) -> Vec<String> {
     let plain = tool.to_string_lossy().replace('\\', "/");
     let mut forms = vec![plain.clone()];
     if plain.contains(' ') {
@@ -139,12 +148,21 @@ pub fn claude_import_rules(tool: &Path) -> Vec<String> {
     }
     let mut out = vec![];
     for f in &forms {
-        for sub in IMPORT_SUBCOMMANDS {
+        for sub in subs {
             out.push(format!("Bash({f} {sub} *)"));
         }
     }
     out
 }
+
+/// Claude Code rules for the importer and the store (Editar archivos and Auto).
+#[cfg(test)]
+pub fn claude_import_rules(tool: &Path) -> Vec<String> {
+    claude_tool_rules(tool, &IMPORT_SUBCOMMANDS)
+}
+
+/// Claude Code's web tools (what 🌐 Internet allows).
+pub const CLAUDE_WEB_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
 
 /// Licence / readme / credits files directly in `dir` or one folder down.
 pub fn license_files(dir: &Path) -> Vec<PathBuf> {
@@ -612,14 +630,25 @@ impl Kind {
                 // Folders from elsewhere join the workspace so search tools reach them, but stay
                 // read-only.
                 let dirs = attached_outside_dirs(run);
+                let mut denied = vec![];
                 if !dirs.is_empty() {
                     a.push("--add-dir".into());
                     a.extend(dirs.iter().map(|d| d.to_string_lossy().into_owned()));
-                    a.push("--disallowedTools".into());
                     for d in &dirs {
                         let r = claude_rule_path(d);
-                        a.extend([format!("Edit({r}/**)"), format!("Write({r}/**)")]);
+                        denied.extend([format!("Edit({r}/**)"), format!("Write({r}/**)")]);
                     }
+                }
+                // 🌐 Internet off: no web search, and no fetching beyond the attached pages.
+                if !run.internet && !run.raw {
+                    denied.push("WebSearch".into());
+                    if attached_hosts(run).is_empty() {
+                        denied.push("WebFetch".into());
+                    }
+                }
+                if !denied.is_empty() {
+                    a.push("--disallowedTools".into());
+                    a.extend(denied);
                 }
                 // The engine docs and attachments from elsewhere live outside the project: allow
                 // reading them, not editing them.
@@ -630,13 +659,21 @@ impl Kind {
                 for p in attached_outside(run) {
                     readable.push(if p.is_dir() { format!("Read({}/**)", claude_rule_path(p)) } else { format!("Read({})", claude_rule_path(p)) });
                 }
-                for h in attached_hosts(run) {
-                    readable.push(format!("WebFetch(domain:{h})"));
+                if run.internet && !run.raw {
+                    readable.extend(CLAUDE_WEB_TOOLS.map(String::from));
+                } else {
+                    for h in attached_hosts(run) {
+                        readable.push(format!("WebFetch(domain:{h})"));
+                    }
                 }
-                // Importing art: the agent's file tools can't copy binaries, so it may run the
-                // importer (and only that) even in Editar archivos.
-                if let Some(tool) = import_tool(run) {
-                    readable.extend(claude_import_rules(tool));
+                // Importing art and the asset store: the agent's file tools can't copy binaries,
+                // so it may run the importer and `modengine store` (and only those) even in
+                // Editar archivos; in Solo planificar, only searching and looking at the store.
+                if let Some((tool, subs)) = tool_subcommands(run) {
+                    readable.extend(claude_tool_rules(tool, subs));
+                    if let Some(c) = &run.store_cache {
+                        readable.push(format!("Read({}/**)", claude_rule_path(c)));
+                    }
                 }
                 if !readable.is_empty() {
                     a.push("--allowedTools".into());
@@ -654,12 +691,27 @@ impl Kind {
                 for p in attached_outside(run) {
                     allow.push(format!("read_file({})", agy_rule_path(p)));
                 }
-                if let Some(tool) = import_tool(run) {
-                    for sub in IMPORT_SUBCOMMANDS {
+                if let Some((tool, subs)) = tool_subcommands(run) {
+                    for sub in subs {
                         allow.push(format!("command({} {sub})", agy_rule_path(tool)));
                     }
+                    if let Some(c) = &run.store_cache {
+                        allow.push(format!("read_file({})", agy_rule_path(c)));
+                    }
                 }
-                let settings = json!({ "permissions": { "ask": ["write_file(/)"], "allow": allow } });
+                // 🌐 Internet: reading pages is `read_url(<domain>)`; its web search
+                // (search_web) has no permission rule, so with Internet off it is only told not to.
+                let mut deny = vec![];
+                if run.internet && !run.raw {
+                    allow.push("read_url(*)".into());
+                } else if !run.raw {
+                    deny.push("read_url(*)".to_string());
+                }
+                let mut perms = json!({ "ask": ["write_file(/)"], "allow": allow });
+                if !deny.is_empty() {
+                    perms["deny"] = json!(deny);
+                }
+                let settings = json!({ "permissions": perms });
                 let mode = match run.permission {
                     Permission::Plan => "plan",
                     Permission::Edit => "accept-edits",
@@ -682,10 +734,20 @@ impl Kind {
                 if run.permission != Permission::Auto && !run.raw {
                     prompt += "\n\n(From the Mod Engine editor: shell commands are not allowed in this mode and trying one \
                                ends your turn. Use your file tools to list, read, search and edit files.";
-                    if let Some(tool) = import_tool(run) {
-                        prompt += &format!(" The only commands allowed are `{t} import ...` and `{t} inspect-image ...`, to import art.", t = tool_command(tool));
+                    match tool_subcommands(run) {
+                        Some((tool, _)) if run.permission == Permission::Plan => {
+                            prompt += &format!(" The only commands allowed are `{t} store search ...` and `{t} store show ...`, to look for assets.", t = tool_command(tool))
+                        }
+                        Some((tool, _)) => prompt += &format!(
+                            " The only commands allowed are `{t} import ...`, `{t} inspect-image ...` and `{t} store ...`, to import art and get assets from the store.",
+                            t = tool_command(tool)
+                        ),
+                        None => {}
                     }
                     prompt += ")";
+                }
+                if !run.internet && !run.raw {
+                    prompt += "\n\n(From the Mod Engine editor: Internet is off for this project: do not search the web or read web pages.)";
                 }
                 // agy takes the prompt as the value of --print and reads nothing from stdin.
                 a.push(format!("--print={prompt}"));
@@ -697,6 +759,18 @@ impl Kind {
                 // exec otherwise refuses to work in.
                 let sandbox = if run.permission == Permission::Plan { "read-only" } else { "workspace-write" };
                 a.extend(["exec", "--json", "--skip-git-repo-check", "--sandbox", sandbox].map(String::from));
+                if !run.raw {
+                    // 🌐 Internet: Codex's own web search tool; off means off (not even cached).
+                    a.extend(["-c".into(), format!("web_search=\"{}\"", if run.internet { "live" } else { "disabled" })]);
+                }
+                // `modengine store` downloads from inside the sandbox: commands get the network only
+                // with Internet on (Codex can't open it to one program), and the store's cache
+                // folder must be writable.
+                if run.permission != Permission::Plan && run.internet {
+                    if let (Some(_), Some(c)) = (tool_subcommands(run), &run.store_cache) {
+                        a.extend(["-c".into(), "sandbox_workspace_write.network_access=true".into(), "--add-dir".into(), c.to_string_lossy().into_owned()]);
+                    }
+                }
                 if !run.model.is_empty() {
                     a.extend(["--model".into(), run.model.clone()]);
                 }
@@ -725,7 +799,14 @@ impl Kind {
 
 /// What the agent is told about the engine: a system prompt for Claude Code, and the head of
 /// the first message for the CLIs without one.
+#[cfg(test)]
 pub fn engine_context(name: &str, docs: Option<&Path>, tool: Option<&Path>) -> String {
+    engine_context_for(name, docs, tool, false, false, None)
+}
+
+/// [`engine_context`] for a run: `tool` is the `modengine` command (any mode), `plan` limits
+/// it to looking at the store, `internet` adds the web paragraph.
+pub fn engine_context_for(name: &str, docs: Option<&Path>, tool: Option<&Path>, plan: bool, internet: bool, store_cache: Option<&Path>) -> String {
     let mut c = format!(
         "You are working inside Mod Engine, a 2D game engine in the spirit of GameMaker, through the \
          \"Agente\" panel of its visual editor (modeditor). The current folder is the open Mod Engine project \
@@ -756,7 +837,13 @@ pub fn engine_context(name: &str, docs: Option<&Path>, tool: Option<&Path>) -> S
     c += "Before writing a new object, room or sprite, read an existing one and follow its style. \
           `modengine check .` loads the project and reports errors (if you may run commands).\n\n";
     if let Some(tool) = tool {
-        c += &import_section(&tool_command(tool));
+        if !plan {
+            c += &import_section(&tool_command(tool));
+        }
+        c += &store_section(&tool_command(tool), plan, store_cache);
+    }
+    if internet {
+        c += INTERNET_SECTION;
     }
     c += "
           # The editor\n\
@@ -801,13 +888,60 @@ pub fn import_section(tool: &str) -> String {
     )
 }
 
+/// The "Asset store" part of the context: finding and importing free assets from
+/// OpenGameArt with `modengine store` (read-only in Solo planificar).
+pub fn store_section(tool: &str, plan: bool, cache: Option<&Path>) -> String {
+    if plan {
+        return format!(
+            "# Asset store (OpenGameArt)\n\
+             To suggest free assets you may run `{tool} store search <words> [--tipo 2d|texturas|sonido|musica|fuentes] \
+             [--licencia cc0,cc-by,oga-by] --json` and `{tool} store show <slug> --json` (read-only; at most one request \
+             every 2 s, so keep them few). Importing needs «Editar archivos»: propose the exact `{tool} store get ...` \
+             command in your plan.\n\n"
+        );
+    }
+    let cache = cache.map(|c| format!(" (downloads go to {}; you may open them there)", c.display())).unwrap_or_default();
+    format!(
+        "# Asset store (OpenGameArt)\n\
+         When the user asks for art, sounds, music or fonts you don't have, get free assets from OpenGameArt.org with \
+         the store command (always allowed, like the importer; the store makes at most one request every 2 s, so search \
+         with good English keywords and keep requests few):\n\
+         - `{tool} store search <words> [--tipo 2d|texturas|sonido|musica|fuentes] [--licencia cc0,cc-by,oga-by] \
+         [--orden favoritos|recientes|relevancia] [--pagina N] --json`: results (slug, title, thumbnail). By default \
+         CC0, CC-BY and OGA-BY only.\n\
+         - `{tool} store show <slug> [--zip] --json`: author, licences and what they require, description, tags and \
+         files (with --zip, what each .zip contains).\n\
+         - `{tool} store download <slug> [file] [--zip-entry PATH] --json`: downloads without importing{cache}, so you \
+         can look at the image (open the PNG with your file-reading tool and run `{tool} inspect-image <path> --json`) \
+         before choosing frames.\n\
+         - `{tool} store get <slug> . [--file NAME | --all] [--zip-entry PATH...] [import options: --name --frames N \
+         --grid WxH --origin --fps --tile WxH --split-rows --row-names ...] [--acepto-licencia] [--dry-run] --json`: \
+         downloads, imports into the project and writes the credit in CREDITS.md by itself (author, licence, URL).\n\
+         How to do it: prefer CC0, then CC-BY/OGA-BY (credit is written for you; tell the user the licence asks to show \
+         it in the game). Share-alike (CC-BY-SA), GPL or unreadable licences exit with code 4: don't pass \
+         --acepto-licencia unless the user said such licences are fine; pick another asset or ask. Look at the image \
+         (download + read + inspect-image) to choose --frames/--grid and the origin, give snake_case names with --name, \
+         never remove credits from CREDITS.md, and reply with the asset you used, its author and licence and its URL. If \
+         a store command fails with a network error, the sandbox may have no network: say so instead of retrying.\n\n"
+    )
+}
+
+/// The "Internet" part of the context (🌐 Internet on).
+pub const INTERNET_SECTION: &str = "# Internet\n\
+     You may search the web and read web pages when it helps: engine-agnostic techniques, how GameMaker or other \
+     engines do something (to translate it to ModScript), references, and sources of free assets (OpenGameArt, itch.io, \
+     Kenney). Cite in your reply the URLs you used. Respect licences: only use assets whose licence allows it and credit \
+     them in CREDITS.md; for OpenGameArt use the store command above rather than downloading by hand.\n\n";
+
 /// The prompt with the engine context in front on a new conversation, for CLIs without a
 /// system prompt option.
 pub fn prompt_with_context(run: &Run) -> String {
     if !run.session.is_empty() || run.raw {
         return prompt_with_attachments(run);
     }
-    format!("<modengine-editor-context>\n{}</modengine-editor-context>\n\n{}", engine_context(&run.name, run.docs.as_deref(), import_tool(run)), prompt_with_attachments(run))
+    let tool = tool_subcommands(run).map(|(t, _)| t);
+    let ctx = engine_context_for(&run.name, run.docs.as_deref(), tool, run.permission == Permission::Plan, run.internet, run.store_cache.as_deref());
+    format!("<modengine-editor-context>\n{ctx}</modengine-editor-context>\n\n{}", prompt_with_attachments(run))
 }
 
 /// Claude permission rules write absolute paths as "//path".
@@ -1190,8 +1324,17 @@ impl Parser {
                 }
             }
             "web_search" => {
-                if first {
-                    ev.push(Event::Tool(tool("🌐", "Buscar en la web", one_line(str_of(&item["query"]), 120))));
+                // the query (or the page) only arrives when the search is done
+                let action = &item["action"];
+                let (verb, detail) = match str_of(&action["type"]) {
+                    "open_page" => ("Descargar", str_of(&action["url"]).to_string()),
+                    "find_in_page" => ("Buscar en la página", format!("{} · {}", str_of(&action["pattern"]), str_of(&action["url"]))),
+                    _ => ("Buscar en la web", if str_of(&item["query"]).is_empty() { str_of(&action["query"]) } else { str_of(&item["query"]) }.to_string()),
+                };
+                if detail.trim().is_empty() && !completed {
+                    self.shown.remove(str_of(&item["id"]));
+                } else if first {
+                    ev.push(Event::Tool(tool("🌐", verb, one_line(&detail, 120))));
                 }
             }
             "todo_list" => {
@@ -1219,6 +1362,11 @@ impl Parser {
             "result" => self.agy_result(&line["result"], ev),
             _ => {}
         }
+    }
+
+    /// The first of `keys` that `p` has (agy's parameter names vary in case).
+    fn agy_param<'a>(p: &'a Value, keys: &[&str]) -> &'a str {
+        keys.iter().map(|k| str_of(&p[*k])).find(|v| !v.is_empty()).unwrap_or("")
     }
 
     fn agy_path(p: &Value) -> &str {
@@ -1267,6 +1415,8 @@ impl Parser {
                     "edit_file" => self.file_tool("✎", "Editar", path),
                     "list_dir" => tool("📁", "Listar", display_path(&self.root, path)),
                     "run_command" => tool(">_", "Ejecutar", one_line(str_of(&params["CommandLine"]), 120)),
+                    "search_web" => tool("🌐", "Buscar en la web", one_line(Self::agy_param(params, &["query", "Query"]), 120)),
+                    "read_url_content" | "read_url" => tool("🌐", "Descargar", one_line(Self::agy_param(params, &["Url", "url", "URL"]), 120)),
                     _ => generic_tool(&name, params),
                 };
                 if self.shown_steps.insert(index) {
@@ -1341,6 +1491,8 @@ mod tests {
             fork_at: String::new(),
             seed: String::new(),
             tool: None,
+            internet: false,
+            store_cache: None,
         }
     }
 
@@ -1356,7 +1508,7 @@ mod tests {
             a,
             [
                 "--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "acceptEdits",
-                "--append-system-prompt-file", "/tmp/ctx.md", "--allowedTools", "Read(//opt/me/docs/**)"
+                "--append-system-prompt-file", "/tmp/ctx.md", "--disallowedTools", "WebSearch", "WebFetch", "--allowedTools", "Read(//opt/me/docs/**)"
             ]
         );
         let a = Kind::Claude.args(&run(Permission::Plan, "S1", "opus"));
@@ -1370,10 +1522,10 @@ mod tests {
 
     #[test]
     fn codex_args_per_mode() {
-        assert_eq!(Kind::Codex.args(&run(Permission::Plan, "", "")), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-"]);
+        assert_eq!(Kind::Codex.args(&run(Permission::Plan, "", "")), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-c", "web_search=\"disabled\"", "-"]);
         assert_eq!(
             Kind::Codex.args(&run(Permission::Auto, "T9", "gpt-x")),
-            ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "--model", "gpt-x", "resume", "T9", "-"]
+            ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-c", "web_search=\"disabled\"", "--model", "gpt-x", "resume", "T9", "-"]
         );
         // New conversations get the engine context in front; continued ones don't.
         assert!(Kind::Codex.input(&run(Permission::Edit, "", "")).starts_with("<modengine-editor-context>"));
@@ -1706,7 +1858,7 @@ mod tests {
     fn the_importer_is_allowed_outside_plan_mode() {
         let tool = PathBuf::from("/opt/me/bin/modengine");
         let with = |p: Permission| Run { tool: Some(tool.clone()), ..run(p, "", "") };
-        let rules = ["Bash(/opt/me/bin/modengine import *)", "Bash(/opt/me/bin/modengine inspect-image *)"];
+        let rules = ["Bash(/opt/me/bin/modengine import *)", "Bash(/opt/me/bin/modengine inspect-image *)", "Bash(/opt/me/bin/modengine store *)"];
         // Claude Code: allowed in Editar archivos (and Auto), never in Solo planificar
         for p in [Permission::Edit, Permission::Auto] {
             let a = Kind::Claude.args(&with(p));
@@ -1715,27 +1867,132 @@ mod tests {
                 assert!(a[at..].contains(&r.to_string()), "{p:?}: {a:?}");
             }
         }
+        // Solo planificar: only looking at the store
         let plan = Kind::Claude.args(&with(Permission::Plan));
-        assert!(!plan.iter().any(|x| x.contains("modengine")), "{plan:?}");
+        let tool_rules: Vec<&String> = plan.iter().filter(|x| x.contains("modengine")).collect();
+        assert_eq!(tool_rules, ["Bash(/opt/me/bin/modengine store search *)", "Bash(/opt/me/bin/modengine store show *)"], "{plan:?}");
         assert!(!Kind::Claude.args(&run(Permission::Edit, "", "")).iter().any(|x| x.starts_with("Bash(")), "no tool found: no rule");
         // a path with spaces: as typed and quoted
         let spaced = claude_import_rules(Path::new("/my apps/modengine"));
-        assert_eq!(spaced, ["Bash(/my apps/modengine import *)", "Bash(/my apps/modengine inspect-image *)", "Bash(\"/my apps/modengine\" import *)", "Bash(\"/my apps/modengine\" inspect-image *)"]);
+        assert_eq!(
+            spaced,
+            [
+                "Bash(/my apps/modengine import *)",
+                "Bash(/my apps/modengine inspect-image *)",
+                "Bash(/my apps/modengine store *)",
+                "Bash(\"/my apps/modengine\" import *)",
+                "Bash(\"/my apps/modengine\" inspect-image *)",
+                "Bash(\"/my apps/modengine\" store *)"
+            ]
+        );
         // Antigravity: a command() allow rule, and the steering note names the commands
         let a = Kind::Antigravity.args(&with(Permission::Edit));
         let s: Value = serde_json::from_str(&a[a.iter().position(|x| x == "--settings").unwrap() + 1]).unwrap();
         let allow = s["permissions"]["allow"].as_array().unwrap();
-        assert!(allow.contains(&json!("command(/opt/me/bin/modengine import)")) && allow.contains(&json!("command(/opt/me/bin/modengine inspect-image)")), "{allow:?}");
+        for sub in ["import", "inspect-image", "store"] {
+            assert!(allow.contains(&json!(format!("command(/opt/me/bin/modengine {sub})"))), "{allow:?}");
+        }
         let print = a.iter().find(|x| x.starts_with("--print=")).unwrap();
-        assert!(print.contains("# Importing art") && print.contains("The only commands allowed are `/opt/me/bin/modengine import ...`"));
+        assert!(print.contains("# Importing art") && print.contains("# Asset store") && print.contains("The only commands allowed are `/opt/me/bin/modengine import ...`"));
         let a = Kind::Antigravity.args(&with(Permission::Plan));
-        assert!(!a.iter().any(|x| x.contains("command(") || x.contains("# Importing art")), "{a:?}");
+        let s: Value = serde_json::from_str(&a[a.iter().position(|x| x == "--settings").unwrap() + 1]).unwrap();
+        let cmds: Vec<&Value> = s["permissions"]["allow"].as_array().unwrap().iter().filter(|r| r.as_str().unwrap().starts_with("command(")).collect();
+        assert_eq!(cmds, [&json!("command(/opt/me/bin/modengine store search)"), &json!("command(/opt/me/bin/modengine store show)")]);
+        assert!(!a.iter().any(|x| x.contains("# Importing art")), "{a:?}");
         // Codex: commands run in its workspace-write sandbox; it is told about the importer
         let r = with(Permission::Edit);
-        assert_eq!(Kind::Codex.args(&r), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-"]);
+        assert_eq!(Kind::Codex.args(&r), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-c", "web_search=\"disabled\"", "-"]);
         assert!(Kind::Codex.input(&r).contains("/opt/me/bin/modengine import . <file|folder>"));
         assert!(!Kind::Codex.input(&with(Permission::Plan)).contains("# Importing art"));
+        assert!(Kind::Codex.input(&with(Permission::Plan)).contains("store search"), "Solo planificar may look at the store");
         assert_eq!(Kind::Codex.args(&with(Permission::Plan))[4], "read-only");
+    }
+
+    #[test]
+    fn web_lines_show_query_or_page() {
+        let ev = parse_all(
+            Kind::Codex,
+            &[
+                r#"{"type":"item.started","item":{"id":"w1","type":"web_search","query":"","action":{"type":"other"}}}"#,
+                r#"{"type":"item.completed","item":{"id":"w1","type":"web_search","query":"Kenney Pixel Platformer","action":{"type":"search","query":"Kenney Pixel Platformer"}}}"#,
+                r#"{"type":"item.completed","item":{"id":"w2","type":"web_search","query":"","action":{"type":"open_page","url":"https://kenney.nl/assets/pixel-platformer"}}}"#,
+            ],
+        );
+        let tools: Vec<(String, String)> = ev.iter().filter_map(|e| if let Event::Tool(t) = e { Some((t.verb.clone(), t.detail.clone())) } else { None }).collect();
+        assert_eq!(tools, [("Buscar en la web".into(), "Kenney Pixel Platformer".into()), ("Descargar".into(), "https://kenney.nl/assets/pixel-platformer".into())]);
+        let ev = parse_all(
+            Kind::Antigravity,
+            &[
+                r#"{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_info":{"name":"search_web","parameters":{"query":"kenney licence"}}}}"#,
+                r#"{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_info":{"name":"read_url_content","parameters":{"Url":"https://kenney.nl"}}}}"#,
+            ],
+        );
+        let tools: Vec<(String, String)> = ev.iter().filter_map(|e| if let Event::Tool(t) = e { Some((t.verb.clone(), t.detail.clone())) } else { None }).collect();
+        assert_eq!(tools, [("Buscar en la web".into(), "kenney licence".into()), ("Descargar".into(), "https://kenney.nl".into())]);
+        let ev = parse_all(Kind::Claude, &[r#"{"type":"assistant","session_id":"S","message":{"content":[{"type":"tool_use","id":"t1","name":"WebSearch","input":{"query":"kenney"}},{"type":"tool_use","id":"t2","name":"WebFetch","input":{"url":"https://kenney.nl"}}]}}"#]);
+        let tools: Vec<String> = ev.iter().filter_map(|e| if let Event::Tool(t) = e { Some(format!("{} {}", t.verb, t.detail)) } else { None }).collect();
+        assert_eq!(tools, ["Buscar en la web kenney", "Descargar https://kenney.nl"]);
+    }
+
+    #[test]
+    fn internet_and_store_per_backend_and_mode() {
+        let tool = PathBuf::from("/opt/me/bin/modengine");
+        let cache = PathBuf::from("/home/u/.cache/modengine/store");
+        let mk = |p: Permission, internet: bool| Run { tool: Some(tool.clone()), internet, store_cache: Some(cache.clone()), ..run(p, "", "") };
+        let after = |a: &[String], flag: &str| -> Vec<String> {
+            let Some(at) = a.iter().position(|x| x == flag) else { return vec![] };
+            a[at + 1..].iter().take_while(|x| !x.starts_with("--")).cloned().collect()
+        };
+        for p in Permission::ALL {
+            // Claude Code: WebSearch + WebFetch allowed with Internet, denied without
+            let on = Kind::Claude.args(&mk(p, true));
+            let allowed = after(&on, "--allowedTools");
+            assert!(allowed.contains(&"WebSearch".into()) && allowed.contains(&"WebFetch".into()), "{p:?} {on:?}");
+            assert!(!on.contains(&"--disallowedTools".to_string()), "{p:?} {on:?}");
+            assert!(allowed.contains(&"Read(//home/u/.cache/modengine/store/**)".to_string()), "store previews are readable");
+            let off = Kind::Claude.args(&mk(p, false));
+            assert_eq!(after(&off, "--disallowedTools"), ["WebSearch", "WebFetch"], "{p:?}");
+            assert!(!after(&off, "--allowedTools").iter().any(|x| x.starts_with("Web")));
+            let store_rule = "Bash(/opt/me/bin/modengine store *)".to_string();
+            assert_eq!(allowed.contains(&store_rule), p != Permission::Plan, "{p:?}");
+            assert_eq!(allowed.contains(&"Bash(/opt/me/bin/modengine store search *)".to_string()), p == Permission::Plan);
+            // Codex: live web search or none; the sandbox gets the network (and the cache) only
+            // with Internet on and outside Solo planificar
+            let on = Kind::Codex.args(&mk(p, true));
+            assert!(on.windows(2).any(|w| w == ["-c", "web_search=\"live\""]), "{on:?}");
+            let net = on.windows(2).any(|w| w == ["-c", "sandbox_workspace_write.network_access=true"]);
+            assert_eq!(net, p != Permission::Plan, "{p:?} {on:?}");
+            assert_eq!(on.windows(2).any(|w| w[0] == "--add-dir" && w[1] == cache.display().to_string()), p != Permission::Plan);
+            assert_eq!(*on.last().unwrap(), "-");
+            let off = Kind::Codex.args(&mk(p, false));
+            assert!(off.windows(2).any(|w| w == ["-c", "web_search=\"disabled\""]) && !off.iter().any(|x| x.contains("network_access")), "{off:?}");
+            // Antigravity: read_url(*) allowed or denied
+            let perms = |r: &Run| -> Value {
+                let a = Kind::Antigravity.args(r);
+                serde_json::from_str::<Value>(&a[a.iter().position(|x| x == "--settings").unwrap() + 1]).unwrap()["permissions"].clone()
+            };
+            let on = perms(&mk(p, true));
+            assert!(on["allow"].as_array().unwrap().contains(&json!("read_url(*)")) && on.get("deny").is_none(), "{on}");
+            assert!(on["allow"].as_array().unwrap().contains(&json!("read_file(/home/u/.cache/modengine/store)")));
+            let off = perms(&mk(p, false));
+            assert_eq!(off["deny"], json!(["read_url(*)"]));
+            let print = Kind::Antigravity.args(&mk(p, false)).pop().unwrap();
+            assert!(print.contains("Internet is off"), "{p:?}");
+        }
+        // the context: an Internet paragraph and the store, read-only in Solo planificar
+        let ctx = |p: Permission, i: bool| Kind::Codex.input(&mk(p, i));
+        assert!(ctx(Permission::Edit, true).contains("# Internet") && ctx(Permission::Edit, true).contains("Cite in your reply the URLs"));
+        assert!(!ctx(Permission::Edit, false).contains("# Internet"));
+        assert!(ctx(Permission::Plan, true).contains("# Internet"), "web search is read-only: also when planning");
+        let edit = ctx(Permission::Edit, false);
+        assert!(edit.contains("# Asset store (OpenGameArt)") && edit.contains("/opt/me/bin/modengine store get <slug> .") && edit.contains("code 4") && edit.contains("prefer CC0"));
+        assert!(edit.contains("/home/u/.cache/modengine/store"), "where previews go");
+        let plan = ctx(Permission::Plan, false);
+        assert!(plan.contains("# Asset store") && plan.contains("store show") && !plan.contains("store get <slug> ."));
+        // raw slash commands get nothing added
+        let raw = Run { raw: true, prompt: "/compact".into(), ..mk(Permission::Edit, true) };
+        assert!(!Kind::Claude.args(&raw).iter().any(|x| x.starts_with("Web") || x.contains("modengine")));
+        assert!(!Kind::Codex.args(&raw).iter().any(|x| x.contains("web_search")));
     }
 
     #[test]

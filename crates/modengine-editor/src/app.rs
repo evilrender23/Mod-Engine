@@ -795,6 +795,9 @@ impl EditorApp {
             if !agent.imported.is_empty() {
                 self.info(LogKind::Ok, format!("Importado por el agente: {}", agent.imported.join(", ")));
             }
+            for d in &agent.downloaded {
+                self.info(LogKind::Ok, format!("Descargado por el agente de la Tienda: {d}"));
+            }
             if !agent.changed.is_empty() {
                 let dir = self.project.as_ref().map(|p| p.dir.clone()).unwrap_or_default();
                 let names: Vec<String> = agent.changed.iter().map(|f| f.strip_prefix(&dir).unwrap_or(f).display().to_string()).collect();

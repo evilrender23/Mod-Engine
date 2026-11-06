@@ -36,10 +36,8 @@ mod settings;
 mod sound;
 mod sprite;
 mod store;
-mod store_credits;
-mod store_net;
-mod store_oga;
-mod store_zip;
+// the store's logic is shared with `modengine store` (crates/modengine-store)
+use modengine_store::{credits as store_credits, net as store_net, oga as store_oga, zip as store_zip};
 mod start;
 mod tex;
 mod theme;

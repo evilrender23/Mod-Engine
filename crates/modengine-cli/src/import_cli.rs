@@ -51,71 +51,87 @@ struct Args {
     json: bool,
 }
 
+/// One option of the importer at `args[*i]` (shared with `modengine store get`): applies it to
+/// `o`, moving `i` past its value. `Ok(false)` when it is not an import option.
+pub fn import_flag(args: &[String], i: &mut usize, o: &mut Options) -> Result<bool, String> {
+    let flag = args[*i].as_str();
+    let mut value = || {
+        *i += 1;
+        args.get(*i).cloned().ok_or_else(|| format!("{flag} needs a value"))
+    };
+    match flag {
+        "--kind" => {
+            let v = value()?;
+            o.kind = Some(What::parse(&v).ok_or_else(|| format!("--kind: unknown kind '{v}' (sprite, tileset, sound, font)"))?);
+        }
+        "--name" => o.name = Some(value()?),
+        "--frames" => {
+            let v = value()?;
+            let n: u32 = v.parse().map_err(|_| format!("--frames: '{v}' is not a number"))?;
+            o.frames = Some(if n <= 1 { Frames::Single } else { Frames::Strip(n) });
+        }
+        "--grid" => {
+            let v = value()?;
+            let [w, h] = pair(&v, &['x', 'X', '×']).ok_or_else(|| format!("--grid: use WxH, e.g. 16x16 (got '{v}')"))?;
+            o.frames = Some(Frames::Grid(w, h));
+        }
+        "--origin" => {
+            let v = value()?;
+            o.origin = Some(Origin::parse(&v).ok_or_else(|| format!("--origin: '{v}' (top-left, center, bottom-center, top, left or x,y)"))?);
+        }
+        "--fps" => {
+            let v = value()?;
+            let f: f64 = v.parse().map_err(|_| format!("--fps: '{v}' is not a number"))?;
+            if !(f >= 0.0) {
+                return Err("--fps can't be negative (0: the frames don't animate)".into());
+            }
+            o.fps = Some(f);
+        }
+        "--tile" => {
+            let v = value()?;
+            o.tile = Some(pair(&v, &['x', 'X', '×']).ok_or_else(|| format!("--tile: use WxH, e.g. 16x16 (got '{v}')"))?);
+        }
+        "--offset" => {
+            let v = value()?;
+            o.offset = pair(&v, &[',']).ok_or_else(|| format!("--offset: use X,Y (got '{v}')"))?;
+        }
+        "--sep" | "--separation" => {
+            let v = value()?;
+            o.sep = pair(&v, &[',']).ok_or_else(|| format!("--sep: use X,Y (got '{v}')"))?;
+        }
+        "--prefix" => o.prefix_dirs = true,
+        "--crop" => {
+            let v = value()?;
+            let n: Vec<u32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            let [x, y, w, h] = n[..] else { return Err(format!("--crop: use X,Y,W,H (got '{v}')")) };
+            o.crop = Some([x, y, w, h]);
+        }
+        "--split-rows" => o.split_rows = true,
+        "--row-names" => {
+            o.split_rows = true;
+            o.row_names = value()?.split(',').map(|s| s.trim().to_string()).collect();
+        }
+        "--name-prefix" => o.name_prefix = value()?,
+        "--overwrite" => o.overwrite = true,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
 fn parse(args: &[String]) -> Result<Args, String> {
     let mut o = Options::default();
     let (mut credit, mut dry_run, mut json, mut pos) = (None, false, false, vec![]);
     let mut i = 0;
     while i < args.len() {
-        let flag = args[i].as_str();
-        let mut value = || {
+        if import_flag(args, &mut i, &mut o)? {
             i += 1;
-            args.get(i).cloned().ok_or_else(|| format!("{flag} needs a value"))
-        };
-        match flag {
-            "--kind" => {
-                let v = value()?;
-                o.kind = Some(What::parse(&v).ok_or_else(|| format!("--kind: unknown kind '{v}' (sprite, tileset, sound, font)"))?);
+            continue;
+        }
+        match args[i].as_str() {
+            "--credit" => {
+                i += 1;
+                credit = Some(args.get(i).cloned().ok_or("--credit needs a value")?);
             }
-            "--name" => o.name = Some(value()?),
-            "--frames" => {
-                let v = value()?;
-                let n: u32 = v.parse().map_err(|_| format!("--frames: '{v}' is not a number"))?;
-                o.frames = Some(if n <= 1 { Frames::Single } else { Frames::Strip(n) });
-            }
-            "--grid" => {
-                let v = value()?;
-                let [w, h] = pair(&v, &['x', 'X', '×']).ok_or_else(|| format!("--grid: use WxH, e.g. 16x16 (got '{v}')"))?;
-                o.frames = Some(Frames::Grid(w, h));
-            }
-            "--origin" => {
-                let v = value()?;
-                o.origin = Some(Origin::parse(&v).ok_or_else(|| format!("--origin: '{v}' (top-left, center, bottom-center, top, left or x,y)"))?);
-            }
-            "--fps" => {
-                let v = value()?;
-                let f: f64 = v.parse().map_err(|_| format!("--fps: '{v}' is not a number"))?;
-                if !(f >= 0.0) {
-                    return Err("--fps can't be negative (0: the frames don't animate)".into());
-                }
-                o.fps = Some(f);
-            }
-            "--tile" => {
-                let v = value()?;
-                o.tile = Some(pair(&v, &['x', 'X', '×']).ok_or_else(|| format!("--tile: use WxH, e.g. 16x16 (got '{v}')"))?);
-            }
-            "--offset" => {
-                let v = value()?;
-                o.offset = pair(&v, &[',']).ok_or_else(|| format!("--offset: use X,Y (got '{v}')"))?;
-            }
-            "--sep" | "--separation" => {
-                let v = value()?;
-                o.sep = pair(&v, &[',']).ok_or_else(|| format!("--sep: use X,Y (got '{v}')"))?;
-            }
-            "--prefix" => o.prefix_dirs = true,
-            "--crop" => {
-                let v = value()?;
-                let n: Vec<u32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                let [x, y, w, h] = n[..] else { return Err(format!("--crop: use X,Y,W,H (got '{v}')")) };
-                o.crop = Some([x, y, w, h]);
-            }
-            "--split-rows" => o.split_rows = true,
-            "--row-names" => {
-                o.split_rows = true;
-                o.row_names = value()?.split(',').map(|s| s.trim().to_string()).collect();
-            }
-            "--name-prefix" => o.name_prefix = value()?,
-            "--overwrite" => o.overwrite = true,
-            "--credit" => credit = Some(value()?),
             "--dry-run" | "-n" => dry_run = true,
             "--json" => json = true,
             f if f.starts_with("--") => return Err(format!("unknown option {f}")),
@@ -140,7 +156,7 @@ fn origin_json(o: Origin) -> Value {
     }
 }
 
-fn item_json(it: &Item, files: &[String], replaced: bool) -> Value {
+pub fn item_json(it: &Item, files: &[String], replaced: bool) -> Value {
     let mut v = json!({
         "kind": it.what.key(),
         "name": it.name,
@@ -185,7 +201,7 @@ fn item_json(it: &Item, files: &[String], replaced: bool) -> Value {
     v
 }
 
-fn describe(it: &Item) -> String {
+pub fn describe(it: &Item) -> String {
     let mut d = String::new();
     match (it.what, it.slice()) {
         (What::Sprite, Some((n, fw, fh))) => {

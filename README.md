@@ -67,6 +67,7 @@ carpeta de un proyecto o su `game.toml`. Desde la terminal:
 ```bash
 ./target/release/modengine new --template platformer --name "Mi juego" mi_juego
 ./target/release/modeditor mi_juego          # o mi_juego/game.toml
+./target/release/modengine store search coin --licencia cc0   # assets gratis de OpenGameArt (store get los importa con sus créditos)
 ```
 
 ## Capturas

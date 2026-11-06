@@ -435,7 +435,15 @@ real (unas pocas peticiones; deja la copia del ejemplo en el directorio temporal
 `cargo test -p modengine-editor --release real_opengameart -- --ignored --nocapture` busca `slime`
 (2D, CC0), abre resultados hasta uno con PNG, lo descarga, lo importa en una copia de
 `examples/platformer`, escribe CREDITS.md y pasa `modengine check`. El resto de tests usa copias
-recortadas de páginas reales (`crates/modengine-editor/tests/fixtures/oga/`) y un cliente falso.
+recortadas de páginas reales (`crates/modengine-store/tests/fixtures/oga/`) y un cliente falso.
+
+**Desde la terminal y con el agente.** Todo lo que no es la ventana (leer OpenGameArt, la caché, el
+ritmo de peticiones, los zip y CREDITS.md) está en el crate `modengine-store`, que comparten la
+tienda y la orden [`modengine store`](proyecto.md#la-tienda-desde-la-terminal-modengine-store)
+(`search`, `show`, `download`, `get`), que es lo que usa el [agente](#assets-de-la-tienda-con-el-agente).
+Comparten también la caché de 24 h y el límite de **una petición cada 2 s**: lo respetan juntos
+aunque sean procesos distintos (se turnan con el fichero `~/.cache/modengine/store/rate-limit.lock`,
+que guarda la hora de la última petición).
 
 ## Agente
 
@@ -479,6 +487,8 @@ iniciado sesión en él una vez desde un terminal; si falta, el panel dice cómo
   contesta cuando lo dice el programa.
 - **Permisos:** *Solo planificar* (lee y propone), *Editar archivos* o *Editar y ejecutar
   comandos*, que es el modo por defecto. Ninguno se salta las aprobaciones del programa.
+- **🌐 Internet** (el botón 🌐 junto a los permisos, resaltado si está activado; por proyecto, activado por defecto, también `/internet
+  on|off`): deja que el agente busque en la web y lea páginas, ver [Internet](#internet).
 - **Contexto:** el agente sabe que está en un proyecto de Mod Engine, cómo se organiza y dónde
   están `docs/lenguaje.md`, `docs/funciones.md` y `docs/proyecto.md` (con permiso para leerlos
   aunque estén fuera del proyecto). Las busca en `$MODENGINE_DOCS`, junto al ejecutable, en la
@@ -493,8 +503,8 @@ iniciado sesión en él una vez desde un terminal; si falta, el panel dice cómo
   guardar en el editor (cosa rara, porque se guarda al enviar), se conservan los tuyos y Salida lo
   avisa; guardar entonces sobrescribe la versión del agente.
 - Agente, modelo de cada agente, permisos y la última lista de modelos de cada programa se
-  recuerdan en `~/.config/modengine/agent.toml`; el agente, los permisos y el umbral de
-  autocompactar de cada proyecto, en su carpeta del historial (abajo). Cerrar el proyecto o el
+  recuerdan en `~/.config/modengine/agent.toml`; el agente, los permisos, el umbral de
+  autocompactar y 🌐 Internet de cada proyecto, en su carpeta del historial (abajo). Cerrar el proyecto o el
   editor detiene el agente y guarda la conversación.
 
 ### Historial
@@ -558,6 +568,7 @@ envía un mensaje que empieza por `/`.
 | `/exportar` | Guarda la conversación como Markdown en Descargas y la copia |
 | `/renombrar <título>` | Cambia el título |
 | `/autocompactar <50-98\|no>` | Umbral para compactar solo |
+| `/internet on\|off` (`/web`) | Deja (o no) que el agente busque en internet y lea páginas; sin nada, dice cómo está |
 | `/coste` | Contexto, tokens y coste |
 | `/ayuda` | La lista de comandos |
 
@@ -673,13 +684,71 @@ el mismo código que el diálogo **Importar assets** (escriben exactamente los m
    el agente: sprite 'hero_run', tile set 'ts_cave'…` y **Archivos cambiados** los lista (los PNG
    como binarios): **Revertir** o `/deshacer` los borran.
 
-**Permisos:** en *Editar archivos* el agente puede ejecutar **solo** esos dos comandos: Claude Code
-recibe `--allowedTools "Bash(<modengine> import *)" "Bash(<modengine> inspect-image *)"` y
-Antigravity las reglas `command(<modengine> import)` y `command(<modengine> inspect-image)` en sus
-`--settings`; Codex ejecuta comandos en su sandbox `workspace-write`, que escribe solo en el
-proyecto y lee en todas partes. En *Editar y ejecutar comandos* también. En *Solo planificar* no se
-importa nada (el botón queda desactivado y al agente no se le habla del importador). `<modengine>`
-es la ruta absoluta del `modengine` que hay junto al editor (o `$MODENGINE_BIN`, o el del `PATH`).
+**Permisos:** en *Editar archivos* el agente puede ejecutar **solo** esos comandos (y `modengine
+store`, abajo): Claude Code recibe `--allowedTools "Bash(<modengine> import *)" "Bash(<modengine>
+inspect-image *)" "Bash(<modengine> store *)"` y Antigravity las reglas `command(<modengine>
+import)`, `command(<modengine> inspect-image)` y `command(<modengine> store)` en sus `--settings`;
+Codex ejecuta comandos en su sandbox `workspace-write`, que escribe solo en el proyecto y lee en
+todas partes. En *Editar y ejecutar comandos* también. En *Solo planificar* no se importa nada (el
+botón queda desactivado y al agente no se le habla del importador). `<modengine>` es la ruta
+absoluta del `modengine` que hay junto al editor (o `$MODENGINE_BIN`, o el del `PATH`).
+
+### Assets de la Tienda con el agente
+
+Pídeselo con tus palabras («busca un sprite de slime CC0 e impórtalo», «añade un sonido de salto
+gratis») o con **📎 Adjuntar → 🛒 Buscar en la Tienda…**, que escribe la instrucción (usa lo que
+ya hubieras escrito como descripción). El agente usa [`modengine store`](proyecto.md#la-tienda-desde-la-terminal-modengine-store),
+el mismo código que la [Tienda](#tienda-de-assets-opengameart):
+
+1. `store search <palabras> --licencia cc0 --json` busca (en inglés hay más resultados) y `store
+   show <slug> --json` lee la ficha: autor, licencias y lo que exigen, ficheros y, con `--zip`, lo
+   que hay dentro de cada zip.
+2. Antes de importar **mira la imagen**: `store download <slug> [fichero] [--zip-entry ruta]` la
+   deja en la caché (`~/.cache/modengine/store/`, que puede leer), la abre y ejecuta `modengine
+   inspect-image` para elegir frames, rejilla y origen.
+3. `store get <slug> . --file … --zip-entry … --frames N --origin bottom-center --name moneda`
+   la descarga, la importa con el importador de siempre y **añade su sección a `CREDITS.md`**
+   (autor, licencias con enlace, URL, ficheros y fecha, con la marca `<!-- oga:<slug> -->`).
+4. Prefiere CC0; CC-BY y OGA-BY se importan escribiendo el crédito (y el agente te recuerda que hay
+   que mostrarlo en el juego). Las licencias «compartir igual» (CC-BY-SA, GPL) o que no se pueden
+   leer **no se importan** sin `--acepto-licencia` (la orden termina con código 4 y explica qué
+   implican): el agente solo lo usa si tú lo has dicho; si no, busca otra o te pregunta.
+5. Al terminar, **Salida** dice `Descargado por el agente de la Tienda: «Spinning Coin» (CC0) →
+   sprite 'coin'` (además de `Importado por el agente: …`) y **Archivos cambiados** lista los
+   ficheros nuevos y el cambio de `CREDITS.md`: **Revertir** o `/deshacer` los quitan.
+
+Las peticiones las hace `modengine`, no el agente, con el mismo `User-Agent`, la lista de rutas que
+permite el `robots.txt` de OpenGameArt, la caché de 24 h y el límite de una petición cada 2 s
+compartido con la Tienda del editor (el contexto le pide al agente pocas búsquedas y bien
+escogidas).
+
+**Permisos por agente:**
+
+| | Editar archivos / Editar y ejecutar | Solo planificar |
+|---|---|---|
+| Claude Code | `Bash(<modengine> store *)` y `Read(<caché de la tienda>/**)` | solo `Bash(<modengine> store search *)` y `… store show *` |
+| Antigravity | `command(<modengine> store)` y `read_file(<caché>)` | solo `command(<modengine> store search)` y `… store show)` |
+| Codex | sandbox `workspace-write` con red (`-c sandbox_workspace_write.network_access=true`) y la caché escribible (`--add-dir <caché>`), **solo con 🌐 Internet activado** | nada: su sandbox `read-only` no tiene red |
+
+Codex no puede abrir la red a un solo programa: con 🌐 Internet activado sus comandos tienen red en
+*Editar archivos* (las escrituras siguen limitadas al proyecto y a la caché de la tienda); con
+Internet desactivado, `modengine store` falla por red dentro de su sandbox y el agente lo dice.
+
+### Internet
+
+**🌐 Internet** (junto a los permisos, o `/internet on|off`) se guarda por proyecto y está
+**activado** por defecto. Con él, el agente puede buscar en la web y leer páginas en cualquier modo,
+también en *Solo planificar* (es de solo lectura): documentación, cómo se hace algo en GameMaker u
+otros motores para pasarlo a ModScript, referencias, o fuentes de assets gratuitos (OpenGameArt,
+itch.io, Kenney). El contexto le pide que **cite las URL** que use, que respete las licencias y que
+para OpenGameArt use `modengine store`. En la conversación cada búsqueda sale como `🌐 Buscar en la
+web <consulta>` y cada página como `🌐 Descargar <url>`.
+
+| | 🌐 Internet activado | desactivado |
+|---|---|---|
+| Claude Code | `--allowedTools WebSearch WebFetch` | `--disallowedTools WebSearch WebFetch` (si adjuntas URLs, solo `WebFetch(domain:…)` de esas) |
+| Codex | `-c web_search="live"` (su búsqueda web) y red en el sandbox para `modengine store` | `-c web_search="disabled"` |
+| Antigravity | `read_url(*)` en `allow` | `read_url(*)` en `deny` y se le pide que no busque: su búsqueda web (`search_web`) no tiene regla de permisos y no se puede bloquear |
 
 ## Tema
 

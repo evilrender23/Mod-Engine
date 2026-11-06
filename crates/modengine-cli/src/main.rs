@@ -33,6 +33,9 @@ usage:
                                            (or compact pixels_rle) keeping origin/mask/fps
   modengine inspect-image <file|folder> [--json]
                                            size, colours and likely frame layouts of PNGs
+  modengine store search|show|download|get ...
+                                           free assets from OpenGameArt.org: search, look,
+                                           import with credits (modengine store --help)
   modengine functions
   modengine <project>                      same as `run`
 
@@ -219,6 +222,9 @@ fn main() {
     }
     if raw.first().map(String::as_str) == Some("inspect-image") {
         exit(import_cli::main_inspect(&raw[1..]));
+    }
+    if raw.first().map(String::as_str) == Some("store") {
+        exit(modengine_cli::store_cli::main_cli(&raw[1..]));
     }
     let args = parse_args();
     match args.cmd.as_str() {

@@ -20,6 +20,8 @@ pub mod import_cli;
 pub mod shader_tool;
 #[cfg(not(target_os = "android"))]
 pub mod sprite_bake;
+#[cfg(not(target_os = "android"))]
+pub mod store_cli;
 
 /// Entry point miniquad's Android activity calls (see `android/MainActivity.java`).
 #[cfg(target_os = "android")]

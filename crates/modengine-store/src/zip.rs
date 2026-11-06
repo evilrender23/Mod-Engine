@@ -28,7 +28,7 @@ impl ZipItem {
     }
 
     pub fn importable(&self) -> bool {
-        crate::import::Kind::of(Path::new(self.file_name())).is_some()
+        modengine::import::Kind::of(Path::new(self.file_name())).is_some()
     }
 }
 
@@ -110,7 +110,7 @@ pub fn extract_to(b: &[u8], items: &[&ZipItem], dir: &Path) -> Result<Vec<PathBu
     let mut out: Vec<PathBuf> = vec![];
     for it in items {
         let data = extract(b, it)?;
-        let name = crate::store_net::safe_file_name(it.file_name());
+        let name = crate::net::safe_file_name(it.file_name());
         let (stem, ext) = match name.rsplit_once('.') {
             Some((s, e)) => (s.to_string(), format!(".{e}")),
             None => (name.clone(), String::new()),
@@ -128,60 +128,9 @@ pub fn extract_to(b: &[u8], items: &[&ZipItem], dir: &Path) -> Result<Vec<PathBu
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
-    use std::io::Write;
-
-    /// A small zip writer for tests (stored or deflate).
-    pub fn make_zip(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
-        let mut out = vec![];
-        let mut central = vec![];
-        for (name, data, deflate) in files {
-            let (method, raw) = if *deflate {
-                let mut e = flate2::write::DeflateEncoder::new(vec![], flate2::Compression::default());
-                e.write_all(data).unwrap();
-                (8u16, e.finish().unwrap())
-            } else {
-                (0u16, data.to_vec())
-            };
-            let crc = crc32fast::hash(data);
-            let off = out.len() as u32;
-            let h = |v: &mut Vec<u8>, central: bool| {
-                v.extend(if central { 0x0201_4b50u32 } else { 0x0403_4b50 }.to_le_bytes());
-                if central {
-                    v.extend(20u16.to_le_bytes());
-                }
-                v.extend(20u16.to_le_bytes());
-                v.extend(0x800u16.to_le_bytes());
-                v.extend(method.to_le_bytes());
-                v.extend([0u8; 4]);
-                v.extend(crc.to_le_bytes());
-                v.extend((raw.len() as u32).to_le_bytes());
-                v.extend((data.len() as u32).to_le_bytes());
-                v.extend((name.len() as u16).to_le_bytes());
-                v.extend(0u16.to_le_bytes());
-                if central {
-                    v.extend([0u8; 6]); // comment length, disk, internal attributes
-                    v.extend(0u32.to_le_bytes()); // external attributes
-                    v.extend(off.to_le_bytes());
-                }
-                v.extend(name.as_bytes());
-            };
-            h(&mut out, false);
-            out.extend(&raw);
-            h(&mut central, true);
-        }
-        let cd = out.len() as u32;
-        out.extend(&central);
-        out.extend(0x0605_4b50u32.to_le_bytes());
-        out.extend([0u8; 4]);
-        out.extend((files.len() as u16).to_le_bytes());
-        out.extend((files.len() as u16).to_le_bytes());
-        out.extend((central.len() as u32).to_le_bytes());
-        out.extend(cd.to_le_bytes());
-        out.extend(0u16.to_le_bytes());
-        out
-    }
+    use crate::testing::make_zip;
 
     #[test]
     fn lists_and_extracts() {
@@ -202,7 +151,7 @@ pub mod tests {
         assert_eq!(extract(&z, &items[0]).unwrap(), big);
         assert_eq!(extract(&z, &items[1]).unwrap(), b"hola");
 
-        let dir = crate::store_net::tests::tmp("zip");
+        let dir = crate::testing::tmp("zip");
         let out = extract_to(&z, &[&items[0], &items[2], &items[3]], &dir.join("x")).unwrap();
         let names: Vec<String> = out.iter().map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["x/slime_idle.png", "x/slime_idle_2.png", "x/evil.wav"], "flat and inside the folder");

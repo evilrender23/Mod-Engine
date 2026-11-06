@@ -1,0 +1,17 @@
+[package]
+name = "modengine-store"
+description = "Mod Engine asset store: OpenGameArt search, polite rate-limited client, zips and credits (shared by the editor's Tienda and `modengine store`)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+modengine = { path = "../modengine" }
+# gif + jpeg: OpenGameArt thumbnails and previews
+image = { version = "0.25", default-features = false, features = ["png", "gif", "jpeg"] }
+# already built for the exporter: unzip OpenGameArt packs (zip.rs)
+flate2 = "1"
+crc32fast = "1"
+
+[dev-dependencies]
+toml = "0.8"

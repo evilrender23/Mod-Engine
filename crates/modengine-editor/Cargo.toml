@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 modengine = { path = "../modengine" }
 modscript = { path = "../modscript" }
+# Tienda de assets: OpenGameArt parsing, polite client, zips, credits (shared with `modengine store`)
+modengine-store = { path = "../modengine-store" }
 eframe = "0.37"
 toml = "0.8"
 # same version `toml` already uses: edits game.toml/sprites keeping comments (palettes)
@@ -20,9 +22,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # gif + jpeg: OpenGameArt thumbnails and previews (Tienda de assets)
 image = { version = "0.25", default-features = false, features = ["png", "gif", "jpeg"] }
-# already built for the exporter: unzip OpenGameArt packs (store_zip.rs)
-flate2 = "1"
-crc32fast = "1"
 # native folder picker ("Usar el diálogo del sistema"): on Linux it talks to the XDG desktop
 # portal through libdbus loaded at runtime (no build-time system libraries, falls back to
 # zenity); on Windows/macOS the OS dialogs. The built-in browser is always available.

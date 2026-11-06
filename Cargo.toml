@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/modscript", "crates/modengine", "crates/modengine-cli", "crates/modengine-editor"]
+members = ["crates/modscript", "crates/modengine", "crates/modengine-store", "crates/modengine-cli", "crates/modengine-editor"]
 exclude = ["vendor"]
 
 [workspace.package]

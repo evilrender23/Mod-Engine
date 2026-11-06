@@ -9,8 +9,9 @@
 //! Attribution: what is imported from here is added to the project's CREDITS.md
 //! ([`credit_imported`], called by the app after the import dialog ran).
 //!
-//! The network side lives in `store_net` (polite rate-limited client, disk cache), the
-//! parsing in `store_oga`, zips in `store_zip` and CREDITS.md in `store_credits`.
+//! The network side (polite rate-limited client, disk cache), the parsing of OGA pages, zips
+//! and CREDITS.md live in the `modengine-store` crate (`net`, `oga`, `zip`, `credits`), shared
+//! with `modengine store`, the command line the coding agent uses.
 
 use crate::app::{LogKind, LogLine};
 use crate::import::{human_size, Kind};
@@ -256,7 +257,10 @@ impl StoreDialog {
 
     fn worker(&mut self, ctx: &egui::Context) -> &Worker {
         if self.net.is_none() {
-            self.net = Some(Worker::start(self.http.clone(), self.cache.clone(), self.interval, Some(ctx.clone())));
+            self.net = Some(Worker::start(self.http.clone(), self.cache.clone(), self.interval, Some({
+                let ctx = ctx.clone();
+                Box::new(move || ctx.request_repaint())
+            })));
         }
         self.net.as_ref().unwrap()
     }
@@ -1062,12 +1066,12 @@ fn badge(ui: &mut egui::Ui, l: &License) -> egui::Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store_net::tests::{tmp, Mock};
+    use modengine_store::testing::{tmp, Mock};
     use crate::store_net::NetError;
     use egui_kittest::{kittest::Queryable, Harness};
 
     fn fixture(name: &str) -> Vec<u8> {
-        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/oga").join(name)).unwrap()
+        modengine_store::testing::fixture(name)
     }
 
     fn png(w: u32, h: u32) -> Vec<u8> {
@@ -1098,7 +1102,7 @@ mod tests {
         let mut padded = sheet.clone();
         padded.resize(12041, 0);
         m.pages.insert(a.files[0].url.clone(), Ok(padded));
-        let mut z = crate::store_zip::tests::make_zip(&[("Slime/slime_idle.png", &sheet, true), ("Slime/notes.txt", b"hi", false)]);
+        let mut z = modengine_store::testing::make_zip(&[("Slime/slime_idle.png", &sheet, true), ("Slime/notes.txt", b"hi", false)]);
         z.resize(12061, 0); // the size the page announces
 
         m.pages.insert("https://opengameart.org/sites/default/files/Slime_0.zip".into(), Ok(z));

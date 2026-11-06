@@ -138,6 +138,9 @@ pub fn modengine_tool() -> Option<PathBuf> {
     c.into_iter().find(|p| is_executable(p)).map(|p| p.canonicalize().unwrap_or(p)).or_else(|| find_program("modengine"))
 }
 
+const INTERNET_TIP: &str = "El agente puede buscar en la web y leer páginas (también en Solo planificar: es de solo lectura). Se guarda por proyecto; también /internet on|off";
+const INTERNET_TIP_AGY: &str = "El agente puede leer páginas web (read_url). Antigravity no permite desactivar su búsqueda web por permisos: sin internet solo se le pide que no la use. Se guarda por proyecto; también /internet on|off";
+
 /// Assets a turn brought in, from its changed files: binaries in sprites/, sounds/ and
 /// fonts/, and new tile sets (`sprite 'hero'`, `tile set 'ts_cave'`).
 pub fn imported_assets(files: &[snapshot::FileChange]) -> Vec<String> {
@@ -156,6 +159,60 @@ pub fn imported_assets(files: &[snapshot::FileChange]) -> Vec<String> {
         let line = format!("{what} '{stem}'");
         if !out.contains(&line) {
             out.push(line);
+        }
+    }
+    out
+}
+
+/// What "🛒 Buscar en la Tienda…" writes in the message box (keeping what was typed as the
+/// description of what to look for).
+pub fn store_instruction(typed: &str) -> String {
+    let what = typed.trim();
+    let what = if what.is_empty() { "<describe aquí el asset: p. ej. un sprite de slime animado>" } else { what };
+    format!(
+        "Busca en la Tienda (OpenGameArt) {what}. Prefiere CC0 (o CC-BY / OGA-BY, con su crédito), mira la imagen antes de importarla \
+         para elegir los frames, impórtala al proyecto con `modengine store get` y dime qué asset usaste, su autor, su licencia y su URL."
+    )
+}
+
+/// Assets from the store a turn added to CREDITS.md (`modengine store get` writes a section per
+/// asset ending in `<!-- oga:<slug> -->`): `«Title» (licence) → sprite 'x', sonido 'y'`, from the
+/// file lines that were not there before.
+pub fn store_downloads(before: &str, after: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut rest = after;
+    while let Some(m) = rest.find("<!-- oga:") {
+        let section_start = rest[..m].rfind("\n## ").map(|i| i + 1).unwrap_or(0);
+        let section = &rest[section_start..m];
+        rest = &rest[m + 9..];
+        let title = section.lines().next().and_then(|l| l.strip_prefix("## ")).map(|t| t.rsplit_once(" — ").map(|(a, _)| a).unwrap_or(t)).unwrap_or("?");
+        let license = section
+            .lines()
+            .find_map(|l| l.strip_prefix("- Licencia: ").or_else(|| l.strip_prefix("- Licencias (a elegir): ")))
+            .map(|l| {
+                // `[CC-BY 3.0](url), [CC0](url)` → `CC-BY 3.0 / CC0`
+                l.split("), ").map(|p| p.trim_start_matches('[').split(']').next().unwrap_or(p).trim_matches('*').to_string()).collect::<Vec<_>>().join(" / ")
+            })
+            .unwrap_or_else(|| "licencia desconocida".into());
+        let mut assets: Vec<String> = vec![];
+        for l in section.lines().filter(|l| l.starts_with("- Fichero: `") && !before.contains(*l)) {
+            let file = l["- Fichero: `".len()..].split('`').next().unwrap_or("");
+            let Some((dir, name)) = file.split_once('/') else { continue };
+            let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+            let what = match dir {
+                "sprites" if file.ends_with(".png") => "sprite",
+                "sounds" => "sonido",
+                "fonts" => "fuente",
+                "tilesets" => "tile set",
+                _ => continue,
+            };
+            let a = format!("{what} '{stem}'");
+            if !assets.contains(&a) {
+                assets.push(a);
+            }
+        }
+        if !assets.is_empty() {
+            out.push(format!("«{title}» ({license}) → {}", assets.join(", ")));
         }
     }
     out
@@ -222,6 +279,8 @@ pub struct Polled {
     pub finished: bool,
     /// Assets the turn that ended brought into the project (`sprite 'hero'`), for Salida.
     pub imported: Vec<String>,
+    /// What the turn got from the asset store (`«Slime» (CC0) → sprite 'slime'`), for Salida.
+    pub downloaded: Vec<String>,
     /// Project files the agent reported writing during the run that ended.
     pub changed: Vec<PathBuf>,
 }
@@ -324,6 +383,8 @@ pub struct AgentPanel {
     pub tool_override: Option<PathBuf>,
     /// Assets the last turn imported, until `poll` hands them over.
     imported: Vec<String>,
+    /// Store assets the last turn added to CREDITS.md, until `poll` hands them over.
+    downloaded: Vec<String>,
     pub entries: Vec<Entry>,
     /// The streaming reply, as an index into `entries`.
     open_text: Option<usize>,
@@ -384,6 +445,8 @@ pub struct AgentPanel {
     store: Option<Store>,
     /// Compact by itself past this % of the context (0: never).
     pub autocompact: u8,
+    /// 🌐 Internet: the agent may search the web and read pages (per project, on by default).
+    pub internet: bool,
 
     // -- views
     pub view: View,
@@ -435,6 +498,7 @@ impl AgentPanel {
             program_override: None,
             tool_override: None,
             imported: vec![],
+            downloaded: vec![],
             entries: vec![],
             open_text: None,
             input: String::new(),
@@ -475,6 +539,7 @@ impl AgentPanel {
             history_root,
             store: None,
             autocompact: 0,
+            internet: true,
             view: View::Chat,
             history: vec![],
             history_query: String::new(),
@@ -540,6 +605,12 @@ impl AgentPanel {
     pub fn set_permission(&mut self, p: Permission) {
         self.permission = p;
         self.save_cfg();
+    }
+
+    /// 🌐 Internet on or off for this project (remembered with its other agent settings).
+    pub fn set_internet(&mut self, on: bool) {
+        self.internet = on;
+        self.save_state();
     }
 
     /// The chosen model for the current agent; empty for the CLI's default.
@@ -698,6 +769,7 @@ impl AgentPanel {
         let Some(store) = &self.store else { return };
         let st = store.state();
         self.autocompact = st.autocompact;
+        self.internet = !st.no_internet;
         if let Some(k) = Kind::from_id(&st.agent) {
             self.kind = k;
             self.locate();
@@ -720,6 +792,7 @@ impl AgentPanel {
                 agent: self.kind.id().into(),
                 permission: self.permission.key().into(),
                 autocompact: self.autocompact,
+                no_internet: !self.internet,
             });
         }
     }
@@ -1248,11 +1321,17 @@ impl AgentPanel {
         let Some((root, name)) = self.project.clone() else { return false };
         let docs = docs_dir();
         let tool = self.tool_override.clone().or_else(modengine_tool);
-        let context_tool = tool.as_deref().filter(|_| self.permission != Permission::Plan);
+        let store_cache = modengine_store::net::cache_dir();
+        if let Some(c) = &store_cache {
+            // Codex makes it writable with --add-dir, which wants it to exist
+            let _ = std::fs::create_dir_all(c);
+        }
+        let plan = self.permission == Permission::Plan;
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let context_file = std::env::temp_dir().join(format!("modengine-agent-{}-{n}.md", std::process::id()));
-        if let Err(e) = std::fs::write(&context_file, agent::engine_context(&name, docs.as_deref(), context_tool)) {
+        let context = agent::engine_context_for(&name, docs.as_deref(), tool.as_deref().filter(|_| !raw), plan, self.internet, store_cache.as_deref());
+        if let Err(e) = std::fs::write(&context_file, context) {
             self.notice(format!("No se pudo escribir un fichero temporal: {e}"), Tone::Error);
             return false;
         }
@@ -1270,6 +1349,8 @@ impl AgentPanel {
             fork_at,
             seed: if self.session.is_empty() { self.seed.clone() } else { String::new() },
             tool,
+            internet: self.internet,
+            store_cache,
         };
         self.open_text = None;
         match self.spawn(&program, &run) {
@@ -1363,6 +1444,12 @@ impl AgentPanel {
     /// Reads what the agent printed since the last frame. Call every frame.
     pub fn poll(&mut self, ctx: &egui::Context) -> Polled {
         let mut out = Polled { reload: std::mem::take(&mut self.pending_reload), ..Default::default() };
+        // `--agent-demo store`: the sample turn's Salida lines go out like a real turn's
+        if self.demo && self.run.is_none() && !self.downloaded.is_empty() {
+            out.imported = std::mem::take(&mut self.imported);
+            out.downloaded = std::mem::take(&mut self.downloaded);
+            out.finished = true;
+        }
         if let Some(l) = &self.lister {
             if let Ok(models) = l.rx.try_recv() {
                 let kind = l.kind;
@@ -1434,6 +1521,7 @@ impl AgentPanel {
                 out.changed = r.changed.iter().cloned().collect();
                 self.finish(r, st);
                 out.imported = std::mem::take(&mut self.imported);
+                out.downloaded = std::mem::take(&mut self.downloaded);
                 out.reload = true;
                 out.finished = true;
                 if self.compact_requested {
@@ -1494,6 +1582,9 @@ impl AgentPanel {
                     let after = Snapshot::take(&before.root);
                     let files = snapshot::changes(&before, &after);
                     self.imported = imported_assets(&files);
+                    let credits = Path::new(modengine_store::credits::FILE);
+                    let text = |b: Option<&[u8]>| b.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+                    self.downloaded = store_downloads(&text(before.bytes(credits)), &text(after.bytes(credits)));
                     if !files.is_empty() {
                         self.entries.push(Entry::Changes { turn, files });
                         self.snaps.push((turn, before));
@@ -1818,6 +1909,13 @@ impl AgentPanel {
                 let now = if self.autocompact == 0 { "no".to_string() } else { format!("al {} %", self.autocompact) };
                 self.notice(format!("Autocompactar: {now}. Usa /autocompactar 85 o /autocompactar no."), Tone::Muted);
             }
+            Slash::Internet(Some(on)) => {
+                self.set_internet(on);
+                self.notice(if on { "🌐 Internet: sí. El agente puede buscar en la web y leer páginas." } else { "🌐 Internet: no. El agente no busca en la web (solo lee las URLs que adjuntes)." }, Tone::Muted);
+            }
+            Slash::Internet(None) => {
+                self.notice(format!("🌐 Internet: {}. Usa /internet on o /internet off.", if self.internet { "sí" } else { "no" }), Tone::Muted);
+            }
             Slash::Cost => {
                 let t = self.usage_text(true);
                 self.notice(if t.is_empty() { "Todavía no hay datos de uso.".to_string() } else { t }, Tone::Muted);
@@ -2118,6 +2216,17 @@ impl AgentPanel {
                     });
                     if perm != self.permission {
                         self.set_permission(perm);
+                    }
+                    let mut on = self.internet;
+                    let tip = match self.kind {
+                        Kind::Antigravity => INTERNET_TIP_AGY,
+                        _ => INTERNET_TIP,
+                    };
+                    // compact: highlighted when on (the tip says which)
+                    let state = if on { "🌐 Internet: sí" } else { "🌐 Internet: no" };
+                    let label = if on { RichText::new("🌐") } else { RichText::new("🌐").weak().strikethrough() };
+                    if ui.toggle_value(&mut on, label).on_hover_text(format!("{state}. {tip}")).changed() {
+                        self.set_internet(on);
                     }
                 });
                 }
@@ -2710,6 +2819,14 @@ impl AgentPanel {
         ));
         chosen.extend(add(ui, "Salida", src.output().map(|a| (format!("últimas {} líneas", attach::OUTPUT_LINES), a)), "La Salida está vacía"));
         ui.separator();
+        // the agent gets assets from OpenGameArt by itself (`modengine store`)
+        let can_store = self.permission != Permission::Plan;
+        let r = ui.add_enabled(can_store, egui::Button::new("🛒 Buscar en la Tienda…"));
+        if r.on_hover_text("Escribe una instrucción para que el agente busque un asset en OpenGameArt, lo mire y lo importe con sus créditos").on_disabled_hover_text("En «Solo planificar» el agente solo puede buscar, no importar").clicked() {
+            self.input = store_instruction(&self.input);
+            ui.close();
+        }
+        ui.separator();
         if let Some(p) = src.project {
             ui.menu_button("📄 Fichero del proyecto", |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.attach_filter).hint_text("Filtrar…").desired_width(240.0));
@@ -3011,6 +3128,34 @@ impl AgentPanel {
                 let first: Vec<PathBuf> = self.browser.rows().iter().filter(|r| r.is_dir).take(2).map(|r| r.path.clone()).collect();
                 self.browser.selected = first.into_iter().collect();
                 self.attachments = vec![Attachment::file(&std::env::temp_dir()), Attachment::url("https://lospec.com/palette-list/pear36")];
+            }
+            "store" => {
+                // the agent got an asset from the store (what a real Claude Code turn did)
+                let tool = "modengine";
+                self.title = "Moneda de la Tienda".into();
+                let line = |icon: &'static str, verb: &str, detail: &str| Entry::Tool(ToolLine { icon, verb: verb.into(), detail: detail.into() });
+                self.entries = vec![
+                    Entry::User("busca en la Tienda un sprite de moneda o gema CC0 y añádelo al proyecto con sus créditos".into()),
+                    line(">_", "Ejecutar", &format!("{tool} store search coin --tipo 2d --licencia cc0 --json")),
+                    line(">_", "Ejecutar", &format!("{tool} store show simple-rotating-coin --json")),
+                    Entry::Text("`simple-rotating-coin` es CC0 y una tira limpia de 12 fotogramas. La descargo para verla antes de importarla.".into()),
+                    line(">_", "Ejecutar", &format!("{tool} store download simple-rotating-coin --json")),
+                    line("👁", "Leer", "~/.cache/modengine/store/files/…/coin.png"),
+                    line(">_", "Ejecutar", &format!("{tool} store get simple-rotating-coin . --file coin.png --name coin_gold --frames 12 --origin center --fps 12 --json")),
+                    Entry::Text("He añadido el sprite **coin_gold**: una moneda giratoria de 12 fotogramas de 16×16, origen en el centro.\n\n- **Asset:** «Simple rotating coin», de sacio\n- **Licencia:** CC0 (anotada en `CREDITS.md`)\n- **URL:** https://opengameart.org/content/simple-rotating-coin".into()),
+                    Entry::Changes {
+                        turn: 1,
+                        files: vec![
+                            snapshot::FileChange { rel: "CREDITS.md".into(), kind: ChangeKind::Added, added: 12, removed: 0, binary: false, reverted: false },
+                            snapshot::FileChange { rel: "sprites/coin_gold.png".into(), kind: ChangeKind::Added, added: 0, removed: 0, binary: true, reverted: false },
+                            snapshot::FileChange { rel: "sprites/coin_gold.toml".into(), kind: ChangeKind::Added, added: 6, removed: 0, binary: false, reverted: false },
+                        ],
+                    },
+                ];
+                self.permission = Permission::Edit;
+                self.imported = vec!["sprite 'coin_gold'".into()];
+                self.downloaded = vec!["«Simple rotating coin» (CC0) → sprite 'coin_gold'".into()];
+                self.input.clear();
             }
             "import" => {
                 // an art folder attached (`$MODENGINE_DEMO_ART`, or a sample one) and an import turn done
@@ -3406,7 +3551,9 @@ echo '{"type":"turn.completed"}'"#,
         let project = empty_project(&dir);
         p.send("hola", &project, "x");
         wait(&mut p);
-        assert_eq!(lines(&dir.join("args.txt")), ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-"]);
+        let args = lines(&dir.join("args.txt"));
+        assert_eq!(args[..7], ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "-c", "web_search=\"live\""], "Internet is on by default");
+        assert_eq!(args.last().map(String::as_str), Some("-"));
         assert!(std::fs::read_to_string(dir.join("stdin.txt")).unwrap().starts_with("<modengine-editor-context>"));
         assert_eq!(p.entries.last(), Some(&Entry::Text("Vale".into())));
         assert_eq!(p.session, "T1");
@@ -3571,6 +3718,105 @@ echo '{"type":"turn.completed"}'"#,
         } else {
             println!("kept {}", base.display());
         }
+    }
+
+    /// One real turn in "Editar archivos" getting an asset from the store (OpenGameArt, real
+    /// network, polite) into a copy of examples/platformer:
+    /// `MODENGINE_AGENT_SMOKE=claude cargo test --release -p modengine-editor -- --ignored
+    /// smoke_real_cli_store --nocapture`. `MODENGINE_SMOKE_HOME=<dir>` keeps the project and the
+    /// conversation there (`<dir>/.config/modengine/agent.toml`), to open it in the editor after.
+    #[test]
+    #[ignore]
+    fn smoke_real_cli_store() {
+        let Some(kind) = std::env::var("MODENGINE_AGENT_SMOKE").ok().and_then(|k| Kind::from_id(&k)) else { return };
+        fn copy_dir(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    copy_dir(&p, &to.join(e.file_name()));
+                } else {
+                    std::fs::copy(&p, to.join(e.file_name())).unwrap();
+                }
+            }
+        }
+        let keep = std::env::var_os("MODENGINE_SMOKE_HOME").map(PathBuf::from);
+        let base = keep.clone().unwrap_or_else(|| std::env::temp_dir().join(format!("modeditor_smoke_store_{}", std::process::id())));
+        let project = base.join("platformer");
+        let _ = std::fs::remove_dir_all(&project);
+        copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/platformer"), &project);
+        let project = project.canonicalize().unwrap();
+        let mut p = AgentPanel::with_config(Some(base.join(".config/modengine/agent.toml")));
+        p.set_kind(kind);
+        p.enter_project(&project, "Coin Climber");
+        p.set_permission(Permission::Edit);
+        p.set_internet(true);
+        p.set_model(&std::env::var("MODENGINE_AGENT_MODEL").unwrap_or_default());
+        assert!(p.program.is_some(), "{} not installed", kind.name());
+        p.tool_override = Some(workspace_modengine());
+        let before = snapshot::Snapshot::take(&project);
+        p.send("busca en la Tienda un sprite de moneda o gema CC0 y añádelo al proyecto con sus créditos", &project, "Coin Climber");
+        let ctx = egui::Context::default();
+        let (start, mut imported, mut downloaded) = (Instant::now(), vec![], vec![]);
+        while p.running() && start.elapsed() < Duration::from_secs(900) {
+            let o = p.poll(&ctx);
+            imported.extend(o.imported);
+            downloaded.extend(o.downloaded);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for e in &p.entries {
+            println!("{e:?}");
+        }
+        println!("status={} imported={imported:?} downloaded={downloaded:?}", p.status);
+        let changes = snapshot::changes(&before, &snapshot::Snapshot::take(&project));
+        for c in &changes {
+            println!("{:?} {} {}", c.kind, c.rel, if c.binary { "(binario)" } else { "" });
+        }
+        for f in changes.iter().filter(|c| (c.rel.ends_with(".toml") || c.rel.ends_with(".md")) && c.kind != ChangeKind::Deleted) {
+            println!("--- {}\n{}", f.rel, std::fs::read_to_string(project.join(&f.rel)).unwrap_or_default());
+        }
+        assert!(!p.running() && p.status.starts_with("Hecho"), "{}", p.status);
+        assert!(changes.iter().any(|c| c.kind == ChangeKind::Added && c.rel.starts_with("sprites/") && c.rel.ends_with(".png")), "no new sprite");
+        let credits = std::fs::read_to_string(project.join("CREDITS.md")).unwrap_or_default();
+        assert!(credits.contains("<!-- oga:") && changes.iter().any(|c| c.rel == "CREDITS.md"), "{credits}");
+        assert!(!downloaded.is_empty(), "the Salida line");
+        assert!(p.entries.iter().any(|e| matches!(e, Entry::Changes { .. })));
+        let check = Command::new(workspace_modengine()).args(["check", project.to_str().unwrap(), "--steps", "60"]).output().unwrap();
+        println!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
+        assert!(check.status.success());
+        if keep.is_none() {
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    /// One real turn in Solo planificar that needs the web (🌐 Internet on):
+    /// `MODENGINE_AGENT_SMOKE=claude cargo test --release -p modengine-editor -- --ignored
+    /// smoke_real_cli_web --nocapture`.
+    #[test]
+    #[ignore]
+    fn smoke_real_cli_web() {
+        let Some(kind) = std::env::var("MODENGINE_AGENT_SMOKE").ok().and_then(|k| Kind::from_id(&k)) else { return };
+        let project = crate::room::tests::temp_project("smoke_web").canonicalize().unwrap();
+        let mut p = AgentPanel::with_config(None);
+        p.set_kind(kind);
+        p.set_permission(Permission::Plan);
+        p.set_internet(true);
+        p.set_model(&std::env::var("MODENGINE_AGENT_MODEL").unwrap_or_default());
+        assert!(p.program.is_some(), "{} not installed", kind.name());
+        p.send("busca en internet qué licencia tiene el pack Kenney Pixel Platformer y dame la URL. No edites nada.", &project, "Web");
+        let ctx = egui::Context::default();
+        let start = Instant::now();
+        while p.running() && start.elapsed() < Duration::from_secs(400) {
+            p.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for e in &p.entries {
+            println!("{e:?}");
+        }
+        assert!(!p.running() && p.status.starts_with("Hecho"), "{}", p.status);
+        assert!(p.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.icon == "🌐")), "no web tool line");
+        assert!(p.entries.iter().any(|e| matches!(e, Entry::Text(t) if t.contains("http"))), "no URL cited");
+        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[test]
@@ -4232,5 +4478,119 @@ echo '{{"type":"result","subtype":"success","session_id":"S-imp","result":"Impor
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&project);
         let _ = std::fs::remove_dir_all(art.parent().unwrap());
+    }
+
+    #[test]
+    fn fake_claude_gets_a_store_asset_and_undo_removes_it() {
+        let project = crate::room::tests::temp_project("agent_store").canonicalize().unwrap();
+        let before = snapshot::Snapshot::take(&project);
+        let bin = workspace_modengine();
+        let work = std::env::temp_dir().join(format!("modeditor_store_site_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&work);
+        let site = modengine_store::testing::fixture_site(&work.join("site"));
+        // The fake Claude runs `modengine store get` as allowed by its own argv, against the
+        // canned OpenGameArt pages.
+        let body = format!(
+            r#"tool=$(sed -n 's/^Bash(\(.*\) store \*)$/\1/p' '{d}/args.txt' | head -n 1)
+export MODENGINE_STORE_FIXTURES='{site}' XDG_CACHE_HOME='{cache}' MODENGINE_STORE_INTERVAL_MS=0
+echo '{{"type":"system","subtype":"init","session_id":"S-store"}}'
+echo '{{"type":"assistant","session_id":"S-store","message":{{"content":[{{"type":"tool_use","id":"b1","name":"Bash","input":{{"command":"modengine store get animated-slime ."}}}}]}}}}'
+"$tool" store get animated-slime . --frames 4 --name oga_slime --origin bottom-center --json > '{d}/get.json' 2> '{d}/get.err'
+echo '{{"type":"user","session_id":"S-store","message":{{"content":[{{"type":"tool_result","tool_use_id":"b1","content":"ok"}}]}}}}'
+echo '{{"type":"result","subtype":"success","session_id":"S-store","result":"Importado slime (CC-BY 3.0)."}}'"#,
+            d = std::env::temp_dir().join(format!("modeditor_agent_store_{}", std::process::id())).display(),
+            site = site.display(),
+            cache = work.join("cache").display(),
+        );
+        let (dir, exe) = fake_cli("store", &body);
+        let mut p = panel(&exe);
+        p.tool_override = Some(bin.clone());
+        p.set_permission(Permission::Edit);
+        p.send(&store_instruction("un slime animado"), &project, "x");
+        let ctx = egui::Context::default();
+        let (mut downloaded, mut imported, start) = (vec![], vec![], Instant::now());
+        while p.running() && start.elapsed() < Duration::from_secs(30) {
+            let o = p.poll(&ctx);
+            downloaded.extend(o.downloaded);
+            imported.extend(o.imported);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let args = lines(&dir.join("args.txt"));
+        assert!(args.contains(&format!("Bash({} store *)", bin.display())), "{args:?}");
+        let out = std::fs::read_to_string(dir.join("get.json")).unwrap_or_default();
+        assert!(out.contains("\"ok\": true"), "{out}{}", std::fs::read_to_string(dir.join("get.err")).unwrap_or_default());
+        let game = modengine::project::Project::load(&project).unwrap();
+        let slime = game.sprites.iter().find(|s| s.name == "oga_slime").unwrap();
+        assert_eq!((slime.frames.len(), slime.origin), (4, (8.0, 16.0)));
+        assert!(std::fs::read_to_string(project.join("CREDITS.md")).unwrap().contains("<!-- oga:animated-slime -->"));
+        assert_eq!(downloaded, ["«Animated Slime» (CC-BY 3.0) → sprite 'oga_slime'"]);
+        assert_eq!(imported, ["sprite 'oga_slime'"]);
+        // created files in the turn's changes (the PNG as a binary), and /deshacer removes them
+        let Some(Entry::Changes { files, .. }) = p.entries.iter().rev().find(|e| matches!(e, Entry::Changes { .. })).cloned() else { panic!("{:?}", p.entries) };
+        let added: Vec<(&str, bool)> = files.iter().filter(|f| f.kind == ChangeKind::Added).map(|f| (f.rel.as_str(), f.binary)).collect();
+        assert_eq!(added, [("CREDITS.md", false), ("sprites/oga_slime.png", true), ("sprites/oga_slime.toml", false)]);
+        assert_eq!(p.undo_last_turn(), 3);
+        assert!(snapshot::changes(&before, &snapshot::Snapshot::take(&project)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
+    #[test]
+    fn store_downloads_come_from_credits() {
+        let c = modengine_store::credits::Credit {
+            slug: "coins".into(),
+            title: "Spinning Coins".into(),
+            author: "A".into(),
+            licenses: vec![("CC0".into(), Some("https://creativecommons.org/publicdomain/zero/1.0/".into()))],
+            url: "https://opengameart.org/content/coins".into(),
+            source_file: "coins.png".into(),
+            ..Default::default()
+        };
+        let one = modengine_store::credits::add_credit("", &c, &["sprites/coin.png".into(), "sprites/coin.toml".into()], "2026-11-06");
+        assert_eq!(store_downloads("", &one), ["«Spinning Coins» (CC0) → sprite 'coin'"]);
+        assert!(store_downloads(&one, &one).is_empty(), "nothing new");
+        let two = modengine_store::credits::add_credit(&one, &c, &["sounds/clink.ogg".into()], "2026-11-06");
+        assert_eq!(store_downloads(&one, &two), ["«Spinning Coins» (CC0) → sonido 'clink'"]);
+        let local = modengine::credits::add_local(&one, &modengine::credits::LocalCredit { slug: "p".into(), title: "p".into(), text: "x".into() }, &[("sprites/h.png".into(), "h.png".into())], "d");
+        assert!(store_downloads(&one, &local).is_empty(), "local imports are not from the store");
+        assert!(store_instruction("").contains("Tienda (OpenGameArt)") && store_instruction("una moneda").contains("una moneda"));
+    }
+
+    #[test]
+    fn internet_is_per_project_and_reaches_the_cli() {
+        let (dir, exe) = fake_cli("internet", r#"echo '{"type":"result","subtype":"success","session_id":"S-net"}'"#);
+        let cfg = dir.join("cfg");
+        let a = crate::room::tests::temp_project("agent_net_a").canonicalize().unwrap();
+        let b = crate::room::tests::temp_project("agent_net_b").canonicalize().unwrap();
+        let mut p = AgentPanel::with_config(Some(cfg.join("agent.toml")));
+        p.program_override = Some(exe.clone());
+        p.locate();
+        p.list_tried = true;
+        p.enter_project(&a, "A");
+        assert!(p.internet, "on by default");
+        p.command(Slash::Internet(Some(false)), None);
+        assert!(!p.internet);
+        assert!(matches!(p.entries.last(), Some(Entry::Notice(t, _)) if t.contains("Internet: no")));
+        p.send("hola", &a, "A");
+        wait(&mut p);
+        let args = lines(&dir.join("args.txt"));
+        assert!(args.windows(3).any(|w| w == ["--disallowedTools", "WebSearch", "WebFetch"]), "{args:?}");
+        // another project has its own setting; coming back finds it off
+        p.enter_project(&b, "B");
+        assert!(p.internet);
+        p.set_permission(Permission::Plan);
+        p.send("hola", &b, "B");
+        wait(&mut p);
+        let args = lines(&dir.join("args.txt"));
+        assert!(args.contains(&"WebSearch".to_string()) && !args.contains(&"--disallowedTools".to_string()), "Solo planificar can search too: {args:?}");
+        let mut q = AgentPanel::with_config(Some(cfg.join("agent.toml")));
+        q.enter_project(&a, "A");
+        assert!(!q.internet, "remembered per project");
+        q.enter_project(&b, "B");
+        assert!(q.internet);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 }

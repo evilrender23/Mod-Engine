@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 // The files and names themselves are the engine's (shared with `modengine import`, which the
 // coding agent runs): both write the same files.
-pub use modengine::import::{expand, human_size, import, percent_decode, sanitize, strip_suffix, unique, valid_name, Frames, Imported, Kind, Origin, SpriteOpts, BIG_FILE, DEFAULT_FPS};
+pub use modengine::import::{expand, human_size, import, sanitize, strip_suffix, unique, valid_name, Frames, Imported, Kind, Origin, SpriteOpts, BIG_FILE, DEFAULT_FPS};
 use modengine::import::header_problem;
 #[cfg(test)]
 use modengine::import::sprite_toml;

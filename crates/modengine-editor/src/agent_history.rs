@@ -154,6 +154,9 @@ pub struct ProjectState {
     /// Compact by itself past this % of the context (0: never).
     #[serde(default)]
     pub autocompact: u8,
+    /// 🌐 Internet switched off for this project (on by default).
+    #[serde(default)]
+    pub no_internet: bool,
 }
 
 pub fn now() -> u64 {

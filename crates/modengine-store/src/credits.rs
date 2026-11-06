@@ -27,7 +27,7 @@ pub struct Credit {
 }
 
 impl Credit {
-    pub fn from_asset(a: &crate::store_oga::Asset, source_file: &str) -> Credit {
+    pub fn from_asset(a: &crate::oga::Asset, source_file: &str) -> Credit {
         Credit {
             slug: a.slug.clone(),
             title: a.title.clone(),
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn writes_into_the_project() {
-        let dir = crate::store_net::tests::tmp("credits");
+        let dir = crate::testing::tmp("credits");
         std::fs::create_dir_all(dir.join("sprites")).unwrap();
         std::fs::write(dir.join("sprites/slime.toml"), "image = \"slime.png\"\nframes = 4\n").unwrap();
         let c = credit();

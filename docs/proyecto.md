@@ -227,6 +227,58 @@ modengine import mijuego ~/Descargas/pack --credit "Kenney (kenney.nl), CC0" --j
   `license_files`, `credits` y `errors`. El código de salida es 0 si todo fue bien, 1 si algo
   falló (si el plan tiene errores no se escribe nada) y 2 si las opciones están mal.
 
+## La Tienda desde la terminal (`modengine store`)
+
+`modengine store` busca, enseña, descarga e importa assets gratuitos de
+[OpenGameArt.org](https://opengameart.org): es el código de la
+[Tienda del editor](editor.md#tienda-de-assets-opengameart) sin ventana, y lo que usa el
+[agente](editor.md#assets-de-la-tienda-con-el-agente).
+
+```sh
+modengine store search slime --licencia cc0 --json         # resultados: slug, título, miniatura
+modengine store search jump --tipo sonido --orden relevancia --pagina 2
+modengine store show pixel-art-animated-slime --zip        # autor, licencias, ficheros y qué hay en el zip
+modengine store download animated-slime                    # a la caché, para mirarla (inspect-image)
+modengine store get animated-slime mijuego --frames 4 --origin bottom-center --name slime
+modengine store get pixel-art-animated-slime mijuego --zip-entry slime-Sheet.png \
+    --grid 32x25 --row-names idle,move,attack,hurt,die --name slime
+modengine store get https://opengameart.org/content/<asset> mijuego --all --dry-run
+```
+
+- `search <palabras>`: `--tipo 2d|texturas|sonido|musica|fuentes` (por defecto 2d), `--licencia`
+  con una lista (`cc0`, `cc-by`, `cc-by-4.0`, `oga-by`, `cc-by-sa`, `gpl`, `libres` —CC0, CC-BY y
+  OGA-BY, por defecto—, `todas`), `--orden favoritos|recientes|relevancia`, `--pagina N`. Las
+  licencias de cada resultado están en su ficha; `--json` las da solo si la ficha ya está en caché.
+- `show <slug|url>`: título, autor, fecha, etiquetas, licencias con lo que exigen (crédito,
+  compartir igual, GPL), aviso del autor, descripción, vistas previas y ficheros (tamaño y si son
+  importables). `--zip` descarga los zip y lista su contenido. Termina con la orden `store get`
+  sugerida.
+- `download <slug|url> [fichero] [--zip-entry RUTA] [--out DIR]`: descarga sin importar (a la caché o
+  a `DIR`) y dice dónde quedó, para verla o pasarle `modengine inspect-image`.
+- `get <slug|url> <proyecto>`: `--file NOMBRE` (o su número en `show`) si el asset tiene varios
+  ficheros, `--all` para todos los importables, `--zip-entry RUTA` (ruta, nombre o comodín:
+  `'Slime/*.png'`) para entradas de un zip, y las opciones de [`modengine
+  import`](#importar-arte-desde-la-terminal) (`--name`, `--frames`, `--grid`, `--origin`, `--fps`,
+  `--tile`, `--split-rows`, `--row-names`, `--crop`, `--name-prefix`, `--overwrite`). Importa y añade
+  al **`CREDITS.md`** del proyecto la sección del asset (autor, licencias, URL, ficheros, fecha y
+  `<!-- oga:<slug> -->`); repetirlo no duplica nada. Los `LICENSE`/`README` del zip se extraen a la
+  caché y se listan.
+- **Licencias:** CC0 y las que solo piden crédito (CC-BY, OGA-BY) se importan escribiendo el
+  crédito. Si todas son «compartir igual» (CC-BY-SA, GPL, LGPL) o no se reconocen, hace falta
+  `--acepto-licencia`; sin él no se descarga nada, se explica lo que implican y el código de salida
+  es **4**.
+- **Red:** solo pide páginas `/content/`, búsquedas `/art-search-advanced` y ficheros de
+  `/sites/default/files/` (lo que permite el `robots.txt`; otras direcciones se rechazan), con el
+  `User-Agent` del editor, como mucho **una petición cada 2 s** —compartido con el editor y con
+  otros `modengine store` que corran a la vez— y caché de 24 h en `~/.cache/modengine/store`
+  (`$XDG_CACHE_HOME`). Si tiene que esperar turno, lo dice en stderr. `--json` incluye
+  `network_requests`: cuántas peticiones fueron de verdad a la red.
+- Códigos de salida: 0 bien, 1 error (red, página, importación), 2 opciones mal o hay que elegir
+  fichero/entrada (la lista sale en el mensaje), 4 licencia no aceptada.
+- Tests: `MODENGINE_STORE_FIXTURES=<carpeta>` hace que lea páginas de esa carpeta en vez de la red
+  (`search.html`, `<slug>.html`, `files/…`) y apunte cada petición en `requests.log`; solo entonces
+  `MODENGINE_STORE_INTERVAL_MS` puede acortar la espera.
+
 ## Sonidos (`sounds/`)
 
 `.wav` y `.ogg` sueltos funcionan directamente. Con TOML:
