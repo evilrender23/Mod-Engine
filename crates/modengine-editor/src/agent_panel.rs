@@ -1986,6 +1986,8 @@ impl AgentPanel {
                 let t = self.usage_text(true);
                 self.notice(if t.is_empty() { "Todavía no hay datos de uso.".to_string() } else { t }, Tone::Muted);
             }
+            Slash::PixelArt(d) if d.trim().is_empty() => self.notice("Usa /pixelart <qué dibujar>, p. ej. /pixelart llave dorada de 16×16 para recoger.", Tone::Muted),
+            Slash::PixelArt(d) => return Some(slash::pixel_art_message(d.trim())),
             Slash::Help => self.notice(slash::help(), Tone::Muted),
             Slash::Unknown(n) => self.notice(format!("No conozco /{n}. /ayuda lista los comandos (// envía un mensaje que empieza por /)."), Tone::Warning),
         }
@@ -3853,6 +3855,90 @@ echo '{"type":"turn.completed"}'"#,
         assert!(credits.contains("<!-- oga:") && changes.iter().any(|c| c.rel == "CREDITS.md"), "{credits}");
         assert!(!downloaded.is_empty(), "the Salida line");
         assert!(p.entries.iter().any(|e| matches!(e, Entry::Changes { .. })));
+        let check = Command::new(workspace_modengine()).args(["check", project.to_str().unwrap(), "--steps", "60"]).output().unwrap();
+        println!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
+        assert!(check.status.success());
+        if keep.is_none() {
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    /// One real turn in "Editar archivos" drawing a sprite with the pixel art guide and
+    /// `modengine pixel-check` on a copy of examples/platformer:
+    /// `MODENGINE_AGENT_SMOKE=claude cargo test --release -p modengine-editor -- --ignored
+    /// smoke_real_cli_pixel_art --nocapture`. `MODENGINE_SMOKE_HOME=<dir>` keeps the project,
+    /// the conversation and a copy of the previews (`<dir>/previews`).
+    #[test]
+    #[ignore]
+    fn smoke_real_cli_pixel_art() {
+        let Some(kind) = std::env::var("MODENGINE_AGENT_SMOKE").ok().and_then(|k| Kind::from_id(&k)) else { return };
+        fn copy_dir(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    copy_dir(&p, &to.join(e.file_name()));
+                } else {
+                    std::fs::copy(&p, to.join(e.file_name())).unwrap();
+                }
+            }
+        }
+        let keep = std::env::var_os("MODENGINE_SMOKE_HOME").map(PathBuf::from);
+        let base = keep.clone().unwrap_or_else(|| std::env::temp_dir().join(format!("modeditor_smoke_pixel_{}", std::process::id())));
+        let project = base.join("platformer");
+        let _ = std::fs::remove_dir_all(&project);
+        copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/platformer"), &project);
+        let project = project.canonicalize().unwrap();
+        let previews = agent::pixel_preview_dir();
+        let _ = std::fs::remove_dir_all(&previews);
+        let mut p = AgentPanel::with_config(Some(base.join(".config/modengine/agent.toml")));
+        p.set_kind(kind);
+        p.enter_project(&project, "Coin Climber");
+        p.set_permission(Permission::Edit);
+        p.set_internet(false);
+        p.set_model(&std::env::var("MODENGINE_AGENT_MODEL").unwrap_or_default());
+        assert!(p.program.is_some(), "{} not installed", kind.name());
+        p.tool_override = Some(workspace_modengine());
+        let before = snapshot::Snapshot::take(&project);
+        p.send("Dibuja un sprite de llave dorada de 16×16 para recoger, con la paleta del proyecto", &project, "Coin Climber");
+        let ctx = egui::Context::default();
+        let start = Instant::now();
+        while p.running() && start.elapsed() < Duration::from_secs(900) {
+            p.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for e in &p.entries {
+            println!("{e:?}");
+        }
+        println!("status={} usage={:?}", p.status, p.usage);
+        let changes = snapshot::changes(&before, &snapshot::Snapshot::take(&project));
+        for c in &changes {
+            println!("{:?} {}", c.kind, c.rel);
+        }
+        assert!(!p.running() && p.status.starts_with("Hecho"), "{}", p.status);
+        let tools: Vec<&ToolLine> = p.entries.iter().filter_map(|e| if let Entry::Tool(t) = e { Some(t) } else { None }).collect();
+        assert!(tools.iter().any(|t| t.verb == "Leer" && t.detail.ends_with("pixel-art.md")), "did not read the guide");
+        assert!(tools.iter().any(|t| t.detail.contains("pixel-check") && t.detail.contains("--preview")), "did not run pixel-check with previews");
+        assert!(tools.iter().any(|t| t.verb == "Leer" && t.detail.contains("modengine-pixel-check") && t.detail.ends_with(".png")), "did not open a preview");
+        let added: Vec<&str> = changes.iter().filter(|c| c.kind == ChangeKind::Added && c.rel.starts_with("sprites/") && c.rel.ends_with(".toml")).map(|c| c.rel.as_str()).collect();
+        assert_eq!(added.len(), 1, "{added:?}");
+        let rel = added[0];
+        println!("--- {rel}\n{}", std::fs::read_to_string(project.join(rel)).unwrap());
+        let game = modengine::project::Project::load(&project).expect("the project still loads");
+        let name = Path::new(rel).file_stem().unwrap().to_string_lossy().to_string();
+        let s = game.sprites.iter().find(|s| s.name == name).unwrap();
+        assert_eq!((s.fw, s.fh), (16, 16));
+        // the checker, as the user would run it: no errors and every colour in the palette
+        let out_dir = base.join("previews");
+        let out = Command::new(workspace_modengine())
+            .args(["pixel-check", project.to_str().unwrap(), &name, "--size", "16x16", "--json", "--preview", out_dir.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        assert!(out.status.success(), "pixel-check failed");
+        let checks = v["sprites"][0]["checks"].as_array().unwrap();
+        assert_eq!(checks.iter().find(|c| c["id"] == "closed_palette").unwrap()["status"], "ok", "colours outside the palette");
         let check = Command::new(workspace_modengine()).args(["check", project.to_str().unwrap(), "--steps", "60"]).output().unwrap();
         println!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
         assert!(check.status.success());

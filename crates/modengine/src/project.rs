@@ -595,7 +595,8 @@ fn pixel_frames(t: &SpriteToml, global: &BTreeMap<String, String>) -> Result<Fra
     Ok((fw, fh, frames, fw * n, fh, rgba))
 }
 
-fn parse_origin(v: Option<&toml::Value>, fw: u32, fh: u32) -> Result<(f64, f64), String> {
+/// A sprite TOML's `origin` (`[x, y]` or a name such as `"bottom"`) in frame pixels.
+pub fn parse_origin(v: Option<&toml::Value>, fw: u32, fh: u32) -> Result<(f64, f64), String> {
     let (w, h) = (fw as f64, fh as f64);
     Ok(match v {
         None => (0.0, 0.0),

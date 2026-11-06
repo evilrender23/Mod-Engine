@@ -29,6 +29,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec { name: "autocompactar", aliases: &["autocompact"], arg: "<70-95|no>", help: "Compacta sola al pasar ese % del contexto" },
     Spec { name: "workspace", aliases: &["ventanas"], arg: "<on|off>", help: "Abre (o no) lo que crea cada tarea en un workspace nuevo" },
     Spec { name: "internet", aliases: &["web"], arg: "<on|off>", help: "Deja (o no) que el agente busque en internet y lea páginas web" },
+    Spec { name: "pixelart", aliases: &["pixel", "pixel-art"], arg: "<descripción>", help: "Pide un sprite, tile o icono siguiendo la guía de pixel art y verificándolo con modengine pixel-check" },
     Spec { name: "coste", aliases: &["cost", "usage", "contexto"], arg: "", help: "Muestra el contexto usado, los tokens y el coste" },
     Spec { name: "ayuda", aliases: &["help", "?"], arg: "", help: "Lista estos comandos" },
 ];
@@ -55,6 +56,9 @@ pub enum Command {
     Internet(Option<bool>),
     /// Open what a turn made in a new workspace, on/off; `None`: show it.
     TurnWorkspace(Option<bool>),
+    /// `/pixelart <description>`: a drawing request with the pixel art note in front (empty:
+    /// show how to use it).
+    PixelArt(String),
     Cost,
     Help,
     /// Not a command we know (the name as typed).
@@ -106,9 +110,19 @@ pub fn parse(text: &str) -> Option<Command> {
             "off" | "no" | "0" | "false" | "desactivar" | "apagar" => Some(false),
             _ => None,
         })),
+        "pixelart" => Command::PixelArt(arg.to_string()),
         "coste" => Command::Cost,
         _ => Command::Help,
     })
+}
+
+/// What `/pixelart <description>` sends.
+pub fn pixel_art_message(description: &str) -> String {
+    format!(
+        "{description}\n\n(Pixel art: sigue la guía de pixel art (pixel-art.md de la documentación del motor): restricciones primero, \
+         resolución nativa con la paleta del proyecto, dibujo por pasadas, y verifica con modengine pixel-check y sus vistas previas \
+         antes de responder, diciendo qué comprobaciones pasaron y cuáles quedan pendientes.)"
+    )
 }
 
 pub fn find(name: &str) -> Option<&'static Spec> {
@@ -186,6 +200,9 @@ mod tests {
         assert_eq!(parse("/workspace off"), Some(Command::TurnWorkspace(Some(false))));
         assert_eq!(parse("/ventanas sí"), Some(Command::TurnWorkspace(Some(true))));
         assert_eq!(parse("/stop"), Some(Command::Cancel));
+        assert_eq!(parse("/pixelart llave dorada 16x16"), Some(Command::PixelArt("llave dorada 16x16".into())));
+        assert_eq!(parse("/pixel"), Some(Command::PixelArt(String::new())));
+        assert!(pixel_art_message("una llave").starts_with("una llave\n\n(Pixel art:") && pixel_art_message("x").contains("pixel-check"));
         assert_eq!(parse("/frobnicar"), Some(Command::Unknown("frobnicar".into())));
         assert!(help().contains("/compactar") && help().contains("/deshacer"));
     }

@@ -32,6 +32,7 @@ pub mod net;
 pub mod object;
 pub mod pack;
 pub mod pixelart;
+pub mod pixelcheck;
 pub mod path;
 pub mod palette;
 pub mod project;

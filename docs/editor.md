@@ -570,6 +570,7 @@ envía un mensaje que empieza por `/`.
 | `/autocompactar <50-98\|no>` | Umbral para compactar solo |
 | `/workspace on\|off` (`/ventanas`) | Abre (o no) lo que crea cada tarea en un workspace nuevo |
 | `/internet on\|off` (`/web`) | Deja (o no) que el agente busque en internet y lea páginas; sin nada, dice cómo está |
+| `/pixelart <descripción>` (`/pixel`) | Pide un sprite, tile o icono con una nota para que siga la [guía de pixel art](pixel-art.md) y lo verifique con `modengine pixel-check` |
 | `/coste` | Contexto, tokens y coste |
 | `/ayuda` | La lista de comandos |
 
@@ -710,6 +711,32 @@ Codex ejecuta comandos en su sandbox `workspace-write`, que escribe solo en el p
 todas partes. En *Editar y ejecutar comandos* también. En *Solo planificar* no se importa nada (el
 botón queda desactivado y al agente no se le habla del importador). `<modengine>` es la ruta
 absoluta del `modengine` que hay junto al editor (o `$MODENGINE_BIN`, o el del `PATH`).
+
+### Pixel art con el agente
+
+Cuando le pides **dibujar o arreglar** sprites, tiles, iconos o animaciones («dibuja una llave
+dorada de 16×16 para recoger», «el slime parpadea mal al volver al primer frame»), el contexto le
+dice que lea y siga la guía [pixel-art.md](pixel-art.md) (restricciones primero, cuadrícula nativa
+con la paleta del proyecto, pasadas de silueta → masas → luz → contornos → detalle) y que, antes de
+responder, **siempre** ejecute
+
+```sh
+<modengine> pixel-check . <sprite> --preview <temp>/modengine-pixel-check --json
+```
+
+corrija los errores, **abra las vistas previas** (`_x<escala>`, `_fondos`, `_bucle`, `_3x3`) con su
+herramienta de lectura, corrija lo que no se lea bien y diga en la respuesta qué comprobaciones
+pasaron y qué queda pendiente (la revisión visual). `/pixelart <descripción>` envía la petición
+con esa nota delante. Sin la documentación del motor a mano, el contexto lleva un resumen de la
+guía.
+
+**Permisos:** `pixel-check` está permitido en los tres modos, también en *Solo planificar*: solo
+lee el proyecto y se niega a escribir vistas previas dentro de él. Claude Code recibe `Bash(<modengine>
+pixel-check *)` y `Read(<temp>/modengine-pixel-check/**)`; Antigravity `command(<modengine>
+pixel-check)` y `read_file(<temp>/modengine-pixel-check)`; Codex lo ejecuta en su sandbox (en
+*Solo planificar*, `read-only`, no puede escribir las vistas previas: el resto de comprobaciones
+funciona). En *Solo planificar* el agente revisa sprites existentes y propone los nuevos en el plan
+(el TOML completo) en vez de escribirlos.
 
 ### Assets de la Tienda con el agente
 

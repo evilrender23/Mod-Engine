@@ -17,6 +17,8 @@ pub mod export;
 #[cfg(not(target_os = "android"))]
 pub mod import_cli;
 #[cfg(not(target_os = "android"))]
+pub mod pixel_check;
+#[cfg(not(target_os = "android"))]
 pub mod shader_tool;
 #[cfg(not(target_os = "android"))]
 pub mod sprite_bake;

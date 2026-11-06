@@ -131,6 +131,15 @@ Cada sprite queda como `sprites/<nombre>.png` (una tira con sus frames) y un TOM
 `image` y `frames` que conserva el resto de claves (`origin`, `mask`, `fps`, `rotation`...). Si
 ya existe un PNG con ese nombre, el sprite no se toca. Los comentarios del TOML se pierden.
 
+### Revisar pixel art (`modengine pixel-check`)
+
+El motor rellena en silencio las filas cortas de `pixels`, así que un carácter de menos desplaza
+el dibujo sin dar error. `modengine pixel-check <proyecto> <sprite>... | --all` comprueba el ancho
+de cada fila, los caracteres que no están en la paleta (con frame, fila y columna), los colores
+fuera de la paleta, el alfa, el origen y la línea de apoyo de las animaciones y, con `--tile`, las
+uniones de un tile; `--preview DIR` genera vistas ampliadas sobre fondo claro y oscuro, el bucle y
+la prueba 3×3. Detalles y la guía para dibujar en [pixel-art.md](pixel-art.md).
+
 ### Rotación de pixel art (`rotation`)
 
 Girar pixel art con el muestreo «nearest» de la GPU deja bordes dentados y píxeles sueltos,

@@ -33,6 +33,10 @@ usage:
                                            (or compact pixels_rle) keeping origin/mask/fps
   modengine inspect-image <file|folder> [--json]
                                            size, colours and likely frame layouts of PNGs
+  modengine pixel-check <project> <sprite>... | --all [--palette P] [--size WxH] [--tile]
+                   [--binary-alpha] [--preview DIR|auto] [--scale N] [--json]
+                                           check pixel art (rows, palette, alpha, anchor,
+                                           tiles) and write scaled previews (pixel-check --help)
   modengine store search|show|download|get ...
                                            free assets from OpenGameArt.org: search, look,
                                            import with credits (modengine store --help)
@@ -222,6 +226,9 @@ fn main() {
     }
     if raw.first().map(String::as_str) == Some("inspect-image") {
         exit(import_cli::main_inspect(&raw[1..]));
+    }
+    if raw.first().map(String::as_str) == Some("pixel-check") {
+        exit(modengine_cli::pixel_check::main_cli(&raw[1..]));
     }
     if raw.first().map(String::as_str) == Some("store") {
         exit(modengine_cli::store_cli::main_cli(&raw[1..]));

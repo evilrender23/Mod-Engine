@@ -127,11 +127,17 @@ pub fn tool_command(tool: &Path) -> String {
 }
 
 /// The subcommands of `modengine` the agent may always run outside Solo planificar: the
-/// importer and the asset store.
-pub const IMPORT_SUBCOMMANDS: [&str; 3] = ["import", "inspect-image", "store"];
+/// importer, the asset store and the pixel art checker.
+pub const IMPORT_SUBCOMMANDS: [&str; 4] = ["import", "inspect-image", "store", "pixel-check"];
 
-/// The read-only part of the store, allowed in Solo planificar too.
-pub const PLAN_SUBCOMMANDS: [&str; 2] = ["store search", "store show"];
+/// Allowed in Solo planificar too: the read-only part of the store, and `pixel-check` (it
+/// only reads the project; it refuses to write its previews inside it).
+pub const PLAN_SUBCOMMANDS: [&str; 3] = ["store search", "store show", "pixel-check"];
+
+/// Where the agent asks `modengine pixel-check --preview` to write (and may read from).
+pub fn pixel_preview_dir() -> PathBuf {
+    std::env::temp_dir().join("modengine-pixel-check")
+}
 
 /// The `modengine` subcommands this run may use (`None`: none; see [`IMPORT_SUBCOMMANDS`]).
 pub fn tool_subcommands(run: &Run) -> Option<(&Path, &'static [&'static str])> {
@@ -674,6 +680,8 @@ impl Kind {
                     if let Some(c) = &run.store_cache {
                         readable.push(format!("Read({}/**)", claude_rule_path(c)));
                     }
+                    // the previews of `pixel-check`, to look at the drawing
+                    readable.push(format!("Read({}/**)", claude_rule_path(&pixel_preview_dir())));
                 }
                 if !readable.is_empty() {
                     a.push("--allowedTools".into());
@@ -698,6 +706,7 @@ impl Kind {
                     if let Some(c) = &run.store_cache {
                         allow.push(format!("read_file({})", agy_rule_path(c)));
                     }
+                    allow.push(format!("read_file({})", agy_rule_path(&pixel_preview_dir())));
                 }
                 // 🌐 Internet: reading pages is `read_url(<domain>)`; its web search
                 // (search_web) has no permission rule, so with Internet off it is only told not to.
@@ -735,11 +744,12 @@ impl Kind {
                     prompt += "\n\n(From the Mod Engine editor: shell commands are not allowed in this mode and trying one \
                                ends your turn. Use your file tools to list, read, search and edit files.";
                     match tool_subcommands(run) {
-                        Some((tool, _)) if run.permission == Permission::Plan => {
-                            prompt += &format!(" The only commands allowed are `{t} store search ...` and `{t} store show ...`, to look for assets.", t = tool_command(tool))
-                        }
+                        Some((tool, _)) if run.permission == Permission::Plan => prompt += &format!(
+                            " The only commands allowed are `{t} store search ...` and `{t} store show ...`, to look for assets, and `{t} pixel-check ...`, to check pixel art.",
+                            t = tool_command(tool)
+                        ),
                         Some((tool, _)) => prompt += &format!(
-                            " The only commands allowed are `{t} import ...`, `{t} inspect-image ...` and `{t} store ...`, to import art and get assets from the store.",
+                            " The only commands allowed are `{t} import ...`, `{t} inspect-image ...` and `{t} store ...`, to import art and get assets from the store, and `{t} pixel-check ...`, to check pixel art.",
                             t = tool_command(tool)
                         ),
                         None => {}
@@ -842,6 +852,9 @@ pub fn engine_context_for(name: &str, docs: Option<&Path>, tool: Option<&Path>, 
         }
         c += &store_section(&tool_command(tool), plan, store_cache);
     }
+    // an older copy of the docs may not have the guide yet: then the context carries its gist
+    let guide = docs.map(|d| d.join("pixel-art.md")).filter(|g| g.is_file());
+    c += &pixel_art_section(guide.as_deref(), tool.map(tool_command).as_deref(), plan, &pixel_preview_dir());
     if internet {
         c += INTERNET_SECTION;
     }
@@ -924,6 +937,48 @@ pub fn store_section(tool: &str, plan: bool, cache: Option<&Path>) -> String {
          never remove credits from CREDITS.md, and reply with the asset you used, its author and licence and its URL. If \
          a store command fails with a network error, the sandbox may have no network: say so instead of retrying.\n\n"
     )
+}
+
+/// The "Pixel art" part of the context: follow docs/pixel-art.md (`guide`; its gist when it
+/// is missing) and verify with `modengine pixel-check`, looking at its previews.
+pub fn pixel_art_section(guide: Option<&Path>, tool: Option<&str>, plan: bool, previews: &Path) -> String {
+    let mut c = String::from("# Pixel art\n");
+    c += &match guide {
+        Some(g) => format!(
+            "When the user asks you to draw or fix sprites, tiles, icons or animations, read the pixel art guide {} first and \
+             follow it. In short: ",
+            g.display()
+        ),
+        None => "When the user asks you to draw or fix sprites, tiles, icons or animations, follow these pixel art rules: ".into(),
+    };
+    c += "fix the constraints first (exact size, view, pose, background, the feature that must survive; look at a sprite of \
+          the same family for its size in the cell, feet line, outline and light); draw at native resolution as a text sprite \
+          (sprites/<name>.toml, `pixels = ['''...''']`, one block per frame, every row exactly as wide, `.` transparent, no \
+          pre-scaled art) with the characters of game.toml's [palette] (a local `palette` only for colours it lacks); work in \
+          passes: silhouette, colour masses, light and shadow from one direction, clean outlines, then only details with a \
+          purpose; set `origin` (\"bottom\" for things standing on the ground), `fps` and `mask`; animations keep one cell and \
+          anchor and must loop (last frame to first); tiles must repeat without seams or banding. Never name an asset like a \
+          built-in (`key`, `mouse`, `color`, a function): it hides it from every script.\n";
+    match tool {
+        Some(t) => {
+            let dir = previews.display();
+            c += &format!(
+                "Then ALWAYS verify before replying: run `{t} pixel-check . <sprite> --preview {dir} --json` (add `--tile` for \
+                 repeatable tiles, `--size WxH` when a size was asked), fix every error, open the preview PNGs it lists with your \
+                 file-reading tool (`_x<scale>` enlarged, `_fondos` on light and dark backgrounds, `_bucle` loop and onion skin, \
+                 `_3x3` tiles) and correct what does not read well, then run it again. In your reply list the checks that ran and \
+                 passed and what is still pending (visual judgement).\n"
+            );
+            if plan {
+                c += &format!(
+                    "In Solo planificar you may run pixel-check only on existing sprites (previews go to {dir}); put a new or fixed \
+                     sprite in your plan as its full TOML instead of writing it.\n"
+                );
+            }
+        }
+        None => c += "Then check by hand that every row has the same width and every character is in the palette, and say in your reply that the visual review is still pending.\n",
+    }
+    c + "\n"
 }
 
 /// The "Internet" part of the context (🌐 Internet on).
@@ -1858,7 +1913,7 @@ mod tests {
     fn the_importer_is_allowed_outside_plan_mode() {
         let tool = PathBuf::from("/opt/me/bin/modengine");
         let with = |p: Permission| Run { tool: Some(tool.clone()), ..run(p, "", "") };
-        let rules = ["Bash(/opt/me/bin/modengine import *)", "Bash(/opt/me/bin/modengine inspect-image *)", "Bash(/opt/me/bin/modengine store *)"];
+        let rules = ["Bash(/opt/me/bin/modengine import *)", "Bash(/opt/me/bin/modengine inspect-image *)", "Bash(/opt/me/bin/modengine store *)", "Bash(/opt/me/bin/modengine pixel-check *)"];
         // Claude Code: allowed in Editar archivos (and Auto), never in Solo planificar
         for p in [Permission::Edit, Permission::Auto] {
             let a = Kind::Claude.args(&with(p));
@@ -1867,10 +1922,10 @@ mod tests {
                 assert!(a[at..].contains(&r.to_string()), "{p:?}: {a:?}");
             }
         }
-        // Solo planificar: only looking at the store
+        // Solo planificar: only looking at the store and checking pixel art
         let plan = Kind::Claude.args(&with(Permission::Plan));
-        let tool_rules: Vec<&String> = plan.iter().filter(|x| x.contains("modengine")).collect();
-        assert_eq!(tool_rules, ["Bash(/opt/me/bin/modengine store search *)", "Bash(/opt/me/bin/modengine store show *)"], "{plan:?}");
+        let tool_rules: Vec<&String> = plan.iter().filter(|x| x.starts_with("Bash(")).collect();
+        assert_eq!(tool_rules, ["Bash(/opt/me/bin/modengine store search *)", "Bash(/opt/me/bin/modengine store show *)", "Bash(/opt/me/bin/modengine pixel-check *)"], "{plan:?}");
         assert!(!Kind::Claude.args(&run(Permission::Edit, "", "")).iter().any(|x| x.starts_with("Bash(")), "no tool found: no rule");
         // a path with spaces: as typed and quoted
         let spaced = claude_import_rules(Path::new("/my apps/modengine"));
@@ -1880,16 +1935,18 @@ mod tests {
                 "Bash(/my apps/modengine import *)",
                 "Bash(/my apps/modengine inspect-image *)",
                 "Bash(/my apps/modengine store *)",
+                "Bash(/my apps/modengine pixel-check *)",
                 "Bash(\"/my apps/modengine\" import *)",
                 "Bash(\"/my apps/modengine\" inspect-image *)",
-                "Bash(\"/my apps/modengine\" store *)"
+                "Bash(\"/my apps/modengine\" store *)",
+                "Bash(\"/my apps/modengine\" pixel-check *)"
             ]
         );
         // Antigravity: a command() allow rule, and the steering note names the commands
         let a = Kind::Antigravity.args(&with(Permission::Edit));
         let s: Value = serde_json::from_str(&a[a.iter().position(|x| x == "--settings").unwrap() + 1]).unwrap();
         let allow = s["permissions"]["allow"].as_array().unwrap();
-        for sub in ["import", "inspect-image", "store"] {
+        for sub in ["import", "inspect-image", "store", "pixel-check"] {
             assert!(allow.contains(&json!(format!("command(/opt/me/bin/modengine {sub})"))), "{allow:?}");
         }
         let print = a.iter().find(|x| x.starts_with("--print=")).unwrap();
@@ -1897,7 +1954,7 @@ mod tests {
         let a = Kind::Antigravity.args(&with(Permission::Plan));
         let s: Value = serde_json::from_str(&a[a.iter().position(|x| x == "--settings").unwrap() + 1]).unwrap();
         let cmds: Vec<&Value> = s["permissions"]["allow"].as_array().unwrap().iter().filter(|r| r.as_str().unwrap().starts_with("command(")).collect();
-        assert_eq!(cmds, [&json!("command(/opt/me/bin/modengine store search)"), &json!("command(/opt/me/bin/modengine store show)")]);
+        assert_eq!(cmds, [&json!("command(/opt/me/bin/modengine store search)"), &json!("command(/opt/me/bin/modengine store show)"), &json!("command(/opt/me/bin/modengine pixel-check)")]);
         assert!(!a.iter().any(|x| x.contains("# Importing art")), "{a:?}");
         // Codex: commands run in its workspace-write sandbox; it is told about the importer
         let r = with(Permission::Edit);
@@ -1993,6 +2050,49 @@ mod tests {
         let raw = Run { raw: true, prompt: "/compact".into(), ..mk(Permission::Edit, true) };
         assert!(!Kind::Claude.args(&raw).iter().any(|x| x.starts_with("Web") || x.contains("modengine")));
         assert!(!Kind::Codex.args(&raw).iter().any(|x| x.contains("web_search")));
+    }
+
+    #[test]
+    fn pixel_art_guide_and_checker_per_backend_and_mode() {
+        let tool = PathBuf::from("/opt/me/bin/modengine");
+        let docs = std::env::temp_dir().join(format!("modeditor_pixel_docs_{}", std::process::id()));
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("pixel-art.md"), "# guía").unwrap();
+        let mk = |p: Permission| Run { tool: Some(tool.clone()), docs: Some(docs.clone()), ..run(p, "", "") };
+        let previews = claude_rule_path(&pixel_preview_dir());
+        for p in Permission::ALL {
+            // Claude Code: pixel-check in every mode, and its previews are readable
+            let a = Kind::Claude.args(&mk(p));
+            let at = a.iter().position(|x| x == "--allowedTools").unwrap();
+            assert!(a[at..].contains(&"Bash(/opt/me/bin/modengine pixel-check *)".to_string()), "{p:?} {a:?}");
+            assert!(a[at..].contains(&format!("Read({previews}/**)")), "{p:?} {a:?}");
+            // Antigravity: a command() rule and read_file() of the previews
+            let a = Kind::Antigravity.args(&mk(p));
+            let s: Value = serde_json::from_str(&a[a.iter().position(|x| x == "--settings").unwrap() + 1]).unwrap();
+            let allow = s["permissions"]["allow"].as_array().unwrap();
+            assert!(allow.contains(&json!("command(/opt/me/bin/modengine pixel-check)")), "{p:?} {allow:?}");
+            assert!(allow.contains(&json!(format!("read_file({})", agy_rule_path(&pixel_preview_dir())))), "{p:?} {allow:?}");
+            if p != Permission::Auto {
+                assert!(a.last().unwrap().contains("`/opt/me/bin/modengine pixel-check ...`, to check pixel art"), "{p:?}");
+            }
+            // the context, for every backend: the guide's path and the checker command
+            let ctx = Kind::Codex.input(&mk(p));
+            assert!(ctx.contains("# Pixel art") && ctx.contains(&docs.join("pixel-art.md").display().to_string()), "{p:?}");
+            assert!(ctx.contains(&format!("/opt/me/bin/modengine pixel-check . <sprite> --preview {} --json", pixel_preview_dir().display())), "{p:?}");
+            assert_eq!(ctx.contains("In Solo planificar you may run pixel-check only on existing sprites"), p == Permission::Plan, "{p:?}");
+        }
+        // no pixel-check rule without the tool, but the guide is still there
+        assert!(!Kind::Claude.args(&run(Permission::Edit, "", "")).iter().any(|x| x.contains("pixel-check")));
+        let c = engine_context("x", None, None);
+        assert!(c.contains("# Pixel art") && c.contains("follow these pixel art rules") && c.contains("every row exactly as wide"), "condensed guide without docs");
+        assert!(!c.contains("pixel-check"));
+        // docs without the guide (an older copy): the gist, not a path that does not exist
+        let c = engine_context("x", Some(Path::new("/opt/me/docs")), None);
+        assert!(c.contains("follow these pixel art rules") && !c.contains("pixel-art.md"));
+        let _ = std::fs::remove_dir_all(&docs);
+        // the section stays short
+        let sec = pixel_art_section(Some(Path::new("/opt/me/docs/pixel-art.md")), Some("/opt/me/bin/modengine"), false, Path::new("/tmp/modengine-pixel-check"));
+        assert!(sec.len() < 2200, "{}", sec.len());
     }
 
     #[test]

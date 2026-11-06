@@ -146,6 +146,7 @@ map = '''
 
 - [docs/editor.md](docs/editor.md): el editor visual (rooms, objetos, sprites, sonidos, scripts).
 - [docs/editor.md#agente](docs/editor.md#agente): el panel **Agente**, que conversa con Claude Code, Antigravity o Codex para que editen el proyecto.
+- [docs/pixel-art.md](docs/pixel-art.md): **dibujar pixel art mediante código** (la guía que sigue el agente) y `modengine pixel-check`, que comprueba filas, paleta, alfa, anclaje y tiles y genera vistas previas.
 - [docs/lenguaje.md](docs/lenguaje.md): ModScript paso a paso.
 - [docs/proyecto.md](docs/proyecto.md): `game.toml`, sprites, sonidos, fuentes y rooms.
 - [docs/funciones.md](docs/funciones.md): todas las funciones integradas.
@@ -165,6 +166,7 @@ modengine new --template list                     # las plantillas
 modengine export <proyecto> --target windows|linux|android [--out CARPETA] [--release]
 modengine export --setup windows|linux|android   # instala lo que falte (en tu carpeta de usuario)
 modengine export --doctor                         # qué plataformas están listas
+modengine pixel-check <proyecto> <sprite>... | --all [--preview auto] [--tile] [--size 16x16]   # revisa pixel art (docs/pixel-art.md)
 modengine functions
 ```
 
