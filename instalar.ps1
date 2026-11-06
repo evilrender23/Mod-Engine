@@ -39,6 +39,9 @@ if ('ñ'.Length -ne 1) {
 }
 
 $ErrorActionPreference = 'Stop'
+# Editores anteriores pasaban -Destino como \\?\C:\…, que Join-Path de PowerShell 5.1 no admite.
+if ($Destino.StartsWith('\\?\UNC\')) { $Destino = '\\' + $Destino.Substring(8) }
+elseif ($Destino.StartsWith('\\?\')) { $Destino = $Destino.Substring(4) }
 $interactivo = -not $Actualizar
 if ($Actualizar) {
     # Sin nadie delante, git no debe quedarse esperando credenciales: mejor que falle y lo diga.

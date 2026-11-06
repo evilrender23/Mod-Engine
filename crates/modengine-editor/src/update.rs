@@ -150,9 +150,10 @@ fn git(carpeta: &Path, argumentos: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&salida.stdout).into_owned())
 }
 
-/// `<destino>/app`, where this executable is.
+/// `<destino>/app`, where this executable is (without `\\?\`: PowerShell 5.1's Join-Path
+/// refuses it, and it is shown in messages).
 fn carpeta_app() -> Option<PathBuf> {
-    std::env::current_exe().ok()?.canonicalize().ok()?.parent().map(Path::to_path_buf)
+    modengine::canonical(&std::env::current_exe().ok()?).ok()?.parent().map(Path::to_path_buf)
 }
 
 /// The installed version, or `None` for a development build.
