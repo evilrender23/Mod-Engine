@@ -39,16 +39,16 @@ impl Sources<'_> {
 
 pub fn icon(o: &Open) -> &'static str {
     match o {
-        Open::Room(_) => "▦",
-        Open::Object(_) => "◆",
-        Open::Sprite(_) => "▣",
-        Open::Sound(_) => "♪",
-        Open::Script(_) => "✎",
-        Open::Font(_) => "🗛",
-        Open::Note(_) => "🗒",
-        Open::TileSet(_) => "▩",
-        Open::Data(_) => "▤",
-        Open::Settings => "⚙",
+        Open::Room(_) => fa!(map),
+        Open::Object(_) => fa!(cube),
+        Open::Sprite(_) => fa!(image),
+        Open::Sound(_) => fa!(music),
+        Open::Script(_) => fa!(pen),
+        Open::Font(_) => fa!(font),
+        Open::Note(_) => fa!(note_sticky),
+        Open::TileSet(_) => fa!(table_cells),
+        Open::Data(_) => fa!(table),
+        Open::Settings => fa!(gear),
         Open::Anim(k, _) => k.icon(),
         Open::Fx(k, _) => k.icon(),
     }
@@ -59,7 +59,7 @@ pub fn asset_label(o: &Open) -> String {
     match o {
         Open::Room(n) | Open::Object(n) | Open::Sprite(n) | Open::Sound(n) | Open::Script(n) => format!("{} {n}", icon(o)),
         Open::Font(n) | Open::Note(n) | Open::TileSet(n) | Open::Data(n) => format!("{} {n}", icon(o)),
-        Open::Settings => "⚙ Ajustes".into(),
+        Open::Settings => concat!(fa!(gear), " Ajustes").into(),
         Open::Anim(_, n) => format!("{} {n}", icon(o)),
         Open::Fx(_, n) => format!("{} {n}", icon(o)),
     }
@@ -115,13 +115,13 @@ pub fn output(log: &[LogLine], n: usize) -> Option<Attachment> {
             }
         })
         .collect();
-    let mut a = Attachment::text("☰", "Salida", text.join("\n"));
+    let mut a = Attachment::text(fa!(terminal), "Salida", text.join("\n"));
     a.about = "the editor's output log: messages of the last check and the game".into();
     Some(a)
 }
 
 pub fn room_selection(room: &str, text: &str) -> Attachment {
-    let mut a = Attachment::text("⬚", format!("Selección en {room}"), text);
+    let mut a = Attachment::text(fa!(vector_square), format!("Selección en {room}"), text);
     a.about = format!("the instance selected in the room editor, as `rooms/{room}.toml` writes it, including unsaved changes");
     a
 }
@@ -206,7 +206,7 @@ mod tests {
         let p = Project::open(&dir).unwrap();
         let obj = p.objects[0].name.clone();
         let a = asset(&p, &Open::Object(obj.clone())).unwrap();
-        assert_eq!((a.kind, a.icon, a.label.as_str()), (AttachKind::File, "◆", obj.as_str()));
+        assert_eq!((a.kind, a.icon, a.label.as_str()), (AttachKind::File, fa!(cube), obj.as_str()));
         assert_eq!(a.path, modengine::canonical(&p.scripts[p.objects[0].script].path).unwrap());
         assert!(a.about.contains(&obj));
         let room = p.rooms[0].name.clone();

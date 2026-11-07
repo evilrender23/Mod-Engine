@@ -64,7 +64,7 @@ pub fn blocks(text: &str) -> Vec<Block> {
         let depth = (indent / 2).min(4) as u8;
         if let Some(rest) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")).or_else(|| t.strip_prefix("+ ")) {
             flush(&mut para, &mut out);
-            let (marker, rest) = match rest.strip_prefix("[ ] ").map(|r| ("☐", r)).or_else(|| rest.strip_prefix("[x] ").map(|r| ("☑", r))) {
+            let (marker, rest) = match rest.strip_prefix("[ ] ").map(|r| (fa!(square), r)).or_else(|| rest.strip_prefix("[x] ").map(|r| (fa!(square_check), r))) {
                 Some((m, r)) => (m, r),
                 None => ("•", rest),
             };
@@ -264,7 +264,8 @@ pub fn show(ui: &mut egui::Ui, text: &str) {
             Block::Item { marker, depth, text } => {
                 ui.horizontal(|ui| {
                     ui.add_space(4.0 + *depth as f32 * 14.0);
-                    ui.label(RichText::new(marker).weak());
+                    let m = if marker == fa!(square) { crate::icons::regular(marker.as_str()) } else { RichText::new(marker) };
+                    ui.label(m.weak());
                     ui.vertical(|ui| inline(ui, text, None, false));
                 });
             }
@@ -294,7 +295,7 @@ pub fn code_block(ui: &mut egui::Ui, lang: &str, code: &str) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(if lang.is_empty() { "código" } else { lang }).weak().small());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new("⧉ Copiar").small()).frame(false)).on_hover_text("Copiar el código").clicked() {
+                if ui.add(egui::Button::new(RichText::new(concat!(fa!(clone), " Copiar")).small()).frame(false)).on_hover_text("Copiar el código").clicked() {
                     ui.ctx().copy_text(code.to_string());
                 }
             });
@@ -325,7 +326,7 @@ mod tests {
                 Block::Heading(1, "Hecho".into()),
                 Block::Paragraph("Una línea sigue.".into()),
                 Block::Item { marker: "•".into(), depth: 0, text: "uno continúa".into() },
-                Block::Item { marker: "☑".into(), depth: 0, text: "dos".into() },
+                Block::Item { marker: fa!(square_check).into(), depth: 0, text: "dos".into() },
                 Block::Item { marker: "2.".into(), depth: 0, text: "tres".into() },
                 Block::Quote("cita".into()),
                 Block::Rule,

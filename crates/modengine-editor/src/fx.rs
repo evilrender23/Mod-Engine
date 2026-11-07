@@ -52,10 +52,10 @@ impl FxKind {
     }
     pub fn icon(self) -> &'static str {
         match self {
-            FxKind::Particles => "✨",
-            FxKind::Shader => "🌈",
-            FxKind::Extension => "🧩",
-            FxKind::Language => "🌐",
+            FxKind::Particles => fa!(wand_magic_sparkles),
+            FxKind::Shader => fa!(circle_half_stroke),
+            FxKind::Extension => fa!(puzzle_piece),
+            FxKind::Language => fa!(globe),
         }
     }
     /// Asset browser section key (custom order).
@@ -200,7 +200,7 @@ pub fn inspector_rows(p: &Project, what: &Open) -> Vec<(&'static str, String)> {
             );
             out.push(("uniforms", if a.uniforms.is_empty() { "—".into() } else { a.uniforms.iter().map(|u| u.name.clone()).collect::<Vec<_>>().join(", ") }));
             let probs = a.problems();
-            out.push(("comprobación", if probs.is_empty() { "✔ sin errores".into() } else { probs[0].clone() }));
+            out.push(("comprobación", if probs.is_empty() { concat!(fa!(check), " sin errores").into() } else { probs[0].clone() }));
         }
         FxKind::Language => out = crate::loc_editor::inspector_rows(&p.dir),
         FxKind::Extension => {

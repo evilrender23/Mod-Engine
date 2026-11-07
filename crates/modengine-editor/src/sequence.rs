@@ -44,9 +44,9 @@ fn track_color(k: TrackKind) -> Color32 {
 
 fn track_icon(k: TrackKind) -> &'static str {
     match k {
-        TrackKind::Sprite => "▣",
-        TrackKind::Object => "◆",
-        TrackKind::Sound => "♪",
+        TrackKind::Sprite => fa!(image),
+        TrackKind::Object => fa!(cube),
+        TrackKind::Sound => fa!(music),
     }
 }
 
@@ -186,17 +186,17 @@ impl SequenceEditor {
         ui.horizontal(|ui| {
             ui.heading(&self.name);
             ui.separator();
-            if ui.button(if self.playing { "⏸" } else { "▶" }).on_hover_text("reproducir / pausar").clicked() {
+            if ui.button(if self.playing { fa!(pause) } else { fa!(play) }).on_hover_text("reproducir / pausar").clicked() {
                 if !self.playing && self.head >= self.data.length && self.data.playback == Playback::Oneshot {
                     self.head = 0.0;
                 }
                 self.playing = !self.playing;
                 self.dir = 1.0;
             }
-            if ui.button("⏮").on_hover_text("al principio").clicked() {
+            if ui.button(fa!(backward_step)).on_hover_text("al principio").clicked() {
                 self.head = 0.0;
             }
-            if ui.button("⏭").on_hover_text("al final").clicked() {
+            if ui.button(fa!(forward_step)).on_hover_text("al final").clicked() {
                 self.head = self.data.length;
             }
             ui.add(egui::DragValue::new(&mut self.head).range(0.0..=self.data.length).speed(0.25).max_decimals(1).prefix("frame "));
@@ -221,7 +221,7 @@ impl SequenceEditor {
             if a.changed() || b.changed() {
                 self.data.canvas = Some([size.x as u32, size.y as u32]);
             }
-            if ui.button("⤢").on_hover_text("encajar el lienzo").clicked() {
+            if ui.button(fa!(expand)).on_hover_text("encajar el lienzo").clicked() {
                 self.view.fitted = false;
             }
         });
@@ -352,7 +352,7 @@ impl SequenceEditor {
             ui.strong("Pistas");
             ui.menu_button("+ pista", |ui| {
                 let p: &Project = cx.project;
-                ui.menu_button("▣ Sprite", |ui| {
+                ui.menu_button(concat!(fa!(image), " Sprite"), |ui| {
                     for s in p.sprite_names() {
                         if ui.button(&s).clicked() {
                             self.add_track(TrackKind::Sprite, &s, p);
@@ -360,7 +360,7 @@ impl SequenceEditor {
                         }
                     }
                 });
-                ui.menu_button("◆ Objeto", |ui| {
+                ui.menu_button(concat!(fa!(cube), " Objeto"), |ui| {
                     for o in p.object_names() {
                         if ui.button(&o).clicked() {
                             self.add_track(TrackKind::Object, &o, p);
@@ -368,7 +368,7 @@ impl SequenceEditor {
                         }
                     }
                 });
-                ui.menu_button("♪ Sonido", |ui| {
+                ui.menu_button(concat!(fa!(music), " Sonido"), |ui| {
                     for s in p.sounds.iter().map(|s| s.name.clone()) {
                         if ui.button(&s).clicked() {
                             self.add_track(TrackKind::Sound, &s, p);
@@ -378,12 +378,12 @@ impl SequenceEditor {
                 });
             });
             if let Some(ti) = self.track.filter(|&t| t < self.data.tracks.len() && self.data.tracks[t].kind != TrackKind::Sound) {
-                if ui.button("◆ clave aquí").on_hover_text("añade una clave en el frame actual con los valores interpolados").clicked() {
+                if ui.button(concat!(fa!(plus), " clave aquí")).on_hover_text("añade una clave en el frame actual con los valores interpolados").clicked() {
                     let k = self.key_here(ti, |_| {});
                     self.key = Some(k);
                 }
             }
-            ui.label(RichText::new("ⓘ").weak()).on_hover_text(
+            ui.label(RichText::new(fa!(circle_info)).weak()).on_hover_text(
                 "clic: elegir pista o mover el cursor\ndoble clic en una pista: clave en ese frame\ndoble clic en «momentos»: momento\narrastrar ◆: mover la clave · clic derecho ◆: borrarla\nen el lienzo, arrastrar una pista crea/mueve su clave del frame actual",
             );
         });
@@ -411,7 +411,7 @@ impl SequenceEditor {
             // moments row
             let row_rect = |i: usize| Rect::from_min_size(Pos2::new(r.left(), lanes.top() + i as f32 * LANE_H), Vec2::new(r.width(), LANE_H));
             let mr = row_rect(0);
-            painter.text(Pos2::new(r.left() + 8.0, mr.center().y), egui::Align2::LEFT_CENTER, "⚑ momentos", font.clone(), pal.canvas_text);
+            painter.text(Pos2::new(r.left() + 8.0, mr.center().y), egui::Align2::LEFT_CENTER, concat!(fa!(flag), " momentos"), font.clone(), pal.canvas_text);
             for m in &self.data.moments {
                 let c = Pos2::new(x_of(m.frame), mr.center().y);
                 painter.add(egui::Shape::convex_polygon(vec![c + Vec2::new(-5.0, -7.0), c + Vec2::new(5.0, -7.0), c + Vec2::new(0.0, 6.0)], Color32::from_rgb(255, 220, 90), Stroke::new(1.0, Color32::BLACK)));
@@ -434,7 +434,7 @@ impl SequenceEditor {
                     painter.add(egui::Shape::convex_polygon(vec![c + Vec2::new(0.0, -d), c + Vec2::new(d, 0.0), c + Vec2::new(0.0, d), c + Vec2::new(-d, 0.0)], fill, Stroke::new(1.0, Color32::BLACK)));
                 }
                 if t.kind == TrackKind::Sound {
-                    painter.text(Pos2::new(x_of(t.start) + 4.0, rr.center().y), egui::Align2::LEFT_CENTER, format!("♪ {}", t.asset), font.clone(), col);
+                    painter.text(Pos2::new(x_of(t.start) + 4.0, rr.center().y), egui::Align2::LEFT_CENTER, format!("{} {}", fa!(music), t.asset), font.clone(), col);
                 }
             }
             // playhead
@@ -557,7 +557,7 @@ impl SequenceEditor {
             ui.horizontal(|ui| {
                 ui.strong(format!("{} Pista", track_icon(t.kind)));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("🗑").on_hover_text("borrar la pista").clicked() {
+                    if ui.small_button(fa!(trash_can)).on_hover_text("borrar la pista").clicked() {
                         delete = true;
                     }
                 });
@@ -604,9 +604,9 @@ impl SequenceEditor {
         match self.key.filter(|&k| k < t.keys.len()) {
             Some(ki) => {
                 ui.horizontal(|ui| {
-                    ui.strong("◆ Clave");
+                    ui.strong(concat!(fa!(tag), " Clave"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("🗑").on_hover_text("borrar la clave").clicked() {
+                        if ui.small_button(fa!(trash_can)).on_hover_text("borrar la clave").clicked() {
                             t.keys.remove(ki);
                             self.key = None;
                         }
@@ -640,7 +640,7 @@ impl SequenceEditor {
                         for e in EASES.iter().filter(|e| !e.is_empty()) {
                             ui.selectable_value(&mut k.ease, if *e == "linear" { String::new() } else { e.to_string() }, *e);
                         }
-                        ui.menu_button("más (GameMaker) ▸", |ui| {
+                        ui.menu_button(concat!("más (GameMaker) ", fa!(caret_right)), |ui| {
                             egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                                 for e in modengine::animcurve::MORE_PRESETS {
                                     if ui.selectable_label(k.ease == *e, *e).clicked() {
@@ -654,7 +654,7 @@ impl SequenceEditor {
                             ui.separator();
                             ui.label(RichText::new("curvas de animación").weak());
                             for c in &curves {
-                                ui.selectable_value(&mut k.ease, c.clone(), format!("📈 {c}"));
+                                ui.selectable_value(&mut k.ease, c.clone(), format!("{} {c}", fa!(chart_line)));
                             }
                         }
                     });
@@ -671,7 +671,7 @@ impl SequenceEditor {
 
     fn moments(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.strong("⚑ Momentos");
+            ui.strong(concat!(fa!(flag), " Momentos"));
             if ui.small_button("+").on_hover_text("código ModScript que se ejecuta al pasar por el frame actual").clicked() {
                 let frame = self.head.round();
                 if !self.data.moments.iter().any(|m| m.frame == frame) {
@@ -743,7 +743,7 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().ed.head, 30.0);
         assert_eq!(h.state().ed.track, Some(0));
-        h.get_by_label("◆ clave aquí").click();
+        h.get_by_label(concat!(fa!(plus), " clave aquí")).click();
         h.run_steps(2);
         assert_eq!(h.state().ed.data.tracks[0].keys.len(), 2, "a key at the current frame");
         // drag the sprite on the canvas at frame 30: moves the key

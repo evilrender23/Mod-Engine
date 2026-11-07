@@ -407,9 +407,9 @@ impl ExportDialog {
         egui::Modal::new(egui::Id::unique("export_dialog")).show(ctx, |ui| {
             ui.set_width(820.0_f32.min(screen.width() - 60.0));
             ui.horizontal(|ui| {
-                ui.heading("📦 Exportar juego");
+                ui.heading(concat!(fa!(box), " Exportar juego"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add_enabled(!self.busy(), egui::Button::new("⟳ Comprobar de nuevo")).on_hover_text("Vuelve a buscar los compiladores y SDK instalados").clicked() {
+                    if ui.add_enabled(!self.busy(), egui::Button::new(concat!(fa!(arrows_rotate), " Comprobar de nuevo"))).on_hover_text("Vuelve a buscar los compiladores y SDK instalados").clicked() {
                         self.refresh();
                     }
                 });
@@ -435,7 +435,7 @@ impl ExportDialog {
                     self.cancel();
                 }
                 if let Some(Ok(path)) = &self.result {
-                    if !path.as_os_str().is_empty() && ui.button("📂 Abrir carpeta").clicked() {
+                    if !path.as_os_str().is_empty() && ui.button(concat!(fa!(folder_open), " Abrir carpeta")).clicked() {
                         open_folder(path);
                     }
                 }
@@ -473,21 +473,21 @@ impl ExportDialog {
                                 });
                             }
                             (Some(Err(_)), _) => {
-                                ui.colored_label(pal.error, "⚠ no disponible");
+                                ui.colored_label(pal.error, concat!(fa!(triangle_exclamation), " no disponible"));
                             }
                             (_, Some(s)) if s.ready => {
-                                ui.colored_label(pal.ok, "✔ listo");
+                                ui.colored_label(pal.ok, concat!(fa!(check), " listo"));
                             }
                             (_, Some(s)) => {
                                 let missing: Vec<&str> = s.checks.iter().filter(|c| !c.1 && !c.0.contains("opcional") && c.0 != "runner" && !c.0.starts_with("motor para")).map(|c| c.0.as_str()).collect();
-                                ui.colored_label(pal.error, format!("⚠ falta {}", missing.first().copied().unwrap_or("algo"))).on_hover_text(missing.join(", "));
+                                ui.colored_label(pal.error, format!(concat!(fa!(triangle_exclamation), " falta {}"), missing.first().copied().unwrap_or("algo"))).on_hover_text(missing.join(", "));
                                 let installing = matches!(&self.running, Some(Running { job: Job::Setup(x), .. }) if *x == t);
                                 if installing {
                                     ui.horizontal(|ui| {
                                         ui.spinner();
                                         ui.label("instalando…");
                                     });
-                                } else if ui.add_enabled(!self.busy(), egui::Button::new("⬇ Instalar")).on_hover_text(format!("Descarga e instala en tu carpeta de usuario: {}", s.setup)).clicked() {
+                                } else if ui.add_enabled(!self.busy(), egui::Button::new(concat!(fa!(download), " Instalar"))).on_hover_text(format!("Descarga e instala en tu carpeta de usuario: {}", s.setup)).clicked() {
                                     install = Some(t);
                                 }
                             }
@@ -636,10 +636,10 @@ impl ExportDialog {
         }
         match &self.result {
             Some(Ok(p)) if !p.as_os_str().is_empty() => {
-                ui.colored_label(pal.ok, format!("✔ Listo: {}", p.display()));
+                ui.colored_label(pal.ok, format!(concat!(fa!(check), " Listo: {}"), p.display()));
             }
             Some(Err(e)) => {
-                ui.colored_label(pal.error, format!("✘ {e}"));
+                ui.colored_label(pal.error, format!(concat!(fa!(xmark), " {e}"), e = e));
             }
             _ => {}
         }
@@ -721,7 +721,7 @@ mod tests {
         );
         h.run_steps(3);
         assert!(is_open());
-        for t in ["Windows", "Linux", "Android", "⬇ Instalar", "Nombre", "Versión"] {
+        for t in ["Windows", "Linux", "Android", concat!(fa!(download), " Instalar"), "Nombre", "Versión"] {
             h.get_by_label(t);
         }
         h.get_by_label_contains("falta zig");
@@ -740,7 +740,7 @@ mod tests {
         });
         h.run_steps(2);
         h.get_by_label_contains("Listo: /tmp/Coin Climber.apk");
-        h.get_by_label("📂 Abrir carpeta");
+        h.get_by_label(concat!(fa!(folder_open), " Abrir carpeta"));
         h.get_by_label("Cerrar").click();
         h.run_steps(2);
         assert!(!is_open());

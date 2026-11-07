@@ -125,11 +125,11 @@ impl ExtensionEditor {
                             cx.open.push(Open::Script(rel.clone()));
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add_enabled(i + 1 < files.len(), egui::Button::new("⏷").small()).on_hover_text("bajar").clicked() {
+                            if ui.add_enabled(i + 1 < files.len(), egui::Button::new(fa!(caret_down)).small()).on_hover_text("bajar").clicked() {
                                 order.swap(i, i + 1);
                                 moved = true;
                             }
-                            if ui.add_enabled(i > 0, egui::Button::new("⏶").small()).on_hover_text("subir").clicked() {
+                            if ui.add_enabled(i > 0, egui::Button::new(fa!(caret_up)).small()).on_hover_text("subir").clicked() {
                                 order.swap(i, i - 1);
                                 moved = true;
                             }
@@ -231,7 +231,7 @@ impl ExtensionEditor {
                         if !ok {
                             r.on_hover_text("valor TOML: 7, 2.5, true, \"texto\", [1, 2]");
                         }
-                        if ui.small_button("🗑").clicked() {
+                        if ui.small_button(fa!(trash_can)).clicked() {
                             del = Some(i);
                         }
                     });
@@ -270,7 +270,7 @@ impl ExtensionEditor {
                         ui.add_sized([110.0, 20.0], egui::TextEdit::singleline(&mut f.args));
                         let w = (ui.available_width() - 52.0).clamp(100.0, 260.0);
                         ui.add_sized([w, 20.0], egui::TextEdit::singleline(&mut f.help));
-                        if ui.small_button("🗑").clicked() {
+                        if ui.small_button(fa!(trash_can)).clicked() {
                             del = Some(i);
                         }
                     });

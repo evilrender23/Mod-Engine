@@ -77,11 +77,11 @@ impl PathEditor {
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.snap, "ajustar a rejilla");
             ui.add(egui::DragValue::new(&mut self.grid).range(1.0..=128.0).prefix("rejilla ").speed(0.2));
-            if ui.button("⤢ encajar").clicked() {
+            if ui.button(concat!(fa!(expand), " encajar")).clicked() {
                 self.view.fitted = false;
             }
             ui.label(RichText::new(format!("{}%", (self.view.zoom * 100.0).round())).weak());
-            ui.label(RichText::new("ⓘ").weak()).on_hover_text("clic: añadir punto al final\nCtrl+clic en un tramo: insertar ahí\narrastrar un punto: moverlo\nclic derecho o Supr: borrar\nrueda: zoom · botón central o Espacio+arrastrar: desplazar");
+            ui.label(RichText::new(fa!(circle_info)).weak()).on_hover_text("clic: añadir punto al final\nCtrl+clic en un tramo: insertar ahí\narrastrar un punto: moverlo\nclic derecho o Supr: borrar\nrueda: zoom · botón central o Espacio+arrastrar: desplazar");
         });
     }
 
@@ -100,7 +100,7 @@ impl PathEditor {
         });
         ui.separator();
         ui.strong("Vista previa");
-        ui.checkbox(&mut self.preview, "▶ animar un objeto por la trayectoria");
+        ui.checkbox(&mut self.preview, concat!(fa!(play), " animar un objeto por la trayectoria"));
         ui.add(egui::Slider::new(&mut self.preview_speed, 0.25..=16.0).text("px/paso").logarithmic(true));
         ui.horizontal(|ui| {
             ui.label("Sprite:");
@@ -110,18 +110,18 @@ impl PathEditor {
         ui.separator();
         ui.strong("Transformar");
         ui.horizontal_wrapped(|ui| {
-            if ui.button("⇄ Invertir").on_hover_text("recorrer al revés (path_reverse)").clicked() {
+            if ui.button(concat!(fa!(right_left), " Invertir")).on_hover_text("recorrer al revés (path_reverse)").clicked() {
                 self.data.points.reverse();
             }
             let center = || {
                 let b = def.bounds().unwrap_or_default();
                 ((b.0 + b.2) / 2.0, (b.1 + b.3) / 2.0)
             };
-            if ui.button("↔ Espejo").on_hover_text("refleja en horizontal (path_mirror)").clicked() {
+            if ui.button(concat!(fa!(arrows_left_right), " Espejo")).on_hover_text("refleja en horizontal (path_mirror)").clicked() {
                 let (cx_, _) = center();
                 self.data.points.iter_mut().for_each(|p| p.x = 2.0 * cx_ - p.x);
             }
-            if ui.button("↕ Voltear").on_hover_text("refleja en vertical (path_flip)").clicked() {
+            if ui.button(concat!(fa!(arrows_up_down), " Voltear")).on_hover_text("refleja en vertical (path_flip)").clicked() {
                 let (_, cy) = center();
                 self.data.points.iter_mut().for_each(|p| p.y = 2.0 * cy - p.y);
             }

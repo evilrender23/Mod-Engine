@@ -227,13 +227,13 @@ impl TileSetEditor {
         let mut remove = None;
         for (i, a) in self.t.animations.iter_mut().enumerate() {
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.anim == i, "▶").clicked() {
+                if ui.selectable_label(self.anim == i, fa!(play)).clicked() {
                     self.anim = i;
                 }
                 ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(90.0));
                 let frames: Vec<String> = a.frames.iter().map(|f| f.to_string()).collect();
                 ui.label(RichText::new(frames.join(" ")).monospace().weak());
-                if ui.small_button("🗑").clicked() {
+                if ui.small_button(fa!(trash_can)).clicked() {
                     remove = Some(i);
                 }
             });
@@ -284,7 +284,7 @@ impl TileSetEditor {
         ui.horizontal(|ui| {
             ui.label("Nombre");
             ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(120.0));
-            remove = ui.small_button("🗑").clicked();
+            remove = ui.small_button(fa!(trash_can)).clicked();
         });
         ui.label(RichText::new("Clic en una casilla y luego en un tile. Las flechas indican con qué vecinos conecta.").weak());
         let cell = 44.0;
@@ -302,7 +302,7 @@ impl TileSetEditor {
             // arrows: which neighbours this slot connects to
             let c = r.center();
             let k = cell * 0.42;
-            for (bit, d, s) in [(1, Vec2::new(0.0, -k), "▴"), (2, Vec2::new(k, 0.0), "▸"), (4, Vec2::new(0.0, k), "▾"), (8, Vec2::new(-k, 0.0), "◂")] {
+            for (bit, d, s) in [(1, Vec2::new(0.0, -k), fa!(caret_up)), (2, Vec2::new(k, 0.0), fa!(caret_right)), (4, Vec2::new(0.0, k), fa!(caret_down)), (8, Vec2::new(-k, 0.0), fa!(caret_left))] {
                 if m & bit != 0 {
                     ui.painter().text(c + d, egui::Align2::CENTER_CENTER, s, egui::FontId::proportional(11.0), pal.selection);
                 }
@@ -561,7 +561,7 @@ pub fn palette_ui(ui: &mut egui::Ui, tex: egui::TextureId, ts: &TileSetAsset, br
     let before = brush.clone();
     let pal = crate::theme::colors(ui.ctx());
     ui.horizontal_wrapped(|ui| {
-        for (bit, label, tip) in [(MIRROR, "↔", "espejo horizontal (X)"), (FLIP, "↕", "voltear vertical (Y)"), (ROTATE, "⟳", "girar 90° (Z)")] {
+        for (bit, label, tip) in [(MIRROR, fa!(arrows_left_right), "espejo horizontal (X)"), (FLIP, fa!(arrows_up_down), "voltear vertical (Y)"), (ROTATE, fa!(rotate_right), "girar 90° (Z)")] {
             if ui.selectable_label(brush.flags & bit != 0, label).on_hover_text(tip).clicked() {
                 brush.toggle(bit);
             }

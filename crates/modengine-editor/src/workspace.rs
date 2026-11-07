@@ -422,7 +422,7 @@ impl Workspaces {
                 let label = format!("{}{}", ws.name, if unsaved { " ●" } else { "" });
                 let dragged = crate::dnd::dragging_from(ui.ctx(), list_id) == Some(i);
                 let r = ui.add(egui::Button::selectable(i == self.active || dragged, label.clone()).min_size(Vec2::new(90.0, 22.0)).sense(Sense::click_and_drag()));
-                crate::dnd::source(&r, || crate::dnd::ListDrag { list: list_id, from: i, label: format!("▤ {label}") });
+                crate::dnd::source(&r, || crate::dnd::ListDrag { list: list_id, from: i, label: format!(concat!(fa!(table), " {}"), label) });
                 rects.push(r.rect);
                 if r.clicked() {
                     self.active = i;
@@ -713,13 +713,13 @@ fn window_ui(ui: &mut Ui, w: &mut Win, dirty: bool, focused: bool, max_rect: Opt
         let r = Rect::from_min_size(Pos2::new(x, rect.min.y + 2.0), Vec2::new(20.0, TITLE_H - 4.0));
         ui.put(r, egui::Button::new(egui::RichText::new(text).size(12.0)).frame(false)).on_hover_text(tip).clicked()
     };
-    if max_rect.is_none() && btn(ui, rect.min.x + 3.0, if w.collapsed { "▸" } else { "▾" }, "plegar") {
+    if max_rect.is_none() && btn(ui, rect.min.x + 3.0, if w.collapsed { fa!(caret_right) } else { fa!(caret_down) }, "plegar") {
         w.collapsed = !w.collapsed;
     }
-    if btn(ui, rect.max.x - 23.0, "✕", "cerrar") {
+    if btn(ui, rect.max.x - 23.0, fa!(xmark), "cerrar") {
         out.close = true;
     }
-    if btn(ui, rect.max.x - 45.0, if w.maximized { "🗗" } else { "🗖" }, "maximizar (doble clic en el título)") {
+    if btn(ui, rect.max.x - 45.0, if w.maximized { fa!(window_restore) } else { fa!(window_maximize) }, "maximizar (doble clic en el título)") {
         w.maximized = !w.maximized;
         w.collapsed = false;
     }

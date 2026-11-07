@@ -175,7 +175,7 @@ pub fn imported_assets(files: &[snapshot::FileChange]) -> Vec<String> {
     out
 }
 
-/// What "🛒 Buscar en la Tienda…" writes in the message box (keeping what was typed as the
+/// What concat!(fa!(cart_shopping), " Buscar en la Tienda…") writes in the message box (keeping what was typed as the
 /// description of what to look for).
 pub fn store_instruction(typed: &str) -> String {
     let what = typed.trim();
@@ -1183,7 +1183,7 @@ impl AgentPanel {
             if attach::matches(&f, &q) {
                 let a = Attachment::file(&p.dir.join(&f));
                 if !out.iter().any(|(_, x)| x.path == a.path) {
-                    out.push((format!("📄 {f}"), a));
+                    out.push((format!(concat!(fa!(file), " {}"), f), a));
                 }
             }
         }
@@ -1999,7 +1999,7 @@ impl AgentPanel {
             }
             Slash::Internet(Some(on)) => {
                 self.set_internet(on);
-                self.notice(if on { "🌐 Internet: sí. El agente puede buscar en la web y leer páginas." } else { "🌐 Internet: no. El agente no busca en la web (solo lee las URLs que adjuntes)." }, Tone::Muted);
+                self.notice(if on { "Internet: sí. El agente puede buscar en la web y leer páginas." } else { "Internet: no. El agente no busca en la web (solo lee las URLs que adjuntes)." }, Tone::Muted);
             }
             Slash::TurnWorkspace(Some(on)) => {
                 self.turn_workspace = on;
@@ -2010,7 +2010,7 @@ impl AgentPanel {
                 self.notice(format!("Workspace por tarea: {}. Usa /workspace on o /workspace off.", if self.turn_workspace { "sí" } else { "no" }), Tone::Muted);
             }
             Slash::Internet(None) => {
-                self.notice(format!("🌐 Internet: {}. Usa /internet on o /internet off.", if self.internet { "sí" } else { "no" }), Tone::Muted);
+                self.notice(format!("Internet: {}. Usa /internet on o /internet off.", if self.internet { "sí" } else { "no" }), Tone::Muted);
             }
             Slash::Cost => {
                 let t = self.usage_text(true);
@@ -2076,15 +2076,15 @@ impl AgentPanel {
                 self.set_kind(kind);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("⋯", |ui| self.more_menu(ui)).response.on_hover_text("Compactar, exportar, deshacer, autocompactar…");
-                if ui.add_enabled(running, egui::Button::new("■")).on_hover_text("Cancelar el trabajo del agente (Esc) — /cancelar").clicked() {
+                ui.menu_button(fa!(ellipsis), |ui| self.more_menu(ui)).response.on_hover_text("Compactar, exportar, deshacer, autocompactar…");
+                if ui.add_enabled(running, egui::Button::new(fa!(stop))).on_hover_text("Cancelar el trabajo del agente (Esc) — /cancelar").clicked() {
                     self.stop();
                 }
-                if ui.add_enabled(self.program.is_some(), egui::Button::new("＋")).on_hover_text("Nueva conversación (la actual queda en el historial) — /nueva").clicked() {
+                if ui.add_enabled(self.program.is_some(), egui::Button::new(fa!(plus))).on_hover_text("Nueva conversación (la actual queda en el historial) — /nueva").clicked() {
                     self.new_conversation();
                 }
                 let hist = self.view == View::History;
-                if ui.selectable_label(hist, "🕘").on_hover_text("Historial: conversaciones anteriores de este proyecto — /historial").clicked() {
+                if ui.selectable_label(hist, fa!(clock)).on_hover_text("Historial: conversaciones anteriores de este proyecto — /historial").clicked() {
                     if hist {
                         self.view = View::Chat;
                     } else {
@@ -2127,7 +2127,7 @@ impl AgentPanel {
             self.queue_ui(ui);
             if self.editing.is_some() {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("✎ Editando tu último mensaje: al enviarlo, la conversación sigue desde antes de él.").color(pal.info).small());
+                    ui.label(RichText::new(concat!(fa!(pen), " Editando tu último mensaje: al enviarlo, la conversación sigue desde antes de él.")).color(pal.info).small());
                     if ui.small_button("Cancelar").clicked() {
                         self.cancel_edit();
                     }
@@ -2160,7 +2160,7 @@ impl AgentPanel {
                     } else {
                         "Escribe la instrucción para que el agente mire cada imagen y la importe con modengine import (puedes editarla antes de enviar)"
                     };
-                    let r = ui.add_enabled(!plan, egui::Button::new("🖼 Importar al proyecto").small()).on_hover_text(tip).on_disabled_hover_text(tip);
+                    let r = ui.add_enabled(!plan, egui::Button::new(concat!(fa!(image), " Importar al proyecto")).small()).on_hover_text(tip).on_disabled_hover_text(tip);
                     if r.clicked() {
                         self.input = text;
                         ui.memory_mut(|m| m.request_focus(input_id));
@@ -2289,17 +2289,17 @@ impl AgentPanel {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let small = |t: &str| egui::Button::new(RichText::new(t).small()).frame(false);
-                if ui.add(small("📋 Pegar imagen")).on_hover_text("La imagen que tengas copiada: una captura de pantalla (Impr Pant, Spectacle, Recortes…). También Ctrl+V con el ratón sobre el panel").clicked() {
+                if ui.add(small(concat!(fa!(clipboard), " Pegar imagen"))).on_hover_text("La imagen que tengas copiada: una captura de pantalla (Impr Pant, Spectacle, Recortes…). También Ctrl+V con el ratón sobre el panel").clicked() {
                     self.paste_clipboard_image();
                 }
                 ui.label(RichText::new("·").weak().small());
-                if ui.add(small("📸 Captura del editor")).on_hover_text("Adjunta lo que ves ahora en la ventana del editor").clicked() {
+                if ui.add(small(concat!(fa!(camera), " Captura del editor"))).on_hover_text("Adjunta lo que ves ahora en la ventana del editor").clicked() {
                     self.capture_editor(ui.ctx());
                 }
             });
             ui.add(egui::TextEdit::multiline(&mut self.input).id(input_id).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY));
             ui.horizontal_wrapped(|ui| {
-                ui.menu_button("📎 Adjuntar", |ui| self.attach_menu(ui, src))
+                ui.menu_button(concat!(fa!(paperclip), " Adjuntar"), |ui| self.attach_menu(ui, src))
                     .response
                     .on_hover_text("Adjunta contexto al siguiente mensaje: assets, ficheros del proyecto o de cualquier parte del disco, URLs, texto, la selección de la room o la Salida. También puedes soltar aquí assets y ficheros, pegar rutas o escribir @");
                 // Model and permissions can't change mid-turn: hidden then, which leaves room for ■ Cancelar.
@@ -2321,8 +2321,8 @@ impl AgentPanel {
                         _ => INTERNET_TIP,
                     };
                     // compact: highlighted when on (the tip says which)
-                    let state = if on { "🌐 Internet: sí" } else { "🌐 Internet: no" };
-                    let label = if on { RichText::new("🌐") } else { RichText::new("🌐").weak().strikethrough() };
+                    let state = if on { concat!(fa!(globe), " Internet: sí") } else { concat!(fa!(globe), " Internet: no") };
+                    let label = if on { RichText::new(fa!(globe)) } else { RichText::new(fa!(globe)).weak().strikethrough() };
                     if ui.toggle_value(&mut on, label).on_hover_text(format!("{state}. {tip}")).changed() {
                         self.set_internet(on);
                     }
@@ -2343,7 +2343,7 @@ impl AgentPanel {
                     let b = ui.add_enabled(can || is_cmd, crate::theme::primary_button(ui, label)).on_hover_text(tip);
                     if running {
                         let cancelling = self.run.as_ref().is_some_and(|r| r.stop_at.is_some());
-                        let text = if cancelling { "Cancelando…" } else { "■ Cancelar" };
+                        let text = if cancelling { "Cancelando…" } else { concat!(fa!(stop), " Cancelar") };
                         let c = egui::Button::new(RichText::new(text).color(pal.error)).stroke(egui::Stroke::new(1.0, pal.error));
                         if ui.add_enabled(!cancelling, c).on_hover_text("Para al agente y a los comandos que lanzó (Esc). Lo que ya cambió se puede revertir; la cola queda en pausa").clicked() {
                             self.stop();
@@ -2382,7 +2382,7 @@ impl AgentPanel {
                     Entry::Attached(list) => {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                            ui.label(RichText::new("📎").weak());
+                            ui.label(RichText::new(fa!(paperclip)).weak());
                             for a in list {
                                 chip(ui, a, false);
                             }
@@ -2401,17 +2401,17 @@ impl AgentPanel {
                             })
                             .response;
                         let last = last_user == Some(i);
-                        if ui.rect_contains_pointer(r.rect) && overlay_button(ui, r.rect, ("agent_copy_user", i), "⧉", "Copiar el mensaje") {
+                        if ui.rect_contains_pointer(r.rect) && overlay_button(ui, r.rect, ("agent_copy_user", i), fa!(copy), "Copiar el mensaje") {
                             ui.ctx().copy_text(t.clone());
                         }
                         if last {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 2.0;
                                 {
-                                    if ui.add(egui::Button::new(RichText::new("✎ Editar").small()).frame(false)).on_hover_text("Edita el mensaje y reenvíalo: la conversación sigue desde antes de él").clicked() {
+                                    if ui.add(egui::Button::new(RichText::new(concat!(fa!(pen), " Editar")).small()).frame(false)).on_hover_text("Edita el mensaje y reenvíalo: la conversación sigue desde antes de él").clicked() {
                                         action = Some(Action::Edit);
                                     }
-                                    if ui.add(egui::Button::new(RichText::new("↻ Reintentar").small()).frame(false)).on_hover_text("Vuelve a enviarlo desde antes de la respuesta").clicked() {
+                                    if ui.add(egui::Button::new(RichText::new(concat!(fa!(arrows_rotate), " Reintentar")).small()).frame(false)).on_hover_text("Vuelve a enviarlo desde antes de la respuesta").clicked() {
                                         action = Some(Action::Retry);
                                     }
                                 }
@@ -2421,7 +2421,7 @@ impl AgentPanel {
                     Entry::Text(t) => {
                         ui.add_space(4.0);
                         let r = ui.scope(|ui| crate::agent_markdown::show(ui, t)).response;
-                        if ui.rect_contains_pointer(r.rect) && !t.is_empty() && overlay_button(ui, r.rect, ("agent_copy_text", i), "⧉", "Copiar la respuesta") {
+                        if ui.rect_contains_pointer(r.rect) && !t.is_empty() && overlay_button(ui, r.rect, ("agent_copy_text", i), fa!(copy), "Copiar la respuesta") {
                             ui.ctx().copy_text(t.clone());
                         }
                     }
@@ -2437,12 +2437,12 @@ impl AgentPanel {
                     }
                     Entry::Notice(t, tone) => {
                         let (icon, c) = match tone {
-                            Tone::Muted => ("ℹ", pal.weak),
-                            Tone::Warning => ("⚠", Color32::from_rgb(0xc0, 0x85, 0x32)),
-                            Tone::Error => ("⛔", pal.error),
+                            Tone::Muted => (fa!(circle_info), pal.weak),
+                            Tone::Warning => (fa!(triangle_exclamation), Color32::from_rgb(0xc0, 0x85, 0x32)),
+                            Tone::Error => (fa!(ban), pal.error),
                         };
                         ui.label(RichText::new(format!("{icon} {t}")).color(c));
-                        if last_error == Some(i) && ui.button("↻ Reintentar").on_hover_text("Vuelve a enviar el último mensaje").clicked() {
+                        if last_error == Some(i) && ui.button(concat!(fa!(arrows_rotate), " Reintentar")).on_hover_text("Vuelve a enviar el último mensaje").clicked() {
                             action = Some(Action::Retry);
                         }
                     }
@@ -2451,14 +2451,14 @@ impl AgentPanel {
                         ui.horizontal(|ui| {
                             let w = ((ui.available_width() - 180.0) / 2.0).max(10.0);
                             ui.add_sized([w, 10.0], egui::Separator::default().horizontal());
-                            ui.label(RichText::new(format!("✂ {t}")).color(pal.info).small());
+                            ui.label(RichText::new(format!(concat!(fa!(scissors), " {}"), t)).color(pal.info).small());
                             ui.add(egui::Separator::default().horizontal());
                         });
                         ui.add_space(4.0);
                     }
                     Entry::Summary(t) => {
                         let open = self.unfolded.contains(&i);
-                        if ui.selectable_label(open, RichText::new(if open { "▾ Resumen" } else { "▸ Resumen de lo anterior" }).weak()).clicked() {
+                        if ui.selectable_label(open, RichText::new(if open { concat!(fa!(caret_down), " Resumen") } else { concat!(fa!(caret_right), " Resumen de lo anterior") }).weak()).clicked() {
                             action = Some(Action::Fold(i));
                         }
                         if open {
@@ -2554,26 +2554,26 @@ impl AgentPanel {
             self.save_state();
         }
         ui.separator();
-        if ui.add_enabled(has_session, egui::Button::new("✂ Compactar conversación")).on_hover_text("Resume la conversación para liberar contexto (/compactar)").clicked() {
+        if ui.add_enabled(has_session, egui::Button::new(concat!(fa!(scissors), " Compactar conversación"))).on_hover_text("Resume la conversación para liberar contexto (/compactar)").clicked() {
             self.command(Slash::Compact, None);
             ui.close();
         }
         let undoable = self.entries.iter().any(|e| matches!(e, Entry::Changes { turn, files } if files.iter().any(|f| !f.reverted) && self.snaps.iter().any(|(t, _)| t == turn)));
-        if ui.add_enabled(undoable && !running, egui::Button::new("↶ Deshacer cambios del último turno")).on_hover_text("/deshacer").clicked() {
+        if ui.add_enabled(undoable && !running, egui::Button::new(concat!(fa!(rotate_left), " Deshacer cambios del último turno"))).on_hover_text("/deshacer").clicked() {
             self.undo_last_turn();
             ui.close();
         }
-        if ui.add_enabled(!self.entries.is_empty(), egui::Button::new("⤓ Exportar a Markdown")).on_hover_text("La guarda en Descargas y la copia (/exportar)").clicked() {
+        if ui.add_enabled(!self.entries.is_empty(), egui::Button::new(concat!(fa!(download), " Exportar a Markdown"))).on_hover_text("La guarda en Descargas y la copia (/exportar)").clicked() {
             self.command(Slash::Export, Some(ui.ctx()));
             ui.close();
         }
-        if ui.add_enabled(!self.entries.is_empty(), egui::Button::new("⧉ Copiar como Markdown")).clicked() {
+        if ui.add_enabled(!self.entries.is_empty(), egui::Button::new(concat!(fa!(copy), " Copiar como Markdown"))).clicked() {
             if let Some(md) = self.markdown("") {
                 ui.ctx().copy_text(md);
             }
             ui.close();
         }
-        if ui.add_enabled(has_session, egui::Button::new("⧉ Copiar la orden para seguir en un terminal")).on_hover_text("Para seguir esta conversación en un terminal abierto en la carpeta del proyecto").clicked() {
+        if ui.add_enabled(has_session, egui::Button::new(concat!(fa!(copy), " Copiar la orden para seguir en un terminal"))).on_hover_text("Para seguir esta conversación en un terminal abierto en la carpeta del proyecto").clicked() {
             ui.ctx().copy_text(self.kind.resume_command(&self.session));
             ui.close();
         }
@@ -2607,7 +2607,7 @@ impl AgentPanel {
             ui.label(RichText::new(format!("En cola ({})", self.queue.len())).small().strong());
             if self.queue_paused {
                 ui.label(RichText::new("en pausa: el último turno se canceló o no terminó bien").small().color(pal.error));
-                if ui.small_button("▶ Seguir").clicked() {
+                if ui.small_button(concat!(fa!(play), " Seguir")).clicked() {
                     self.queue_paused = false;
                 }
             } else {
@@ -2624,14 +2624,14 @@ impl AgentPanel {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("⏳").weak());
-                        let extra = if q.attachments.is_empty() { String::new() } else { format!("  📎{}", q.attachments.len()) };
+                        ui.label(RichText::new(fa!(hourglass_half)).weak());
+                        let extra = if q.attachments.is_empty() { String::new() } else { format!("  {}{}", fa!(paperclip), q.attachments.len()) };
                         ui.add(egui::Label::new(RichText::new(format!("{}{extra}", agent::one_line(&q.text, 80))).italics()).truncate()).on_hover_text(&q.text);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add(egui::Button::new("×").frame(false).small()).on_hover_text("Quitar de la cola").clicked() {
                                 remove = Some(i);
                             }
-                            if ui.add(egui::Button::new("✎").frame(false).small()).on_hover_text("Editar (vuelve al cuadro de mensaje)").clicked() {
+                            if ui.add(egui::Button::new(fa!(pen)).frame(false).small()).on_hover_text("Editar (vuelve al cuadro de mensaje)").clicked() {
                                 edit = Some(i);
                             }
                         });
@@ -2652,7 +2652,7 @@ impl AgentPanel {
             if ui.button("← Volver").clicked() {
                 self.view = View::Chat;
             }
-            ui.add(egui::TextEdit::singleline(&mut self.history_query).hint_text("🔍 Buscar en títulos y mensajes…").desired_width(f32::INFINITY));
+            ui.add(egui::TextEdit::singleline(&mut self.history_query).hint_text(concat!(fa!(magnifying_glass), " Buscar en títulos y mensajes…")).desired_width(f32::INFINITY));
         });
         if self.store.is_none() {
             ui.label(RichText::new("Abre un proyecto para ver su historial.").weak());
@@ -2705,14 +2705,14 @@ impl AgentPanel {
                             ui.label(RichText::new(format!("{} · {agent} · {} mensajes{cost}", history::when(s.updated, now), s.messages)).weak().small());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let confirm = self.confirm_delete.as_deref() == Some(s.id.as_str());
-                                let del = if confirm { RichText::new("¿Borrar?").color(pal.error).small() } else { RichText::new("🗑").small() };
+                                let del = if confirm { RichText::new("¿Borrar?").color(pal.error).small() } else { RichText::new(fa!(trash_can)).small() };
                                 if ui.add(egui::Button::new(del).frame(false)).on_hover_text("Borrar del historial").clicked() {
                                     delete = Some((s.id.clone(), confirm));
                                 }
-                                if ui.add(egui::Button::new(RichText::new("⤓").small()).frame(false)).on_hover_text("Exportar a Markdown (Descargas) y copiar").clicked() {
+                                if ui.add(egui::Button::new(RichText::new(fa!(download)).small()).frame(false)).on_hover_text("Exportar a Markdown (Descargas) y copiar").clicked() {
                                     export = Some(s.id.clone());
                                 }
-                                if ui.add(egui::Button::new(RichText::new("✎").small()).frame(false)).on_hover_text("Renombrar").clicked() {
+                                if ui.add(egui::Button::new(RichText::new(fa!(pen)).small()).frame(false)).on_hover_text("Renombrar").clicked() {
                                     rename = Some((format!("\u{0}{}", s.id), s.title.clone()));
                                 }
                             });
@@ -2783,7 +2783,7 @@ impl AgentPanel {
                         ui.label(RichText::new(format!("−{del}")).color(crate::theme::RED).strong());
                         ui.label(RichText::new("antes del turno → ahora").weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add_enabled(can, egui::Button::new("↶ Revertir")).on_hover_text("Devuelve el fichero a como estaba antes del turno").clicked() {
+                            if ui.add_enabled(can, egui::Button::new(concat!(fa!(rotate_left), " Revertir"))).on_hover_text("Devuelve el fichero a como estaba antes del turno").clicked() {
                                 revert = Some((d.turn, d.rel.clone()));
                             }
                         });
@@ -2863,7 +2863,7 @@ impl AgentPanel {
             if let Some((title, text)) = self.text_modal.take() {
                 if ok {
                     let title = if title.trim().is_empty() { "Texto".to_string() } else { title.trim().to_string() };
-                    self.attach(Attachment::text("📝", title, text));
+                    self.attach(Attachment::text(fa!(pen_to_square), title, text));
                 }
             }
         }
@@ -2919,20 +2919,20 @@ impl AgentPanel {
             ui,
             "Selección de la room",
             src.room_selection().map(|a| (a.label.trim_start_matches("Selección en ").to_string(), a)),
-            "Selecciona una instancia con ⬚ Mover en la room enfocada",
+            concat!("Selecciona una instancia con ", fa!(vector_square), " Mover en la room enfocada"),
         ));
         chosen.extend(add(ui, "Salida", src.output().map(|a| (format!("últimas {} líneas", attach::OUTPUT_LINES), a)), "La Salida está vacía"));
         ui.separator();
         // the agent gets assets from OpenGameArt by itself (`modengine store`)
         let can_store = self.permission != Permission::Plan;
-        let r = ui.add_enabled(can_store, egui::Button::new("🛒 Buscar en la Tienda…"));
+        let r = ui.add_enabled(can_store, egui::Button::new(concat!(fa!(cart_shopping), " Buscar en la Tienda…")));
         if r.on_hover_text("Escribe una instrucción para que el agente busque un asset en OpenGameArt, lo mire y lo importe con sus créditos").on_disabled_hover_text("En «Solo planificar» el agente solo puede buscar, no importar").clicked() {
             self.input = store_instruction(&self.input);
             ui.close();
         }
         ui.separator();
         if let Some(p) = src.project {
-            ui.menu_button("📄 Fichero del proyecto", |ui| {
+            ui.menu_button(concat!(fa!(file), " Fichero del proyecto"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.attach_filter).hint_text("Filtrar…").desired_width(240.0));
                 let files = self.project_files(&p.dir);
                 egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
@@ -2949,14 +2949,14 @@ impl AgentPanel {
                     }
                 });
             });
-            ui.menu_button("🖼 Imagen de un sprite", |ui| {
+            ui.menu_button(concat!(fa!(image), " Imagen de un sprite"), |ui| {
                 let pngs: Vec<_> = p.sprites.iter().filter(|s| s.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png"))).collect();
                 if pngs.is_empty() {
                     ui.label(RichText::new("No hay sprites PNG").weak());
                 }
                 egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                     for s in pngs {
-                        if ui.button(format!("▣ {}", s.name)).clicked() {
+                        if ui.button(format!(concat!(fa!(image), " {}"), s.name)).clicked() {
                             chosen.extend(attach::asset(p, &Open::Sprite(s.name.clone())));
                         }
                     }
@@ -2964,27 +2964,27 @@ impl AgentPanel {
             });
         }
         ui.separator();
-        if ui.button("💽 Desde el disco…").on_hover_text("Cualquier fichero, carpeta o imagen del ordenador (varios a la vez)").clicked() {
+        if ui.button(concat!(fa!(hard_drive), " Desde el disco…")).on_hover_text("Cualquier fichero, carpeta o imagen del ordenador (varios a la vez)").clicked() {
             let start = self.cfg.recent_dirs.first().cloned();
             self.browser.open_at(start.as_deref());
             ui.close();
         }
-        if ui.button("📋 Pegar imagen (Ctrl+V)").on_hover_text("La imagen que tengas copiada: una captura de pantalla, un recorte…").clicked() {
+        if ui.button(concat!(fa!(clipboard), " Pegar imagen (Ctrl+V)")).on_hover_text("La imagen que tengas copiada: una captura de pantalla, un recorte…").clicked() {
             self.paste_clipboard_image();
             ui.close();
         }
-        if ui.button("📸 Captura del editor").on_hover_text("Lo que ves ahora en la ventana del editor").clicked() {
+        if ui.button(concat!(fa!(camera), " Captura del editor")).on_hover_text("Lo que ves ahora en la ventana del editor").clicked() {
             self.capture_editor(ui.ctx());
             ui.close();
         }
-        if ui.button("📝 Texto…").on_hover_text("Un texto que escribes o pegas: va dentro del mensaje").clicked() {
+        if ui.button(concat!(fa!(pen_to_square), " Texto…")).on_hover_text("Un texto que escribes o pegas: va dentro del mensaje").clicked() {
             self.text_modal = Some((String::new(), String::new()));
             ui.close();
         }
         if !self.cfg.recent_paths.is_empty() || !self.cfg.recent_urls.is_empty() {
-            ui.menu_button("🕘 Recientes de fuera del proyecto", |ui| {
+            ui.menu_button(concat!(fa!(clock), " Recientes de fuera del proyecto"), |ui| {
                 for p in self.cfg.recent_paths.clone() {
-                    let icon = if p.is_dir() { "📁" } else { "📄" };
+                    let icon = if p.is_dir() { fa!(folder) } else { fa!(file) };
                     let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
                     let r = ui.add_enabled(p.exists(), egui::Button::new(format!("{icon} {name}"))).on_hover_text(p.display().to_string());
                     if r.clicked() {
@@ -2992,7 +2992,7 @@ impl AgentPanel {
                     }
                 }
                 for u in self.cfg.recent_urls.clone() {
-                    if ui.button(format!("🔗 {}", agent::one_line(&u, 50))).on_hover_text(&u).clicked() {
+                    if ui.button(format!(concat!(fa!(link), " {}"), agent::one_line(&u, 50))).on_hover_text(&u).clicked() {
                         chosen.push(Attachment::url(&u));
                     }
                 }
@@ -3100,7 +3100,7 @@ impl AgentPanel {
                 ui.label(RichText::new(*place).weak());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(*cmd).monospace());
-                    if ui.small_button("⧉").on_hover_text("Copiar").clicked() {
+                    if ui.small_button(fa!(copy)).on_hover_text("Copiar").clicked() {
                         ui.ctx().copy_text(cmd.to_string());
                     }
                 });
@@ -3153,8 +3153,8 @@ impl AgentPanel {
             Entry::User("Haz que el jugador salte más alto y que el doble salto sea opcional".into()),
             Entry::Attached(vec![Attachment::file(&player), Attachment::url("https://manual.gamemaker.io/monthly/en/GameMaker_Language/GML_Reference/Movement_And_Collisions/Movement/motion_add.htm")]),
             Entry::Notice("Modelo: claude-opus".into(), Tone::Muted),
-            Entry::Tool(ToolLine { icon: "👁", verb: "Leer".into(), detail: "objects/player.ms".into() }),
-            Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/player.ms".into() }),
+            Entry::Tool(ToolLine { icon: fa!(eye), verb: "Leer".into(), detail: "objects/player.ms".into() }),
+            Entry::Tool(ToolLine { icon: fa!(pen), verb: "Editar".into(), detail: "objects/player.ms".into() }),
             Entry::Text(
                 "## Hecho\nHe subido **jump_speed** de `9` a `12` y añadido la variable `double_jump`:\n\n- `true`: puede saltar otra vez en el aire\n- `false`: *solo un salto*\n\n```ms\nif keyboard_check_pressed(vk_space) and (on_ground or (double_jump and jumps < 2)) {\n    vspeed = -jump_speed\n    jumps += 1\n}\n```\nPruébalo en `level1` con Espacio. Más en [la guía](https://example.com/guia)."
                     .into(),
@@ -3184,7 +3184,7 @@ impl AgentPanel {
                 self.input = "Mira la captura: el slime atraviesa el suelo al caer".into();
             }
             "queue" => {
-                self.entries.push(Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/enemy.ms".into() }));
+                self.entries.push(Entry::Tool(ToolLine { icon: fa!(pen), verb: "Editar".into(), detail: "objects/enemy.ms".into() }));
                 {
                     // A harmless long-lived child stands in for the agent.
                     let mut cmd = if cfg!(windows) { crate::proc::command("ping") } else { crate::proc::command("sleep") };
@@ -3223,7 +3223,7 @@ impl AgentPanel {
                 self.status = "Editar objects/enemy.ms…".into();
                 self.queue = vec![
                     Queued { text: "Después, añade un sonido al rebotar".into(), attachments: vec![] },
-                    Queued { text: "Y comprueba el proyecto con modengine check".into(), attachments: vec![Attachment::text("📝", "Notas", "rebote = 0.6")] },
+                    Queued { text: "Y comprueba el proyecto con modengine check".into(), attachments: vec![Attachment::text(fa!(pen_to_square), "Notas", "rebote = 0.6")] },
                 ];
                 self.input = "/comp".into();
             }
@@ -3250,7 +3250,7 @@ impl AgentPanel {
                     line(">_", "Ejecutar", &format!("{tool} store show simple-rotating-coin --json")),
                     Entry::Text("`simple-rotating-coin` es CC0 y una tira limpia de 12 fotogramas. La descargo para verla antes de importarla.".into()),
                     line(">_", "Ejecutar", &format!("{tool} store download simple-rotating-coin --json")),
-                    line("👁", "Leer", "~/.cache/modengine/store/files/…/coin.png"),
+                    line(fa!(eye), "Leer", "~/.cache/modengine/store/files/…/coin.png"),
                     line(">_", "Ejecutar", &format!("{tool} store get simple-rotating-coin . --file coin.png --name coin_gold --frames 12 --origin center --fps 12 --json")),
                     Entry::Text("He añadido el sprite **coin_gold**: una moneda giratoria de 12 fotogramas de 16×16, origen en el centro.\n\n- **Asset:** «Simple rotating coin», de sacio\n- **Licencia:** CC0 (anotada en `CREDITS.md`)\n- **URL:** https://opengameart.org/content/simple-rotating-coin".into()),
                     Entry::Changes {
@@ -3282,9 +3282,9 @@ impl AgentPanel {
                 self.entries = vec![
                     Entry::User(prompt.clone()),
                     Entry::Attached(vec![att.clone()]),
-                    Entry::Tool(ToolLine { icon: "👁", verb: "Leer".into(), detail: format!("{}/knight run.png", art.display()) }),
-                    Entry::Tool(ToolLine { icon: "▶", verb: "Ejecutar".into(), detail: "modengine inspect-image \"…/Arte del pack\" --json".into() }),
-                    Entry::Tool(ToolLine { icon: "▶", verb: "Ejecutar".into(), detail: "modengine import . \"…/knight run.png\" --name knight_run --frames 4 --origin bottom-center".into() }),
+                    Entry::Tool(ToolLine { icon: fa!(eye), verb: "Leer".into(), detail: format!("{}/knight run.png", art.display()) }),
+                    Entry::Tool(ToolLine { icon: fa!(play), verb: "Ejecutar".into(), detail: "modengine inspect-image \"…/Arte del pack\" --json".into() }),
+                    Entry::Tool(ToolLine { icon: fa!(play), verb: "Ejecutar".into(), detail: "modengine import . \"…/knight run.png\" --name knight_run --frames 4 --origin bottom-center".into() }),
                     Entry::Text("Importado **knight_run**: 4 frames de 24×24, origen abajo al centro.".into()),
                     Entry::Changes {
                         turn: 1,
@@ -3327,7 +3327,7 @@ fn changes_ui(ui: &mut egui::Ui, turn: u64, files: &[snapshot::FileChange], can_
                 ui.label(RichText::new(format!("Archivos cambiados ({})", files.len())).strong().small());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let tip = if can_revert { "Devuelve todos a como estaban antes del turno (/deshacer)" } else { "Solo se pueden revertir los turnos de esta sesión del editor" };
-                    if ui.add_enabled(can_revert && pending > 0, egui::Button::new(RichText::new("↶ Revertir todo").small())).on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
+                    if ui.add_enabled(can_revert && pending > 0, egui::Button::new(RichText::new(concat!(fa!(rotate_left), " Revertir todo")).small())).on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
                         *action = Some(Action::RevertAll(turn));
                     }
                 });
@@ -3336,9 +3336,9 @@ fn changes_ui(ui: &mut egui::Ui, turn: u64, files: &[snapshot::FileChange], can_
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let (icon, tip) = match f.kind {
-                        ChangeKind::Added => ("＋", "Nuevo"),
-                        ChangeKind::Modified => ("✎", "Modificado"),
-                        ChangeKind::Deleted => ("🗑", "Borrado"),
+                        ChangeKind::Added => (fa!(plus), "Nuevo"),
+                        ChangeKind::Modified => (fa!(pen), "Modificado"),
+                        ChangeKind::Deleted => (fa!(trash_can), "Borrado"),
                     };
                     ui.label(RichText::new(icon).weak()).on_hover_text(tip);
                     let name = if f.reverted { RichText::new(&f.rel).monospace().strikethrough().weak() } else { RichText::new(&f.rel).monospace() };
@@ -3555,7 +3555,7 @@ echo '{{"type":"result","subtype":"success","session_id":"S-fake","result":"Hay 
                 Entry::User("lista los objetos".into()),
                 Entry::Notice("Modelo: claude-test".into(), Tone::Muted),
                 Entry::Text("Hay objetos.".into()),
-                Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/world.ms".into() }),
+                Entry::Tool(ToolLine { icon: fa!(pen), verb: "Editar".into(), detail: "objects/world.ms".into() }),
                 Entry::Notice("not json".into(), Tone::Muted),
                 Entry::Changes {
                     turn: 1,
@@ -4009,7 +4009,7 @@ echo '{"type":"turn.completed"}'"#,
             println!("{e:?}");
         }
         assert!(!p.running() && p.status.starts_with("Hecho"), "{}", p.status);
-        assert!(p.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.icon == "🌐")), "no web tool line");
+        assert!(p.entries.iter().any(|e| matches!(e, Entry::Tool(t) if t.icon == fa!(globe))), "no web tool line");
         assert!(p.entries.iter().any(|e| matches!(e, Entry::Text(t) if t.contains("http"))), "no URL cited");
         let _ = std::fs::remove_dir_all(&project);
     }
@@ -4058,15 +4058,15 @@ echo '{"type":"turn.completed"}'"#,
         let room = proj.rooms[0].name.clone();
         p.input = format!("cambia @{}", &room[..room.len().min(3)]);
         let c = p.mention_candidates(&src);
-        assert!(c.iter().any(|(l, _)| *l == format!("▦ {room}")), "{c:?}");
-        let (_, a) = c.into_iter().find(|(l, _)| *l == format!("▦ {room}")).unwrap();
+        assert!(c.iter().any(|(l, _)| *l == format!(concat!(fa!(map), " {room}"))), "{c:?}");
+        let (_, a) = c.into_iter().find(|(l, _)| *l == format!(concat!(fa!(map), " {room}"))).unwrap();
         p.pick_mention(a);
         assert_eq!(p.input, format!("cambia @{room} "));
         assert_eq!(p.attachments[0].path, project.join(format!("rooms/{room}.toml")));
         assert!(p.mention_candidates(&src).is_empty());
         // Project files show up too.
         p.input = "@game.to".into();
-        assert!(p.mention_candidates(&src).iter().any(|(l, _)| l == "📄 game.toml"));
+        assert!(p.mention_candidates(&src).iter().any(|(l, _)| l == concat!(fa!(file), " game.toml")));
         let _ = std::fs::remove_dir_all(&project);
     }
 
@@ -4076,8 +4076,8 @@ echo '{"type":"turn.completed"}'"#,
         let (dir, exe) = fake_cli("chips", "true");
         let project = crate::room::tests::temp_project("agent_chips").canonicalize().unwrap();
         let mut p = panel(&exe);
-        p.attachments = vec![Attachment::file(&project.join("game.toml")), Attachment::text("☰", "Salida", "ok")];
-        p.entries = vec![Entry::User("mira".into()), Entry::Attached(vec![Attachment::text("⬚", "Selección en level1", "{ x = 1 }")])];
+        p.attachments = vec![Attachment::file(&project.join("game.toml")), Attachment::text(fa!(terminal), "Salida", "ok")];
+        p.entries = vec![Entry::User("mira".into()), Entry::Attached(vec![Attachment::text(fa!(vector_square), "Selección en level1", "{ x = 1 }")])];
         let proj = crate::project::Project::open(&project).unwrap();
         let room = proj.rooms[0].name.clone();
         let mut h = Harness::builder().with_size([420.0, 700.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
@@ -4091,7 +4091,7 @@ echo '{"type":"turn.completed"}'"#,
         h.get_by_label("game.toml");
         h.get_by_label("Salida");
         h.get_by_label("Selección en level1");
-        h.get_by_label("📎 Adjuntar");
+        h.get_by_label(concat!(fa!(paperclip), " Adjuntar"));
         // × removes the first chip.
         h.get_all_by_label("×").next().unwrap().click();
         h.run();
@@ -4127,8 +4127,8 @@ echo '{"type":"turn.completed"}'"#,
             (p, proj),
         );
         h.run();
-        h.get_by_label("📋 Pegar imagen");
-        h.get_by_label("📸 Captura del editor");
+        h.get_by_label(concat!(fa!(clipboard), " Pegar imagen"));
+        h.get_by_label(concat!(fa!(camera), " Captura del editor"));
         // Ctrl+V of an image while the pointer is over the panel.
         h.event(egui::Event::PointerMoved(egui::pos2(200.0, 300.0)));
         let img = egui::ColorImage::filled([64, 32], Color32::from_rgb(10, 200, 30));
@@ -4180,7 +4180,7 @@ echo '{"type":"turn.completed"}'"#,
         p.entries = vec![
             Entry::User("hola".into()),
             Entry::Text("# Hecho\n- uno\n```\ncode\n```".into()),
-            Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/world.ms".into() }),
+            Entry::Tool(ToolLine { icon: fa!(pen), verb: "Editar".into(), detail: "objects/world.ms".into() }),
         ];
         let mut h = Harness::builder().with_size([420.0, 700.0]).allow_missing_glyphs().with_accessibility_check(false).build_ui_state(
             |ui, p: &mut AgentPanel| {
@@ -4266,7 +4266,7 @@ echo '{"type":"result","subtype":"success","session_id":"S-h","total_cost_usd":0
         let mut p = panel(&exe);
         p.send("primero", &project, "x");
         assert!(p.running());
-        p.attach(Attachment::text("📝", "Nota", "abc"));
+        p.attach(Attachment::text(fa!(pen_to_square), "Nota", "abc"));
         p.input = "segundo".into();
         p.send("segundo", &project, "x");
         p.enqueue("tercero");
@@ -4532,7 +4532,7 @@ fi"#
         h.run();
         assert_eq!(h.state().0.view, View::Chat);
         h.get_by_label("Archivos cambiados (2)");
-        h.get_by_label("✂ Conversación compactada");
+        h.get_by_label(concat!(fa!(scissors), " Conversación compactada"));
         h.get_by_label("jump_speed");
         // The queue.
         h.state_mut().0.queue = vec![Queued { text: "luego esto".into(), attachments: vec![] }];
@@ -4669,14 +4669,14 @@ echo '{{"type":"result","subtype":"success","session_id":"S-imp","result":"Impor
         );
         h.run();
         h.get_by_label("Arte del usuario");
-        h.get_by_label("🖼 Importar al proyecto").click();
+        h.get_by_label(concat!(fa!(image), " Importar al proyecto")).click();
         h.run();
         assert!(h.state().0.input.starts_with("Importa al proyecto el arte de la carpeta «Arte del usuario»"), "{}", h.state().0.input);
         // Solo planificar can't import: the button does nothing
         h.state_mut().0.input.clear();
         h.state_mut().0.set_permission(Permission::Plan);
         h.run();
-        h.get_by_label("🖼 Importar al proyecto").click();
+        h.get_by_label(concat!(fa!(image), " Importar al proyecto")).click();
         h.run();
         assert!(h.state().0.input.is_empty());
         drop(h);

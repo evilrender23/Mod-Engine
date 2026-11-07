@@ -49,12 +49,12 @@ pub fn list(dir: &Path, hidden: bool) -> Result<Vec<Row>, String> {
 pub fn places() -> Vec<(String, PathBuf)> {
     let mut out = vec![];
     if let Some(home) = modengine::home_dir() {
-        out.push(("🏠 Inicio".to_string(), home.clone()));
+        out.push((concat!(fa!(house), " Inicio").to_string(), home.clone()));
         for (label, names) in [
-            ("🖥 Escritorio", ["Escritorio", "Desktop"]),
-            ("📄 Documentos", ["Documentos", "Documents"]),
-            ("⬇ Descargas", ["Descargas", "Downloads"]),
-            ("🖼 Imágenes", ["Imágenes", "Pictures"]),
+            (concat!(fa!(desktop), " Escritorio"), ["Escritorio", "Desktop"]),
+            (concat!(fa!(file), " Documentos"), ["Documentos", "Documents"]),
+            (concat!(fa!(download), " Descargas"), ["Descargas", "Downloads"]),
+            (concat!(fa!(image), " Imágenes"), ["Imágenes", "Pictures"]),
         ] {
             if let Some(p) = names.iter().map(|n| home.join(n)).find(|p| p.is_dir()) {
                 out.push((label.to_string(), p));
@@ -65,15 +65,15 @@ pub fn places() -> Vec<(String, PathBuf)> {
     for d in b'C'..=b'Z' {
         let p = PathBuf::from(format!("{}:\\", d as char));
         if p.is_dir() {
-            out.push((format!("💽 {}:", d as char), p));
+            out.push((format!(concat!(fa!(hard_drive), " {}:"), d as char), p));
         }
     }
     #[cfg(not(windows))]
     {
-        out.push(("💽 Raíz /".to_string(), PathBuf::from("/")));
+        out.push((concat!(fa!(hard_drive), " Raíz /").to_string(), PathBuf::from("/")));
         for m in mounts() {
             let name = m.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| m.display().to_string());
-            out.push((format!("💾 {}", crate::agent::one_line(&name, 14)), m));
+            out.push((format!(concat!(fa!(hard_drive), " {}"), crate::agent::one_line(&name, 14)), m));
         }
     }
     out
@@ -273,11 +273,11 @@ impl Browser {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let up = self.dir.parent().map(Path::to_path_buf);
-                    if ui.add_enabled(up.is_some(), egui::Button::new("⬆")).on_hover_text("Carpeta de arriba").clicked() {
+                    if ui.add_enabled(up.is_some(), egui::Button::new(fa!(arrow_up))).on_hover_text("Carpeta de arriba").clicked() {
                         go_to = up;
                     }
                     let fav = favorites.contains(&self.dir);
-                    if ui.selectable_label(fav, if fav { "★" } else { "☆" }).on_hover_text("Añadir o quitar de favoritos").clicked() {
+                    if ui.selectable_label(fav, if fav { RichText::new(fa!(star)) } else { crate::icons::regular(fa!(star)) }).on_hover_text("Añadir o quitar de favoritos").clicked() {
                         if fav {
                             favorites.retain(|f| *f != self.dir);
                         } else {
@@ -305,7 +305,7 @@ impl Browser {
                 if purpose == Purpose::OpenProject {
                     if let Some(name) = crate::projects::project_name(&self.dir) {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("🎮 Esta carpeta es el proyecto «{name}»")).color(crate::theme::colors(ui.ctx()).ok));
+                            ui.label(RichText::new(format!(concat!(fa!(gamepad), " Esta carpeta es el proyecto «{}»"), name)).color(crate::theme::colors(ui.ctx()).ok));
                             if ui.small_button("Abrir").clicked() {
                                 picked = Picked::Attach(vec![self.dir.clone()]);
                             }
@@ -334,7 +334,7 @@ impl Browser {
                                 ui.label(RichText::new("Favoritos").weak().small());
                                 for p in favorites.iter() {
                                     let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                                    if ui.selectable_label(self.dir == *p, format!("★ {}", crate::agent::one_line(&name, 20))).on_hover_text(p.display().to_string()).clicked() {
+                                    if ui.selectable_label(self.dir == *p, format!(concat!(fa!(star), " {}"), crate::agent::one_line(&name, 20))).on_hover_text(p.display().to_string()).clicked() {
                                         go_to = Some(p.clone());
                                     }
                                 }
@@ -344,7 +344,7 @@ impl Browser {
                                 ui.label(RichText::new("Recientes").weak().small());
                                 for p in recent.iter().take(8) {
                                     let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                                    if ui.selectable_label(self.dir == *p, format!("🕘 {}", crate::agent::one_line(&name, 20))).on_hover_text(p.display().to_string()).clicked() {
+                                    if ui.selectable_label(self.dir == *p, format!(concat!(fa!(clock), " {}"), crate::agent::one_line(&name, 20))).on_hover_text(p.display().to_string()).clicked() {
                                         go_to = Some(p.clone());
                                     }
                                 }
@@ -362,7 +362,7 @@ impl Browser {
                             }
                             let hint = match purpose {
                                 Purpose::Attach => "Ctrl/Mayús+clic: varios · doble clic: abrir carpeta",
-                                Purpose::OpenProject => "🎮 = proyecto de Mod Engine · doble clic: abrir",
+                                Purpose::OpenProject => concat!(fa!(gamepad), " = proyecto de Mod Engine · doble clic: abrir"),
                                 Purpose::PickFolder => "doble clic: entrar en la carpeta",
                             };
                             ui.label(RichText::new(hint).weak().small());
@@ -387,13 +387,13 @@ impl Browser {
                                         self.anchor = Some(i);
                                     }
                                     let icon = if r.project.is_some() {
-                                        "🎮"
+                                        fa!(gamepad)
                                     } else if r.is_dir {
-                                        "📁"
+                                        fa!(folder)
                                     } else if crate::agent::IMAGE_EXTS.iter().any(|e| r.name.to_lowercase().ends_with(&format!(".{e}"))) {
-                                        "🖼"
+                                        fa!(image)
                                     } else {
-                                        "📄"
+                                        fa!(file)
                                     };
                                     let size = if r.is_dir { String::new() } else { format!("  {}", crate::import::human_size(r.size)) };
                                     let text = match &r.project {
@@ -440,7 +440,7 @@ impl Browser {
                         let sel = self.selected.iter().next().cloned();
                         if purpose == Purpose::OpenProject {
                             let target = sel.as_deref().and_then(project_of);
-                            if ui.add_enabled(target.is_some(), crate::theme::primary_button(ui, "Abrir proyecto")).on_disabled_hover_text("Elige una carpeta con 🎮 o un game.toml").clicked() {
+                            if ui.add_enabled(target.is_some(), crate::theme::primary_button(ui, "Abrir proyecto")).on_disabled_hover_text(concat!("Elige una carpeta con ", fa!(gamepad), " o un game.toml")).clicked() {
                                 picked = Picked::Attach(target.into_iter().collect());
                             }
                         } else {
@@ -453,7 +453,7 @@ impl Browser {
                         if ui.button("Cancelar").clicked() {
                             picked = Picked::Cancel;
                         }
-                        if self.native && ui.button("🗔 Usar el diálogo del sistema").on_hover_text("El selector de carpetas de tu escritorio (KDE, GNOME, Windows, macOS)").clicked() {
+                        if self.native && ui.button(concat!(fa!(window_restore), " Usar el diálogo del sistema")).on_hover_text("El selector de carpetas de tu escritorio (KDE, GNOME, Windows, macOS)").clicked() {
                             picked = Picked::Native;
                         }
                     });

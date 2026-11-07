@@ -160,11 +160,11 @@ mod winmm {
     }
 }
 
-/// "▶ Escuchar" and, while something plays, "■ Parar" next to it. Returns whether to play.
+/// concat!(fa!(play), " Escuchar") and, while something plays, concat!(fa!(stop), " Parar") next to it. Returns whether to play.
 pub fn play_stop_buttons(ui: &mut egui::Ui) -> bool {
-    let play = ui.button("▶ Escuchar").clicked();
+    let play = ui.button(concat!(fa!(play), " Escuchar")).clicked();
     let on = playing();
-    if ui.add_enabled(on, egui::Button::new("■ Parar")).on_hover_text("Para el sonido que suena").clicked() {
+    if ui.add_enabled(on, egui::Button::new(concat!(fa!(stop), " Parar"))).on_hover_text("Para el sonido que suena").clicked() {
         stop();
     }
     if on {

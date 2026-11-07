@@ -299,14 +299,14 @@ impl ShaderEditor {
             ui.selectable_value(&mut self.stage, Stage::Vertex, RichText::new("Vertex (.vsh)").strong());
             ui.separator();
             let busy = self.gpu.is_some();
-            if ui.add_enabled(!busy, egui::Button::new(if busy { "⏳ Compilando…" } else { "⚙ Compilar en GPU" })).on_hover_text("guarda y compila el shader de verdad con OpenGL (modengine shader --check)").clicked() {
+            if ui.add_enabled(!busy, egui::Button::new(if busy { concat!(fa!(hourglass_half), " Compilando…") } else { concat!(fa!(gear), " Compilar en GPU") })).on_hover_text("guarda y compila el shader de verdad con OpenGL (modengine shader --check)").clicked() {
                 self.compile_gpu(cx);
             }
-            if ui.add_enabled(self.shot.is_none(), egui::Button::new("📷 Vista previa")).on_hover_text("guarda y renderiza el shader sobre el sprite elegido").clicked() {
+            if ui.add_enabled(self.shot.is_none(), egui::Button::new(concat!(fa!(camera), " Vista previa"))).on_hover_text("guarda y renderiza el shader sobre el sprite elegido").clicked() {
                 self.render_preview(cx);
             }
             let live = self.live.is_some();
-            if ui.button(if live { "⟳ Reiniciar vista en vivo" } else { "▶ Vista en vivo" }).on_hover_text("abre una ventana animada que se recarga cada vez que guardas").clicked() {
+            if ui.button(if live { concat!(fa!(arrows_rotate), " Reiniciar vista en vivo") } else { concat!(fa!(play), " Vista en vivo") }).on_hover_text("abre una ventana animada que se recarga cada vez que guardas").clicked() {
                 self.live_preview(cx);
             }
             ui.label("sprite");
@@ -322,7 +322,7 @@ impl ShaderEditor {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.strong("Comprobación");
                 if problems.is_empty() {
-                    ui.colored_label(pal.ok, "✔ sin errores de sintaxis");
+                    ui.colored_label(pal.ok, concat!(fa!(check), " sin errores de sintaxis"));
                 }
                 for (st, line, msg) in &problems {
                     let tag = if *st == Stage::Vertex { "vsh" } else { "fsh" };
@@ -335,7 +335,7 @@ impl ShaderEditor {
                     ui.add_space(4.0);
                     ui.strong("GPU");
                     if *ok {
-                        ui.colored_label(pal.ok, "✔ compila en la GPU");
+                        ui.colored_label(pal.ok, concat!(fa!(check), " compila en la GPU"));
                     }
                     for l in lines.iter().filter(|l| !l.starts_with("ok ")) {
                         ui.colored_label(if l.contains("error") { pal.error } else { pal.info }, RichText::new(l).monospace().size(11.5));
@@ -350,7 +350,7 @@ impl ShaderEditor {
                 } else if self.shot.is_some() {
                     ui.label("renderizando…");
                 } else {
-                    ui.label(RichText::new("Pulsa 📷 Vista previa para renderizar el shader (o ▶ Vista en vivo para verlo animado).").weak());
+                    ui.label(RichText::new(concat!("Pulsa ", fa!(camera), " Vista previa para renderizar el shader (o ", fa!(play), " Vista en vivo para verlo animado).")).weak());
                 }
                 if let Some(e) = &self.preview_err {
                     ui.colored_label(pal.error, e);
@@ -382,7 +382,7 @@ impl ShaderEditor {
                             }
                             None => format!("texture_set_stage(shader_get_sampler_index({}, \"{}\"), sprite)", self.name, u.name),
                         };
-                        if ui.small_button("📋").on_hover_text(format!("copiar: {code}")).clicked() {
+                        if ui.small_button(fa!(copy)).on_hover_text(format!("copiar: {code}")).clicked() {
                             ui.ctx().copy_text(code);
                         }
                     });

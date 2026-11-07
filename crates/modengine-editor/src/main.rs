@@ -3,6 +3,8 @@
 // a window-only program on Windows: no console window behind the editor
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+#[macro_use]
+mod icons;
 mod agent;
 mod agent_attach;
 mod agent_browser;

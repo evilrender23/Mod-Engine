@@ -29,14 +29,14 @@ impl ScriptEditor {
             ui.label(RichText::new(&self.rel).strong());
             let objs: Vec<String> = cx.project.objects.iter().filter(|o| o.script == i).map(|o| o.name.clone()).collect();
             for o in objs {
-                if ui.small_button(format!("◆ {o}")).on_hover_text("abrir en el editor de objetos").clicked() {
+                if ui.small_button(format!("{} {o}", fa!(cube))).on_hover_text("abrir en el editor de objetos").clicked() {
                     cx.open.push(crate::app::Open::Object(o));
                 }
             }
         });
         match &self.error {
             Some((line, msg)) => ui.colored_label(crate::theme::colors(ui.ctx()).error, format!("línea {line}: {msg}")),
-            None => ui.colored_label(crate::theme::colors(ui.ctx()).ok, "✔ sin errores de sintaxis"),
+            None => ui.colored_label(crate::theme::colors(ui.ctx()).ok, concat!(fa!(check), " sin errores de sintaxis")),
         };
         let mut text = cx.project.scripts[i].text.clone();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

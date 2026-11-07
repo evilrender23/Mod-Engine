@@ -162,10 +162,10 @@ impl SettingsEditor {
                 for (i, r) in order.iter().enumerate() {
                     ui.horizontal(|ui| {
                         ui.label(format!("{}. {r}", i + 1));
-                        if ui.small_button("▲").clicked() && i > 0 {
+                        if ui.small_button(fa!(caret_up)).clicked() && i > 0 {
                             swap = Some((i, i - 1));
                         }
-                        if ui.small_button("▼").clicked() && i + 1 < rooms.len() {
+                        if ui.small_button(fa!(caret_down)).clicked() && i + 1 < rooms.len() {
                             swap = Some((i, i + 1));
                         }
                     });
@@ -218,7 +218,7 @@ impl SettingsEditor {
             ui.heading("Paleta compartida");
             ui.label(RichText::new("Caracteres que pueden usar todos los sprites de pixel art.").weak());
             ui.horizontal(|ui| {
-                if ui.button("🎨 Paletas (Lospec)…").on_hover_text("Descargar o importar una paleta (Pear36 por defecto) y aplicarla al proyecto").clicked() {
+                if ui.button(concat!(fa!(palette), " Paletas (Lospec)…")).on_hover_text("Descargar o importar una paleta (Pear36 por defecto) y aplicarla al proyecto").clicked() {
                     crate::palette::open_dialog();
                 }
                 let cols: Vec<u32> = modengine::palette::ordered(&self.game.palette).into_iter().map(|(_, c)| c).collect();

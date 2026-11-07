@@ -497,7 +497,7 @@ impl StoreDialog {
         let resp = egui::Modal::new(egui::Id::unique("store_dialog")).show(ctx, |ui| {
             ui.set_width(width);
             ui.horizontal(|ui| {
-                ui.heading("🛒 Tienda de assets");
+                ui.heading(concat!(fa!(cart_shopping), " Tienda de assets"));
                 ui.label(RichText::new("· assets gratuitos de OpenGameArt.org").weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Cerrar").clicked() {
@@ -542,10 +542,10 @@ impl StoreDialog {
                     }
                 }
             });
-            if ui.add(crate::theme::primary_button(ui, "🔍 Buscar")).clicked() {
+            if ui.add(crate::theme::primary_button(ui, concat!(fa!(magnifying_glass), " Buscar"))).clicked() {
                 go = true;
             }
-            let favs = format!("⭐ Favoritos ({})", self.favorites.len());
+            let favs = format!(concat!(fa!(star), " Favoritos ({})"), self.favorites.len());
             if ui.selectable_label(self.view == View::Favorites, favs).clicked() {
                 self.view = if self.view == View::Favorites { View::Results } else { View::Favorites };
                 let thumbs: Vec<String> = self.favorites.iter().filter_map(|f| f.thumb.clone()).collect();
@@ -558,7 +558,7 @@ impl StoreDialog {
             ui.label("Licencias:");
             for l in License::FILTERS {
                 let mut on = self.q.licenses.contains(&l);
-                let text = if l.share_alike() { format!("⚠ {}", l.name()) } else { l.name() };
+                let text = if l.share_alike() { format!(concat!(fa!(triangle_exclamation), " {}"), l.name()) } else { l.name() };
                 let hover = match l.level() {
                     0 => "Dominio público: sin obligaciones",
                     1 => "Exige dar crédito al autor (se apunta en CREDITS.md)",
@@ -620,7 +620,7 @@ impl StoreDialog {
                     ui.allocate_ui(Vec2::new(ui.available_width(), h), |ui| {
                         ui.add_space(40.0);
                         ui.vertical_centered(|ui| {
-                            ui.colored_label(pal.error, format!("✖ {e}"));
+                            ui.colored_label(pal.error, format!(concat!(fa!(xmark), " {e}"), e = e));
                             ui.add_space(6.0);
                             if ui.button("Reintentar").clicked() {
                                 self.search(&ctx);
@@ -639,7 +639,7 @@ impl StoreDialog {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| {
                     let msg = match (&self.view, &self.results, &self.asked) {
-                        (View::Favorites, _, _) => "Aún no tienes favoritos: marca ⭐ en un asset para guardarlo aquí.",
+                        (View::Favorites, _, _) => "Aún no tienes favoritos: marca la estrella en un asset para guardarlo aquí.",
                         (_, Some(Ok(_)), _) => "No hay resultados con esos filtros. Prueba otra palabra, otro tipo o más licencias.",
                         (_, None, Some(_)) => "Buscando…",
                         _ => "Escribe qué buscas (en inglés funciona mejor: slime, coin, explosion…) y pulsa Buscar.",
@@ -675,13 +675,13 @@ impl StoreDialog {
             if let Some(Ok(p)) = &self.results {
                 let (page, last) = (p.page, p.last_page);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(page > 0, egui::Button::new("◀ Anterior")).clicked() {
+                    if ui.add_enabled(page > 0, egui::Button::new(concat!(fa!(caret_left), " Anterior"))).clicked() {
                         self.q = self.asked.clone().unwrap_or_else(|| self.q.clone());
                         self.q.page = page - 1;
                         self.search(&ctx);
                     }
                     ui.label(format!("Página {} de {}", page + 1, last + 1));
-                    if ui.add_enabled(page < last, egui::Button::new("Siguiente ▶")).clicked() {
+                    if ui.add_enabled(page < last, egui::Button::new(concat!("Siguiente ", fa!(caret_right)))).clicked() {
                         self.q = self.asked.clone().unwrap_or_else(|| self.q.clone());
                         self.q.page = page + 1;
                         self.search(&ctx);
@@ -704,7 +704,7 @@ impl StoreDialog {
                     open = true;
                 }
                 ui.horizontal(|ui| {
-                    let star = if self.is_fav(&hit.slug) { "⭐" } else { "☆" };
+                    let star = if self.is_fav(&hit.slug) { RichText::new(fa!(star)) } else { crate::icons::regular(fa!(star)) };
                     if ui.small_button(star).on_hover_text("favorito").clicked() {
                         fav = true;
                     }
@@ -771,7 +771,7 @@ impl StoreDialog {
                     _ => None,
                 };
                 ui.horizontal(|ui| {
-                    if ui.button("◀ Volver").clicked() {
+                    if ui.button(concat!(fa!(caret_left), " Volver")).clicked() {
                         back = true;
                     }
                 });
@@ -779,7 +779,7 @@ impl StoreDialog {
                     ui.add_space(40.0);
                     ui.vertical_centered(|ui| match &err {
                         Some(e) => {
-                            ui.colored_label(pal.error, format!("✖ {e}"));
+                            ui.colored_label(pal.error, format!(concat!(fa!(xmark), " {e}"), e = e));
                             if ui.button("Reintentar").clicked() {
                                 self.open_detail(&ctx, slug);
                             }
@@ -797,15 +797,15 @@ impl StoreDialog {
             }
         };
         ui.horizontal(|ui| {
-            if ui.button("◀ Volver a los resultados").clicked() {
+            if ui.button(concat!(fa!(caret_left), " Volver a los resultados")).clicked() {
                 back = true;
             }
-            let star = if self.is_fav(slug) { "⭐ En favoritos" } else { "☆ Añadir a favoritos" };
+            let star = if self.is_fav(slug) { RichText::new(concat!(fa!(star), " En favoritos")) } else { crate::icons::regular(concat!(fa!(star), " Añadir a favoritos")) };
             if ui.button(star).clicked() {
                 let thumb = a.previews.first().map(|p| p.image.clone()).filter(|s| !s.is_empty());
                 self.toggle_fav(slug, &a.title, thumb);
             }
-            if ui.button("🌐 Abrir en el navegador").on_hover_text(a.url()).clicked() {
+            if ui.button(concat!(fa!(globe), " Abrir en el navegador")).on_hover_text(a.url()).clicked() {
                 if let Err(e) = net::open_in_browser(&a.url()) {
                     self.status = Some((false, e));
                 }
@@ -872,9 +872,9 @@ impl StoreDialog {
                             Note::Block => pal.error,
                         };
                         let icon = match n {
-                            Note::Info => "ℹ",
-                            Note::Warn => "⚠",
-                            Note::Block => "✖",
+                            Note::Info => fa!(circle_info),
+                            Note::Warn => fa!(triangle_exclamation),
+                            Note::Block => fa!(xmark),
                         };
                         ui.colored_label(c, format!("{icon} {text}"));
                     }
@@ -937,12 +937,12 @@ impl StoreDialog {
             for f in &a.files {
                 let ext = f.ext();
                 let kind = Kind::of(Path::new(&f.name));
-                ui.label(format!("{} {}", kind.map(Kind::icon).unwrap_or(if f.is_zip() { "🗜" } else { "·" }), f.name));
+                ui.label(format!("{} {}", kind.map(crate::import::kind_icon).unwrap_or(if f.is_zip() { fa!(file_zipper) } else { "·" }), f.name));
                 ui.label(RichText::new(if ext.is_empty() { "?".to_string() } else { ext.to_uppercase() }).weak());
                 ui.label(RichText::new(f.size.map(human_size).unwrap_or_else(|| "¿?".into())).weak());
                 ui.horizontal(|ui| {
                     let state = self.downloads.get(&f.url).cloned();
-                    let label = if f.is_zip() { "⬇ Ver contenido…" } else { "⬇ Importar…" };
+                    let label = if f.is_zip() { concat!(fa!(download), " Ver contenido…") } else { concat!(fa!(download), " Importar…") };
                     let supported = f.is_zip() || kind.is_some();
                     if !supported {
                         let why = if ext == "mp3" { "MP3: el motor usa OGG o WAV (conviértelo)" } else { "formato que el motor no carga" };
@@ -967,7 +967,7 @@ impl StoreDialog {
                             act = Some(f.clone());
                         }
                         if let Some(Dl::Failed(e)) = &state {
-                            ui.colored_label(pal.error, "✖").on_hover_text(e);
+                            ui.colored_label(pal.error, fa!(xmark)).on_hover_text(e);
                         }
                         if self.confirm_big.as_deref() == Some(&f.url) {
                             big = Some(f.clone());
@@ -980,7 +980,7 @@ impl StoreDialog {
         if let Some(f) = big {
             let warn = ui.visuals().warn_fg_color;
             ui.horizontal(|ui| {
-                ui.colored_label(warn, format!("⚠ {} mide {} (más de 50 MB). ¿Descargar igualmente?", f.name, f.size.map(human_size).unwrap_or_default()));
+                ui.colored_label(warn, format!(concat!(fa!(triangle_exclamation), " {} mide {} (más de 50 MB). ¿Descargar igualmente?"), f.name, f.size.map(human_size).unwrap_or_default()));
                 if ui.button("Descargar").clicked() {
                     self.big_ok.insert(f.url.clone());
                     self.confirm_big = None;
@@ -1004,15 +1004,15 @@ impl StoreDialog {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("🗜 Contenido de {}", z.file.name)).strong());
+                ui.label(RichText::new(format!(concat!(fa!(file_zipper), " Contenido de {}"), z.file.name)).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("✕").on_hover_text("cerrar").clicked() {
+                    if ui.small_button(fa!(xmark)).on_hover_text("cerrar").clicked() {
                         close = true;
                     }
                 });
             });
             if let Some(e) = &z.error {
-                ui.colored_label(pal.error, format!("✖ {e}"));
+                ui.colored_label(pal.error, format!(concat!(fa!(xmark), " {e}"), e = e));
             }
             let n_imp = z.items.iter().filter(|(i, _)| i.importable()).count();
             ui.horizontal(|ui| {
@@ -1031,7 +1031,7 @@ impl StoreDialog {
             egui::ScrollArea::vertical().id_salt("store_zip").max_height(220.0).show(ui, |ui| {
                 for (it, sel) in &mut z.items {
                     let kind = Kind::of(Path::new(it.file_name()));
-                    let text = format!("{} {}  ({})", kind.map(Kind::icon).unwrap_or("·"), it.name, human_size(it.size));
+                    let text = format!("{} {}  ({})", kind.map(crate::import::kind_icon).unwrap_or("·"), it.name, human_size(it.size));
                     if kind.is_some() {
                         ui.checkbox(sel, text);
                     } else {
@@ -1174,12 +1174,12 @@ mod tests {
         h.get_by_label_contains("slime spritesheet calciumtrice.png");
         h.get_by_label("Atribución que pide el autor:");
         // favourite it
-        h.get_by_label("☆ Añadir a favoritos").click();
+        h.get_by_label(concat!(fa!(star), " Añadir a favoritos")).click();
         h.run_steps(2);
         assert_eq!(h.state().d.favorites.len(), 1);
         assert!(std::fs::read_to_string(&cfg).unwrap().contains("animated-slime"));
         // import the PNG: downloaded (size checked) and handed over with its credit
-        h.get_by_label("⬇ Importar…").click();
+        h.get_by_label(concat!(fa!(download), " Importar…")).click();
         wait(&mut h, |s| !s.out.is_empty());
         let got = h.state().out[0].clone();
         assert_eq!(got.file_name().unwrap(), "slime spritesheet calciumtrice.png");
@@ -1189,7 +1189,7 @@ mod tests {
         // a zip: list, pick, extract
         h.state_mut().d.start_open = Some("pixel-art-animated-slime".into());
         wait(&mut h, |s| matches!(s.d.details.get("pixel-art-animated-slime"), Some(Ok(_))) && !s.d.loading());
-        h.get_by_label("⬇ Ver contenido…").click();
+        h.get_by_label(concat!(fa!(download), " Ver contenido…")).click();
         wait(&mut h, |s| s.d.zip.is_some());
         h.get_by_label_contains("Contenido de Slime.zip");
         h.get_by_label_contains("Slime/slime_idle.png");

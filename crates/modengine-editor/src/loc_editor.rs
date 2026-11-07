@@ -306,12 +306,12 @@ impl LangEditor {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("🔍");
+            ui.label(fa!(magnifying_glass));
             ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("buscar clave o texto").desired_width(180.0));
             ui.checkbox(&mut self.only_missing, "solo con huecos");
             ui.separator();
             ui.add(egui::TextEdit::singleline(&mut self.new_key).hint_text("menu.jugar").desired_width(120.0));
-            if ui.button("＋ Clave").clicked() {
+            if ui.button(concat!(fa!(plus), " Clave")).clicked() {
                 let k = self.new_key.clone();
                 match self.add_key(&k) {
                     Ok(()) => {
@@ -322,7 +322,7 @@ impl LangEditor {
                 }
             }
             ui.add(egui::TextEdit::singleline(&mut self.new_lang).hint_text("fr").desired_width(48.0));
-            if ui.button("＋ Idioma").clicked() {
+            if ui.button(concat!(fa!(plus), " Idioma")).clicked() {
                 let c = self.new_lang.clone();
                 match self.add_lang(&c) {
                     Ok(()) => {
@@ -333,7 +333,7 @@ impl LangEditor {
                 }
             }
             ui.separator();
-            if ui.button("⬆ Exportar CSV").on_hover_text("Una fila por clave y una columna por idioma, para traductores").clicked() {
+            if ui.button(concat!(fa!(upload), " Exportar CSV")).on_hover_text("Una fila por clave y una columna por idioma, para traductores").clicked() {
                 if let Some(path) = rfd::FileDialog::new().set_file_name("traducciones.csv").add_filter("CSV", &["csv"]).set_directory(&self.dir).save_file() {
                     self.status = match std::fs::write(&path, self.to_csv()) {
                         Ok(()) => format!("exportado a {}", path.display()),
@@ -341,7 +341,7 @@ impl LangEditor {
                     };
                 }
             }
-            if ui.button("⬇ Importar CSV").on_hover_text("Añade las claves e idiomas nuevos y reemplaza las celdas no vacías").clicked() {
+            if ui.button(concat!(fa!(download), " Importar CSV")).on_hover_text("Añade las claves e idiomas nuevos y reemplaza las celdas no vacías").clicked() {
                 if let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_directory(&self.dir).pick_file() {
                     self.status = match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| self.import_csv(&s)) {
                         Ok(n) => format!("{n} celda(s) importadas de {}", path.display()),
@@ -356,7 +356,7 @@ impl LangEditor {
             if missing > 0 {
                 ui.label(RichText::new(format!("· {missing} huecos sin traducir")).color(Color32::from_rgb(230, 120, 100)));
             } else if !self.keys.is_empty() {
-                ui.label(RichText::new("· todo traducido ✔").color(Color32::from_rgb(120, 200, 120)));
+                ui.label(RichText::new(concat!("· todo traducido ", fa!(check))).color(Color32::from_rgb(120, 200, 120)));
             }
             if !self.status.is_empty() {
                 ui.label(RichText::new(&self.status).italics());
@@ -365,7 +365,7 @@ impl LangEditor {
         ui.label(RichText::new("En el código: loc(\"clave\", { n: 3 }). Plurales: una línea por forma (one: …, other: …). Guardar reescribe lang/*.toml.").weak().small());
         ui.separator();
         if self.langs.is_empty() {
-            ui.label("No hay idiomas: escribe un código (es, en…) y pulsa ＋ Idioma.");
+            ui.label("No hay idiomas: escribe un código (es, en…) y pulsa + Idioma.");
             return;
         }
         let keys: Vec<String> = self.keys.iter().filter(|k| self.visible(k)).cloned().collect();
@@ -402,7 +402,7 @@ impl LangEditor {
                             }
                         });
                     }
-                    if ui.small_button("🗑").on_hover_text("borrar la clave en todos los idiomas").clicked() {
+                    if ui.small_button(fa!(trash_can)).on_hover_text("borrar la clave en todos los idiomas").clicked() {
                         remove = Some(k.clone());
                     }
                     ui.end_row();
@@ -512,7 +512,7 @@ mod tests {
         // add a key with the toolbar and fill it
         h.state_mut().ed.new_key = "menu.options".into();
         h.run();
-        h.get_by_label("＋ Clave").click();
+        h.get_by_label(concat!(fa!(plus), " Clave")).click();
         h.run();
         assert!(h.state().ed.keys.contains(&"menu.options".to_string()));
         h.state_mut().ed.set("en", "menu.quit", "Quit");

@@ -88,11 +88,11 @@ impl TimelineEditor {
         ui.horizontal(|ui| {
             ui.heading(&self.name);
             ui.separator();
-            let label = if self.playing { "⏸ Pausa" } else { "▶ Reproducir" };
+            let label = if self.playing { concat!(fa!(pause), " Pausa") } else { concat!(fa!(play), " Reproducir") };
             if ui.button(label).on_hover_text("vista previa: el cursor avanza como timeline_position en el juego").clicked() {
                 self.playing = !self.playing;
             }
-            if ui.button("⏮").on_hover_text("volver al paso 0").clicked() {
+            if ui.button(fa!(backward_step)).on_hover_text("volver al paso 0").clicked() {
                 self.head = 0.0;
             }
             ui.checkbox(&mut self.looping, "bucle (timeline_loop)");
@@ -191,8 +191,8 @@ impl TimelineEditor {
                 if first.chars().count() > 20 {
                     short.push('…');
                 }
-                let warn = if moment_error(&m.code).is_some() { "⚠ " } else { "" };
-                let text = RichText::new(format!("{warn}⏱ {:>4}   {short}", m.step)).monospace();
+                let warn = if moment_error(&m.code).is_some() { concat!(fa!(triangle_exclamation), " ") } else { "" };
+                let text = RichText::new(format!("{warn}{} {:>4}   {short}", fa!(stopwatch), m.step)).monospace();
                 if ui.selectable_label(i == self.sel, text).clicked() {
                     pick = Some(i);
                 }
@@ -220,10 +220,10 @@ impl TimelineEditor {
                 self.data.sorted();
                 self.sel = self.data.moments.iter().position(|m| m.step == step && m.code == code).unwrap_or(0);
             }
-            if ui.button("⧉ Duplicar").on_hover_text("copia el momento al primer paso libre siguiente").clicked() {
+            if ui.button(concat!(fa!(clone), " Duplicar")).on_hover_text("copia el momento al primer paso libre siguiente").clicked() {
                 action = Some(0);
             }
-            if ui.button("🗑 Borrar").clicked() {
+            if ui.button(concat!(fa!(trash_can), " Borrar")).clicked() {
                 action = Some(1);
             }
         });
@@ -249,7 +249,7 @@ impl TimelineEditor {
         let i = self.sel;
         match moment_error(&self.data.moments[i].code) {
             Some((line, msg)) => ui.colored_label(crate::theme::colors(ui.ctx()).error, format!("línea {line}: {msg}")),
-            None => ui.colored_label(crate::theme::colors(ui.ctx()).ok, "✔ sin errores de sintaxis · se ejecuta en la instancia (self) que lleva la timeline"),
+            None => ui.colored_label(crate::theme::colors(ui.ctx()).ok, concat!(fa!(check), " sin errores de sintaxis · se ejecuta en la instancia (self) que lleva la timeline")),
         };
         let step = self.data.moments[i].step;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -301,7 +301,7 @@ mod tests {
         h.run_steps(2);
         assert!(moment_error(&h.state().ed.data.moments[1].code).is_none());
         assert!(moment_error("x = (").is_some());
-        h.get_by_label("⧉ Duplicar").click();
+        h.get_by_label(concat!(fa!(clone), " Duplicar")).click();
         h.run_steps(2);
         assert_eq!(h.state().ed.data.moments.iter().map(|m| m.step).collect::<Vec<_>>(), vec![0, 30, 31]);
         {

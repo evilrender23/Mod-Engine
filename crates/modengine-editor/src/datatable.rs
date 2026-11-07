@@ -457,7 +457,7 @@ impl TableEditor {
                 action = Some((usize::MAX, "add"));
             }
             ui.separator();
-            ui.label("🔍");
+            ui.label(fa!(magnifying_glass));
             ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("buscar en la tabla").desired_width(160.0));
             ui.separator();
             ui.add(egui::TextEdit::singleline(&mut self.new_col).hint_text("campo nuevo").desired_width(100.0));
@@ -516,16 +516,16 @@ impl TableEditor {
                 for &i in &visible {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        if ui.small_button("⬆").on_hover_text("Subir").clicked() {
+                        if ui.small_button(fa!(arrow_up)).on_hover_text("Subir").clicked() {
                             action = Some((i, "up"));
                         }
-                        if ui.small_button("⬇").on_hover_text("Bajar").clicked() {
+                        if ui.small_button(fa!(arrow_down)).on_hover_text("Bajar").clicked() {
                             action = Some((i, "down"));
                         }
-                        if ui.small_button("⧉").on_hover_text("Duplicar").clicked() {
+                        if ui.small_button(fa!(clone)).on_hover_text("Duplicar").clicked() {
                             action = Some((i, "dup"));
                         }
-                        if ui.small_button("🗑").on_hover_text("Borrar").clicked() {
+                        if ui.small_button(fa!(trash_can)).on_hover_text("Borrar").clicked() {
                             action = Some((i, "del"));
                         }
                     });
@@ -554,7 +554,7 @@ impl TableEditor {
             ui.separator();
             egui::ScrollArea::vertical().id_salt(("datatable_diags", &self.name)).max_height(bottom - 10.0).show(ui, |ui| {
                 for d in &self.diags {
-                    ui.colored_label(Color32::from_rgb(230, 110, 90), format!("⚠ {}", d.msg));
+                    ui.colored_label(Color32::from_rgb(230, 110, 90), format!(concat!(fa!(triangle_exclamation), " {}"), d.msg));
                 }
             });
         }

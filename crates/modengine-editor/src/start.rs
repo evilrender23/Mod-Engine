@@ -227,7 +227,7 @@ impl StartPage {
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             // header
             ui.horizontal(|ui| {
-                ui.label(RichText::new("◆").size(30.0).color(accent(ui)));
+                ui.label(RichText::new(fa!(cube)).size(30.0).color(accent(ui)));
                 ui.vertical(|ui| {
                     ui.label(RichText::new("Mod Engine").size(28.0).strong());
                     ui.label(RichText::new("Editor de juegos 2D: objetos, eventos y rooms").weak());
@@ -239,22 +239,22 @@ impl StartPage {
                 // left column: what to do
                 ui.allocate_ui_with_layout(Vec2::new(310.0, h), Layout::top_down(Align::Min), |ui| {
                     ui.set_width(310.0);
-                    if big_button(ui, "＋", "Nuevo proyecto", "Vacío, plataformas, top-down, showcase…", true).clicked() {
+                    if big_button(ui, fa!(plus), "Nuevo proyecto", "Vacío, plataformas, top-down, showcase…", true).clicked() {
                         self.open_new_dialog();
                     }
                     ui.add_space(8.0);
-                    if big_button(ui, "📂", "Abrir proyecto…", "Busca la carpeta de un juego en el disco", false).clicked() {
+                    if big_button(ui, fa!(folder_open), "Abrir proyecto…", "Busca la carpeta de un juego en el disco", false).clicked() {
                         self.open_browser(None);
                     }
                     ui.add_space(8.0);
-                    let ex = big_button(ui, "🎮", "Abrir ejemplo", "Coin Climber y los showcases de Mod Engine", false);
+                    let ex = big_button(ui, fa!(gamepad), "Abrir ejemplo", "Coin Climber y los showcases de Mod Engine", false);
                     egui::Popup::menu(&ex).show(|ui| {
                         ui.set_min_width(300.0);
                         if self.examples.is_empty() {
                             ui.label(RichText::new("No encuentro los ejemplos junto al editor").weak());
                         }
                         for (name, dir) in self.examples.clone() {
-                            ui.menu_button(format!("🎮 {name}"), |ui| {
+                            ui.menu_button(format!(concat!(fa!(gamepad), " {}"), name), |ui| {
                                 ui.label(RichText::new(dir.display().to_string()).weak().small());
                                 if ui.button("Abrir una copia (recomendado)").on_hover_text("Copia el ejemplo a tu carpeta de proyectos: puedes cambiarlo sin miedo").clicked() {
                                     let loc = projects::default_location(self.config.as_deref());
@@ -318,7 +318,7 @@ impl StartPage {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Proyectos recientes").size(17.0).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("🔍 Buscar…").desired_width(220.0));
+                ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(concat!(fa!(magnifying_glass), " Buscar…")).desired_width(220.0));
             });
         });
         ui.add_space(6.0);
@@ -375,7 +375,7 @@ impl StartPage {
             let k = if k >= 1.0 { k.floor() } else { k };
             p.image(tex.id(), Rect::from_center_size(thumb.center(), s * k), Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
         } else {
-            p.text(thumb.center(), egui::Align2::CENTER_CENTER, if missing { "⚠" } else { "◆" }, egui::FontId::proportional(34.0), v.weak_text_color());
+            p.text(thumb.center(), egui::Align2::CENTER_CENTER, if missing { fa!(triangle_exclamation) } else { fa!(cube) }, egui::FontId::proportional(34.0), v.weak_text_color());
         }
         let text_col = if missing { v.weak_text_color() } else { v.text_color() };
         let mut y = thumb.bottom() + 8.0;
@@ -410,10 +410,10 @@ impl StartPage {
             // a child Ui that doesn't move the grid's cursor
             let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(tools).layout(Layout::right_to_left(Align::Center)));
             {
-                if ui.small_button("×").on_hover_text("Quitar de la lista (no borra nada)").clicked() {
+                if ui.small_button(fa!(xmark)).on_hover_text("Quitar de la lista (no borra nada)").clicked() {
                     self.recents.remove(&r.path);
                 }
-                let pin = if r.pinned { "📌" } else { "📍" };
+                let pin = if r.pinned { RichText::new(fa!(thumbtack)) } else { RichText::new(fa!(thumbtack)).weak() };
                 if ui.small_button(pin).on_hover_text(if r.pinned { "Desfijar" } else { "Fijar arriba" }).clicked() {
                     self.recents.set_pinned(&r.path, !r.pinned);
                 }
@@ -422,7 +422,7 @@ impl StartPage {
         if missing {
             let b = Rect::from_center_size(egui::pos2(thumb.center().x, thumb.bottom() - 20.0), Vec2::new(110.0, 24.0));
             let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(b).layout(Layout::centered_and_justified(egui::Direction::LeftToRight)));
-            if ui.add(egui::Button::new("🔍 Localizar…")).on_hover_text("Busca dónde está ahora la carpeta del proyecto").clicked() {
+            if ui.add(egui::Button::new(concat!(fa!(magnifying_glass), " Localizar…"))).on_hover_text("Busca dónde está ahora la carpeta del proyecto").clicked() {
                 let start = r.path.ancestors().find(|a| a.is_dir()).map(Path::to_path_buf);
                 self.open_browser(start.as_deref());
                 self.locate = Some(r.path.clone());
@@ -448,7 +448,7 @@ impl StartPage {
         let mut shown = 0;
         for r in list.iter().filter(|r| Some(r.path.as_path()) != current).take(15) {
             let name = self.name_of(&r.path);
-            let label = format!("{}{}", if r.pinned { "📌 " } else { "" }, name.clone().unwrap_or_else(|| projects::folder_name(&r.path)));
+            let label = format!("{}{}", if r.pinned { concat!(fa!(thumbtack), " ") } else { "" }, name.clone().unwrap_or_else(|| projects::folder_name(&r.path)));
             if ui.add_enabled(name.is_some(), egui::Button::new(label)).on_hover_text(r.path.display().to_string()).clicked() {
                 action = Some(Action::Open(r.path.clone()));
                 ui.close();
@@ -565,7 +565,7 @@ impl StartPage {
                 ui.label("Ubicación");
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut d.location).desired_width(330.0));
-                    if ui.button("📂 Elegir…").on_hover_text("Elegir la carpeta donde se guardará").clicked() {
+                    if ui.button(concat!(fa!(folder_open), " Elegir…")).on_hover_text("Elegir la carpeta donde se guardará").clicked() {
                         let at = crate::import::expand(&d.location);
                         let at = at.ancestors().find(|a| a.is_dir()).map(Path::to_path_buf);
                         d.browser.open_at(at.as_deref());
@@ -627,13 +627,13 @@ impl StartPage {
                 Ok(p) => {
                     ui.label(RichText::new("Se creará la carpeta:").weak().small());
                     ui.label(RichText::new(p.display().to_string()).monospace());
-                    ui.label(RichText::new("✔ Todo listo").color(pal.ok).small());
+                    ui.label(RichText::new(concat!(fa!(check), " Todo listo")).color(pal.ok).small());
                 }
                 Err(e) => {
                     let preview = crate::import::expand(&d.location).join(d.name.trim());
                     ui.label(RichText::new("Se creará la carpeta:").weak().small());
                     ui.label(RichText::new(preview.display().to_string()).monospace().weak());
-                    ui.label(RichText::new(format!("✖ {e}")).color(pal.error).small());
+                    ui.label(RichText::new(format!(concat!(fa!(xmark), " {}"), e)).color(pal.error).small());
                 }
             }
             if let Some(e) = &d.error {
@@ -772,7 +772,7 @@ mod tests {
         for l in ["Nuevo proyecto", "Abrir proyecto…", "Abrir ejemplo", "Proyectos recientes"] {
             h.get_by_label(l);
         }
-        h.get_by_label("🔍 Localizar…");
+        h.get_by_label(concat!(fa!(magnifying_glass), " Localizar…"));
         // the search filters the cards
         h.state_mut().page.search = "prueba".into();
         h.run_steps(2);
@@ -786,7 +786,7 @@ mod tests {
         // the missing one is removed with ×
         h.state_mut().page.recents.list.retain(|r| r.path.exists());
         h.run_steps(2);
-        assert!(h.query_by_label("🔍 Localizar…").is_none());
+        assert!(h.query_by_label(concat!(fa!(magnifying_glass), " Localizar…")).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -840,7 +840,7 @@ mod tests {
         h.run_steps(3);
         h.state_mut().page.new_dialog.as_mut().unwrap().location = target.display().to_string();
         h.run_steps(2);
-        h.get_by_label("📂 Elegir…").click();
+        h.get_by_label(concat!(fa!(folder_open), " Elegir…")).click();
         h.run_steps(3);
         // the picker's own button must take the click, not the modal behind it
         h.get_by_label("Elegir «juegos»").click();
@@ -861,11 +861,11 @@ mod tests {
         let mut h = harness(page(&cfg));
         h.state_mut().page.open_browser(Some(&d));
         h.run_steps(3);
-        h.get_by_label_contains("🎮 uno");
-        h.get_by_label_contains("📁 carpeta");
+        h.get_by_label_contains(concat!(fa!(gamepad), " uno"));
+        h.get_by_label_contains(concat!(fa!(folder), " carpeta"));
         assert!(h.query_by_label_contains("nota.txt").is_none(), "only folders and game.toml");
         // pick the project row, then Abrir proyecto
-        h.get_by_label_contains("🎮 uno").click();
+        h.get_by_label_contains(concat!(fa!(gamepad), " uno")).click();
         h.run_steps(2);
         // (the window title says Abrir proyecto too)
         h.get_by_role_and_label(egui::Role::Button, "Abrir proyecto").click();

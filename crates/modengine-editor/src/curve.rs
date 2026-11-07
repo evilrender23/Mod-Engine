@@ -123,12 +123,12 @@ impl CurveEditor {
         });
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.preview, "▶ vista previa");
+                ui.checkbox(&mut self.preview, concat!(fa!(play), " vista previa"));
                 ui.add(egui::Slider::new(&mut self.duration, 0.25..=6.0).text("s").logarithmic(true));
-                if ui.button("⤢ ajustar eje Y").clicked() {
+                if ui.button(concat!(fa!(expand), " ajustar eje Y")).clicked() {
                     self.yr = auto_range(&self.data);
                 }
-                ui.label(RichText::new("ⓘ").weak()).on_hover_text("clic en el gráfico: añadir punto\narrastrar un punto o un tirador (bezier): moverlo\nclic derecho en un punto: borrarlo");
+                ui.label(RichText::new(fa!(circle_info)).weak()).on_hover_text("clic en el gráfico: añadir punto\narrastrar un punto o un tirador (bezier): moverlo\nclic derecho en un punto: borrarlo");
             });
             self.graph_ui(ui);
         });
@@ -198,7 +198,7 @@ impl CurveEditor {
                 }
             }
         });
-        ui.menu_button("Más curvas de GameMaker ▾", |ui| {
+        ui.menu_button(concat!("Más curvas de GameMaker ", fa!(caret_down)), |ui| {
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 for k in MORE_PRESETS {
                     if ui.button(*k).clicked() {

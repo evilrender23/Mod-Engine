@@ -124,32 +124,32 @@ pub fn presets() -> Vec<(&'static str, Vec<PartTypeToml>, Vec<EmitterToml>)> {
     let c = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     vec![
         (
-            "🔥 Fuego",
+            concat!(fa!(fire), " Fuego"),
             vec![PartTypeToml { shape: "flare".into(), size: Range2([0.25, 0.45]), size_incr: -0.006, speed: Range2([0.4, 0.9]), direction: Range2([80.0, 100.0]), direction_wiggle: 6.0, colors: c(&["#ffe066", "#ff7a00", "#b13e53"]), alphas: vec![0.9, 0.7, 0.0], additive: true, life: Range2([25.0, 40.0]), ..t("fuego") }],
             vec![EmitterToml { shape: "ellipse".into(), distribution: "gaussian".into(), region: [-6.0, -3.0, 6.0, 3.0], count: 2, ..e("fuego", "fuego") }],
         ),
         (
-            "💨 Humo",
+            concat!(fa!(wind), " Humo"),
             vec![PartTypeToml { shape: "smoke".into(), size: Range2([0.3, 0.6]), size_incr: 0.01, speed: Range2([0.3, 0.6]), direction: Range2([80.0, 100.0]), orientation: Range2([0.0, 360.0]), orientation_incr: 0.5, colors: c(&["#94b0c2", "#333c57"]), alphas: vec![0.0, 0.5, 0.0], life: Range2([60.0, 90.0]), ..t("humo") }],
             vec![EmitterToml { shape: "ellipse".into(), region: [-8.0, -2.0, 8.0, 2.0], count: -2, ..e("humo", "humo") }],
         ),
         (
-            "✨ Chispas",
+            concat!(fa!(wand_magic_sparkles), " Chispas"),
             vec![PartTypeToml { shape: "spark".into(), size: Range2([0.08, 0.16]), speed: Range2([1.5, 3.0]), direction: Range2([45.0, 135.0]), gravity: 0.1, orientation: Range2([0.0, 360.0]), orientation_incr: 8.0, colors: c(&["#ffffff", "#ffcd75"]), alphas: vec![1.0, 0.0], additive: true, life: Range2([30.0, 50.0]), ..t("chispa") }],
             vec![EmitterToml { region: [-2.0, -2.0, 2.0, 2.0], mode: "burst".into(), count: 12, interval: Range2([40.0, 60.0]), ..e("chispas", "chispa") }],
         ),
         (
-            "❄ Nieve",
+            concat!(fa!(snowflake), " Nieve"),
             vec![PartTypeToml { shape: "snow".into(), size: Range2([0.06, 0.16]), speed: Range2([0.3, 0.7]), direction: Range2([260.0, 280.0]), direction_wiggle: 15.0, orientation: Range2([0.0, 360.0]), orientation_incr: 1.0, colors: c(&["#ffffff"]), alphas: vec![0.0, 0.9, 0.0], life: Range2([200.0, 300.0]), ..t("copo") }],
             vec![EmitterToml { shape: "line".into(), region: [-160.0, -90.0, 160.0, -90.0], count: -3, ..e("cielo", "copo") }],
         ),
         (
-            "🌧 Lluvia",
+            concat!(fa!(cloud_rain), " Lluvia"),
             vec![PartTypeToml { shape: "line".into(), size: Range2([0.12, 0.2]), scale: [1.0, 0.5], speed: Range2([5.0, 7.0]), direction: Range2([255.0, 260.0]), orientation_relative: true, colors: c(&["#73eff7"]), alphas: vec![0.6], life: Range2([35.0, 45.0]), ..t("gota") }],
             vec![EmitterToml { shape: "line".into(), region: [-160.0, -100.0, 200.0, -100.0], count: 3, ..e("nubes", "gota") }],
         ),
         (
-            "💥 Explosión",
+            concat!(fa!(burst), " Explosión"),
             vec![
                 PartTypeToml { shape: "explosion".into(), size: Range2([0.3, 0.5]), size_incr: 0.02, speed: Range2([0.2, 1.0]), direction: Range2([0.0, 360.0]), orientation: Range2([0.0, 360.0]), colors: c(&["#ffffff", "#ffcd75", "#b13e53"]), alphas: vec![1.0, 0.0], additive: true, life: Range2([20.0, 30.0]), death_type: Some("humo_exp".into()), death_count: 1, ..t("bola") },
                 PartTypeToml { shape: "smoke".into(), size: Range2([0.3, 0.5]), size_incr: 0.01, speed: Range2([0.2, 0.4]), direction: Range2([80.0, 100.0]), colors: c(&["#566c86"]), alphas: vec![0.5, 0.0], life: Range2([40.0, 60.0]), ..t("humo_exp") },
@@ -157,7 +157,7 @@ pub fn presets() -> Vec<(&'static str, Vec<PartTypeToml>, Vec<EmitterToml>)> {
             vec![EmitterToml { shape: "ellipse".into(), region: [-6.0, -6.0, 6.0, 6.0], mode: "burst".into(), count: 16, ..e("explosion", "bola") }],
         ),
         (
-            "🔮 Magia",
+            concat!(fa!(wand_sparkles), " Magia"),
             vec![PartTypeToml { shape: "star".into(), size: Range2([0.06, 0.14]), size_wiggle: 0.04, speed: Range2([0.2, 0.6]), direction: Range2([0.0, 360.0]), direction_incr: 3.0, orientation: Range2([0.0, 360.0]), orientation_incr: 4.0, colors: c(&["#41a6f6", "#b55088"]), color_mode: "mix".into(), alphas: vec![0.0, 1.0, 0.0], additive: true, life: Range2([40.0, 70.0]), ..t("brillo") }],
             vec![EmitterToml { shape: "ellipse".into(), distribution: "invgaussian".into(), region: [-16.0, -16.0, 16.0, 16.0], count: 1, ..e("aura", "brillo") }],
         ),
@@ -312,15 +312,15 @@ impl ParticleEditor {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            if ui.button(if self.playing { "⏸ Pausa" } else { "▶ Reproducir" }).clicked() {
+            if ui.button(if self.playing { concat!(fa!(pause), " Pausa") } else { concat!(fa!(play), " Reproducir") }).clicked() {
                 self.playing = !self.playing;
             }
-            if ui.button("⟲ Reiniciar").on_hover_text("vacía el sistema y vuelve a empezar").clicked() {
+            if ui.button(concat!(fa!(rotate_left), " Reiniciar")).on_hover_text("vacía el sistema y vuelve a empezar").clicked() {
                 self.built = None;
                 self.cold = true;
                 self.acc = 0.0;
             }
-            if ui.button("💥 Ráfaga").on_hover_text("vuelve a disparar los emisores de ráfaga").clicked() {
+            if ui.button(concat!(fa!(burst), " Ráfaga")).on_hover_text("vuelve a disparar los emisores de ráfaga").clicked() {
                 self.burst_again();
             }
             ui.label("velocidad");
@@ -438,13 +438,13 @@ impl ParticleEditor {
         let pal = crate::theme::colors(ui.ctx());
         let sprite_ok = |n: &str| p.sprite(n).is_some();
         for e in self.data.validate(&sprite_ok) {
-            ui.colored_label(pal.error, format!("⚠ {e}"));
+            ui.colored_label(pal.error, format!(concat!(fa!(triangle_exclamation), " {e}"), e = e));
         }
         // ---- lists
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.sel, Sel::System, RichText::new("⚙ Sistema").strong());
+            ui.selectable_value(&mut self.sel, Sel::System, RichText::new(concat!(fa!(gear), " Sistema")).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("✚ Añadir preset", |ui| {
+                ui.menu_button(concat!(fa!(plus), " Añadir preset"), |ui| {
                     for (label, types, emitters) in presets() {
                         if ui.button(label).clicked() {
                             self.add_preset(types, emitters);
@@ -469,15 +469,16 @@ impl ParticleEditor {
         let mut action: Option<(bool, usize, u8)> = None; // (is_emitter, index, 0 dup / 1 delete / 2 up)
         for (i, e) in self.data.emitters.iter().enumerate() {
             ui.horizontal(|ui| {
-                let label = format!("{} {}  ·  {} {}", if e.enabled { "◉" } else { "○" }, e.name, if e.mode == "burst" { "ráfaga" } else { "flujo" }, e.count);
+                let label = format!("{} {}  ·  {} {}", if e.enabled { fa!(circle_dot) } else { fa!(circle) }, e.name, if e.mode == "burst" { "ráfaga" } else { "flujo" }, e.count);
+                let label = if e.enabled { RichText::new(label) } else { crate::icons::regular(label) };
                 if ui.selectable_label(self.sel == Sel::Emitter(i), label).clicked() {
                     self.sel = Sel::Emitter(i);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("🗑").on_hover_text("eliminar").clicked() {
+                    if ui.small_button(fa!(trash_can)).on_hover_text("eliminar").clicked() {
                         action = Some((true, i, 1));
                     }
-                    if ui.small_button("⧉").on_hover_text("duplicar").clicked() {
+                    if ui.small_button(fa!(clone)).on_hover_text("duplicar").clicked() {
                         action = Some((true, i, 0));
                     }
                 });
@@ -506,10 +507,10 @@ impl ParticleEditor {
                     self.sel = Sel::Type(i);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("🗑").on_hover_text("eliminar").clicked() {
+                    if ui.small_button(fa!(trash_can)).on_hover_text("eliminar").clicked() {
                         action = Some((false, i, 1));
                     }
-                    if ui.small_button("⧉").on_hover_text("duplicar").clicked() {
+                    if ui.small_button(fa!(clone)).on_hover_text("duplicar").clicked() {
                         action = Some((false, i, 0));
                     }
                 });

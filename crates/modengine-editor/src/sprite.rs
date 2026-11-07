@@ -379,25 +379,25 @@ impl SpriteEditor {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (t, label, tip) in [
-                    (Tool::Pencil, "✏ Lápiz", "pinta con el color elegido (clic derecho: color secundario)"),
-                    (Tool::Eraser, "⌫ Borrar", "deja el píxel transparente"),
-                    (Tool::Fill, "🪣 Rellenar", "rellena la zona del mismo color"),
-                    (Tool::Pick, "💧 Cuentagotas", "toma el color de un píxel"),
-                    (Tool::Origin, "✛ Origen", "fija el punto de origen del sprite"),
+                    (Tool::Pencil, concat!(fa!(pencil), " Lápiz"), "pinta con el color elegido (clic derecho: color secundario)"),
+                    (Tool::Eraser, concat!(fa!(eraser), " Borrar"), "deja el píxel transparente"),
+                    (Tool::Fill, concat!(fa!(fill_drip), " Rellenar"), "rellena la zona del mismo color"),
+                    (Tool::Pick, concat!(fa!(eye_dropper), " Cuentagotas"), "toma el color de un píxel"),
+                    (Tool::Origin, concat!(fa!(crosshairs), " Origen"), "fija el punto de origen del sprite"),
                 ] {
                     ui.selectable_value(&mut self.tool, t, label).on_hover_text(tip);
                 }
                 ui.separator();
                 ui.checkbox(&mut self.grid, "rejilla");
                 ui.checkbox(&mut self.onion, "papel cebolla");
-                if ui.button("↔").on_hover_text("voltear horizontal").clicked() {
+                if ui.button(fa!(arrows_left_right)).on_hover_text("voltear horizontal").clicked() {
                     self.snapshot();
                     for r in &mut self.m.pix[self.frame] {
                         r.reverse();
                     }
                     self.after_change();
                 }
-                if ui.button("↕").on_hover_text("voltear vertical").clicked() {
+                if ui.button(fa!(arrows_up_down)).on_hover_text("voltear vertical").clicked() {
                     self.snapshot();
                     self.m.pix[self.frame].reverse();
                     self.after_change();
@@ -445,7 +445,7 @@ impl SpriteEditor {
             let what = if local > 0 { format!("{what} + {local} del sprite") } else { what };
             ui.label(RichText::new(what).weak());
         });
-        if ui.small_button("🎨 Paletas (Lospec)…").on_hover_text("Descargar de lospec.com, importar y aplicar paletas al proyecto").clicked() {
+        if ui.small_button(concat!(fa!(palette), " Paletas (Lospec)…")).on_hover_text("Descargar de lospec.com, importar y aplicar paletas al proyecto").clicked() {
             crate::palette::open_dialog();
         }
         // palette order (0-9, A-Z, a-z… for imported palettes), then the rest
@@ -470,7 +470,7 @@ impl SpriteEditor {
         };
         ui.label(RichText::new(format!("Izq.: {}   ·   Der.: {}", name(self.color), name(self.color2))).small());
         let foreign = self.m.palette.iter().filter(|(c, col)| base.0.get(c) != Some(col)).count();
-        if !base.1 && foreign > 0 && ui.small_button(format!("🧲 Ajustar {foreign} color(es) propios a la paleta")).on_hover_text("Cambia los colores de este sprite por el más parecido de la paleta del proyecto").clicked() {
+        if !base.1 && foreign > 0 && ui.small_button(format!("{} Ajustar {foreign} color(es) propios a la paleta", fa!(magnet))).on_hover_text("Cambia los colores de este sprite por el más parecido de la paleta del proyecto").clicked() {
             self.snap_to_palette(&base.0);
         }
         ui.horizontal(|ui| {
@@ -599,25 +599,25 @@ impl SpriteEditor {
                 self.frame += 1;
                 self.after_change();
             }
-            if ui.button("⧉ duplicar").clicked() {
+            if ui.button(concat!(fa!(clone), " duplicar")).clicked() {
                 self.snapshot();
                 let f = self.m.pix[self.frame].clone();
                 self.m.pix.insert(self.frame + 1, f);
                 self.frame += 1;
                 self.after_change();
             }
-            if ui.add_enabled(self.m.pix.len() > 1, egui::Button::new("🗑 eliminar")).clicked() {
+            if ui.add_enabled(self.m.pix.len() > 1, egui::Button::new(concat!(fa!(trash_can), " eliminar"))).clicked() {
                 self.snapshot();
                 self.m.pix.remove(self.frame);
                 self.after_change();
             }
-            if ui.add_enabled(self.frame > 0, egui::Button::new("◀")).clicked() {
+            if ui.add_enabled(self.frame > 0, egui::Button::new(fa!(caret_left))).clicked() {
                 self.snapshot();
                 self.m.pix.swap(self.frame, self.frame - 1);
                 self.frame -= 1;
                 self.after_change();
             }
-            if ui.add_enabled(self.frame + 1 < self.m.pix.len(), egui::Button::new("▶")).clicked() {
+            if ui.add_enabled(self.frame + 1 < self.m.pix.len(), egui::Button::new(fa!(caret_right))).clicked() {
                 self.snapshot();
                 self.m.pix.swap(self.frame, self.frame + 1);
                 self.frame += 1;
@@ -631,7 +631,7 @@ impl SpriteEditor {
                 let mut rects = vec![];
                 for f in 0..self.m.pix.len() {
                     let (r, resp) = ui.allocate_exact_size(Vec2::splat(52.0), Sense::click_and_drag());
-                    crate::dnd::source(&resp, || crate::dnd::ListDrag { list: list_id, from: f, label: format!("▣ fotograma {f}") });
+                    crate::dnd::source(&resp, || crate::dnd::ListDrag { list: list_id, from: f, label: format!("{} fotograma {f}", fa!(image)) });
                     rects.push(r);
                     checkerboard(ui.painter(), r, 6.0);
                     if let Some(t) = &self.tex {

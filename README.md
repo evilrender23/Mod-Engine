@@ -218,3 +218,6 @@ Copyright (c) 2026 evilrender23
 
 Si usas Mod Engine o parte de su código en tu proyecto, incluye un crédito visible, por ejemplo:
 "Basado en Mod Engine de evilrender23 (https://github.com/evilrender23)".
+
+Los iconos del editor son de [Font Awesome Free](https://fontawesome.com) 6.7.2 (fuentes bajo
+SIL OFL 1.1, ver [`crates/modengine-editor/assets/fonts/LICENSE-FontAwesome.txt`](crates/modengine-editor/assets/fonts/LICENSE-FontAwesome.txt)).

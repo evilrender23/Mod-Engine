@@ -576,12 +576,12 @@ impl RoomEditor {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             for (t, label, tip) in [
-                (Tool::Paint, "✏ Pintar", "coloca el objeto o tile elegido (clic derecho borra)"),
-                (Tool::Erase, "⌫ Borrar", "quita lo que hay bajo el cursor"),
-                (Tool::Select, "⬚ Mover", "selecciona y mueve instancias libres"),
-                (Tool::Rect, "▭ Rectángulo", "arrastra para rellenar un rectángulo"),
-                (Tool::Fill, "🪣 Rellenar", "rellena la zona conectada"),
-                (Tool::Pick, "💧 Cuentagotas", "toma el objeto o tile bajo el cursor"),
+                (Tool::Paint, concat!(fa!(pencil), " Pintar"), "coloca el objeto o tile elegido (clic derecho borra)"),
+                (Tool::Erase, concat!(fa!(eraser), " Borrar"), "quita lo que hay bajo el cursor"),
+                (Tool::Select, concat!(fa!(vector_square), " Mover"), "selecciona y mueve instancias libres"),
+                (Tool::Rect, concat!(fa!(square), " Rectángulo"), "arrastra para rellenar un rectángulo"),
+                (Tool::Fill, concat!(fa!(fill_drip), " Rellenar"), "rellena la zona conectada"),
+                (Tool::Pick, concat!(fa!(eye_dropper), " Cuentagotas"), "toma el objeto o tile bajo el cursor"),
             ] {
                 ui.selectable_value(&mut self.tool, t, label).on_hover_text(tip);
             }
@@ -589,7 +589,7 @@ impl RoomEditor {
             ui.checkbox(&mut self.snap, "ajustar a rejilla").on_hover_text("sin ajustar, Pintar crea instancias libres en cualquier posición");
             ui.checkbox(&mut self.show_grid, "rejilla");
             ui.checkbox(&mut self.show_view, "cámara");
-            if ui.button("⤢ encajar").clicked() {
+            if ui.button(concat!(fa!(expand), " encajar")).clicked() {
                 self.fitted = false;
             }
             ui.label(RichText::new(format!("{}%", (self.zoom * 100.0).round())).weak());
@@ -640,14 +640,14 @@ impl RoomEditor {
         for i in 0..n {
             let l = &mut self.m.layers[i];
             let row = ui.horizontal(|ui| {
-                let eye = if l.t.visible { "👁" } else { "–" };
+                let eye = if l.t.visible { fa!(eye) } else { "–" };
                 if ui.small_button(eye).on_hover_text("mostrar/ocultar").clicked() {
                     l.t.visible = !l.t.visible;
                 }
                 let icon = match l.t.kind.as_str() {
-                    "tiles" => "▦",
-                    "background" => "🖼",
-                    _ => "◆",
+                    "tiles" => fa!(map),
+                    "background" => fa!(image),
+                    _ => fa!(cube),
                 };
                 let label = format!("{icon} {}", if l.t.name.is_empty() { &l.t.kind } else { &l.t.name });
                 let r = ui.add(egui::Button::selectable(self.layer == i || dragging == Some(i), label.clone()).sense(Sense::click_and_drag())).on_hover_text("arrastra para cambiar el orden");
@@ -663,10 +663,10 @@ impl RoomEditor {
                     }
                 });
                 ui.label(RichText::new(format!("{}", num(l.t.depth))).weak());
-                if ui.small_button("▲").clicked() && i > 0 {
+                if ui.small_button(fa!(caret_up)).clicked() && i > 0 {
                     swap = Some((i, i - 1));
                 }
-                if ui.small_button("▼").clicked() && i + 1 < n {
+                if ui.small_button(fa!(caret_down)).clicked() && i + 1 < n {
                     swap = Some((i, i + 1));
                 }
             });
@@ -737,12 +737,12 @@ impl RoomEditor {
                     let before = l.t.tileset.clone();
                     egui::ComboBox::from_id_salt("tileset").selected_text(l.t.tileset.clone().unwrap_or_else(|| "(ninguno)".into())).show_ui(ui, |ui| {
                         for (s, _) in &sets {
-                            ui.selectable_value(&mut l.t.tileset, Some(s.clone()), format!("▩ {s}"));
+                            ui.selectable_value(&mut l.t.tileset, Some(s.clone()), format!("{} {s}", fa!(table_cells)));
                         }
                         ui.separator();
                         ui.label(RichText::new("frames de un sprite:").weak());
                         for s in &sprites {
-                            ui.selectable_value(&mut l.t.tileset, Some(s.clone()), format!("▣ {s}"));
+                            ui.selectable_value(&mut l.t.tileset, Some(s.clone()), format!("{} {s}", fa!(image)));
                         }
                     });
                     if l.t.tileset != before {
@@ -986,7 +986,7 @@ impl RoomEditor {
 
     fn inspector(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         let Some(si) = self.sel else {
-            ui.label(RichText::new("Con ⬚ Mover selecciona una instancia libre para editar su posición y variables.").weak());
+            ui.label(RichText::new(concat!("Con ", fa!(vector_square), " Mover selecciona una instancia libre para editar su posición y variables.")).weak());
             return;
         };
         let objs = cx.project.object_names();
@@ -1040,7 +1040,7 @@ impl RoomEditor {
                         }
                     }
                     if overridden.is_some() {
-                        if ui.small_button("↺").on_hover_text("volver al valor del objeto").clicked() {
+                        if ui.small_button(fa!(rotate_left)).on_hover_text("volver al valor del objeto").clicked() {
                             changes.push((v.name.clone(), None));
                         }
                     } else {
@@ -1078,7 +1078,7 @@ impl RoomEditor {
                         }
                     }
                 }
-                if ui.small_button("🗑").clicked() {
+                if ui.small_button(fa!(trash_can)).clicked() {
                     remove = Some(k.clone());
                 }
             });
@@ -1771,8 +1771,8 @@ pub(crate) mod tests {
         let (dir, mut h) = room_harness("dnd_layers");
         let kinds = |h: &Harness<St>| h.state().ed.m.layers.iter().map(|l| l.kind().to_string()).collect::<Vec<_>>();
         assert_eq!(kinds(&h), ["background", "background", "instances"]);
-        let from = h.get_by_label("◆ instances").rect().center();
-        let first = h.get_all_by_label("🖼 background").next().unwrap().rect();
+        let from = h.get_by_label(concat!(fa!(cube), " instances")).rect().center();
+        let first = h.get_all_by_label(concat!(fa!(image), " background")).next().unwrap().rect();
         drag(&mut h, from, first.center() - Vec2::new(0.0, 5.0));
         assert_eq!(kinds(&h), ["instances", "background", "background"]);
         let ed = &h.state().ed;

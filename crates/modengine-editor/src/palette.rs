@@ -561,7 +561,7 @@ impl PaletteDialog {
         let screen = ctx.content_rect();
         let resp = egui::Modal::new(egui::Id::unique("palette_dialog")).show(ctx, |ui| {
                 ui.set_width(860.0_f32.min(screen.width() - 60.0));
-                ui.heading("🎨 Paletas (Lospec)");
+                ui.heading(concat!(fa!(palette), " Paletas (Lospec)"));
                 ui.add_space(4.0);
                 self.top(ui);
                 ui.separator();
@@ -603,7 +603,7 @@ impl PaletteDialog {
                 let r = ui.add(egui::TextEdit::singleline(&mut self.slug).hint_text("pear36  o  https://lospec.com/palette-list/pear36").desired_width(400.0));
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let ok = pal::lospec_slug(&self.slug).is_some() && self.pending.is_none();
-                if (ui.add_enabled(ok, egui::Button::new("⬇ Descargar")).clicked() || enter && ok) && ok {
+                if (ui.add_enabled(ok, egui::Button::new(concat!(fa!(download), " Descargar"))).clicked() || enter && ok) && ok {
                     self.start_download();
                 }
                 if self.pending.is_some() {
@@ -617,7 +617,7 @@ impl PaletteDialog {
                 let r = ui.add(egui::TextEdit::singleline(&mut self.file).hint_text("~/Descargas/paleta.gpl  (.hex .gpl .pal .json .png)").desired_width(400.0));
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let path = crate::import::expand(self.file.trim());
-                if (ui.add_enabled(path.is_file(), egui::Button::new("📂 Importar")).clicked() || enter && path.is_file()) && path.is_file() {
+                if (ui.add_enabled(path.is_file(), egui::Button::new(concat!(fa!(folder_open), " Importar"))).clicked() || enter && path.is_file()) && path.is_file() {
                     self.import_file();
                 }
             });
@@ -654,7 +654,7 @@ impl PaletteDialog {
         egui::ScrollArea::vertical().id_salt("palette_list").max_height(h).auto_shrink([false, false]).show(ui, |ui| {
             for i in 0..self.saved.len() {
                 let s = &self.saved[i];
-                let label = if s.path.is_none() { format!("★ {}  ·  {} (por defecto)", s.pal.name, s.pal.colors.len()) } else { format!("{}  ·  {}", s.pal.name, s.pal.colors.len()) };
+                let label = if s.path.is_none() { format!(concat!(fa!(star), " {}  ·  {} (por defecto)"), s.pal.name, s.pal.colors.len()) } else { format!("{}  ·  {}", s.pal.name, s.pal.colors.len()) };
                 let colors = s.pal.colors.clone();
                 let r = ui.selectable_label(self.sel == i, label);
                 if r.clicked() {
@@ -683,7 +683,7 @@ impl PaletteDialog {
         swatch_grid(ui, &entries, '\0', '\0', 30.0, true);
         ui.add_space(4.0);
         ui.label(RichText::new("El carácter de cada color (abajo a la derecha) es el que usan los sprites: 0-9, A-Z, a-z…").weak().small());
-        if s.path.is_some() && ui.small_button("🗑 Quitar de la lista").clicked() {
+        if s.path.is_some() && ui.small_button(concat!(fa!(trash_can), " Quitar de la lista")).clicked() {
             if let Some(p) = &s.path {
                 let _ = std::fs::remove_file(p);
             }
@@ -774,7 +774,7 @@ impl PaletteDialog {
                 }
             }
             if let Some(b) = last_backup(&p.dir) {
-                if ui.button("↶ Deshacer la última aplicación").on_hover_text(format!("Restaura game.toml y los sprites desde {}", b.display())).clicked() {
+                if ui.button(concat!(fa!(rotate_left), " Deshacer la última aplicación")).on_hover_text(format!("Restaura game.toml y los sprites desde {}", b.display())).clicked() {
                     match restore(&p.dir, &b) {
                         Ok(n) => {
                             reload_game(p);
@@ -945,7 +945,7 @@ mod tests {
         h.run_steps(3);
         assert!(is_open());
         h.get_by_label_contains("Tiny 3");
-        h.get_by_label_contains("★ Pear36");
+        h.get_by_label_contains(concat!(fa!(star), " Pear36"));
         let b = h.get_by_label("Aplicar al proyecto");
         assert!(b.rect().max.y < 900.0, "the dialog fits: {:?}", b.rect());
         b.click();
@@ -955,7 +955,7 @@ mod tests {
         assert!(h.state().log.iter().any(|l| l.text.contains("Pear36 aplicada")), "merge Pear36 into the example");
         assert!(h.state().p.game.palette.len() > 36);
         assert_eq!(h.state().p.game.palette["k"], "#1a1c2c", "merge keeps the example's letters");
-        h.get_by_label("↶ Deshacer la última aplicación").click();
+        h.get_by_label(concat!(fa!(rotate_left), " Deshacer la última aplicación")).click();
         h.run_steps(3);
         assert_eq!(h.state().p.game.palette.len(), 17);
         h.get_by_label("Cerrar").click();

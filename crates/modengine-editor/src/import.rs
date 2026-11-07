@@ -24,6 +24,15 @@ use modengine::import::sprite_toml;
 
 /// Every name in use in the project and what has it (`None`: an object or a room). Assets
 /// share one namespace.
+/// Font Awesome icon for an importable kind (UI only; the engine's `Kind::icon` stays plain).
+pub fn kind_icon(k: Kind) -> &'static str {
+    match k {
+        Kind::Sprite => fa!(image),
+        Kind::Sound => fa!(music),
+        Kind::Font => fa!(font),
+    }
+}
+
 pub fn owners(p: &Project) -> BTreeMap<String, Option<Kind>> {
     let mut m = BTreeMap::new();
     for n in p.taken_names() {
@@ -524,12 +533,12 @@ impl ImportDialog {
             ui.colored_label(crate::theme::colors(ui.ctx()).error, m);
         }
         ui.horizontal(|ui| {
-            if ui.add_enabled(self.dir.parent().is_some(), egui::Button::new("⬆")).on_hover_text("carpeta de arriba").clicked() {
+            if ui.add_enabled(self.dir.parent().is_some(), egui::Button::new(fa!(arrow_up))).on_hover_text("carpeta de arriba").clicked() {
                 if let Some(p) = self.dir.parent().map(Path::to_path_buf) {
                     self.set_dir(&p);
                 }
             }
-            if ui.button("⌂").on_hover_text("carpeta personal").clicked() {
+            if ui.button(fa!(house)).on_hover_text("carpeta personal").clicked() {
                 self.set_dir(&expand("~"));
             }
             let shown = self.filter.map(Kind::plural).unwrap_or("Todo lo importable");
@@ -551,8 +560,8 @@ impl ImportDialog {
                 for e in &self.entries {
                     let picked = self.picked.contains(&e.path);
                     let text = match e.kind {
-                        None => format!("📁 {}", e.name),
-                        Some(k) => format!("{} {}", k.icon(), e.name),
+                        None => format!(concat!(fa!(folder), " {}"), e.name),
+                        Some(k) => format!("{} {}", kind_icon(k), e.name),
                     };
                     let r = ui.add(egui::Button::selectable(picked, text).frame(false));
                     if e.is_dir {
@@ -621,7 +630,7 @@ impl ImportDialog {
                         }
                         ui.label(RichText::new(info).weak()).on_hover_text(it.src.display().to_string());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✕").on_hover_text("quitar de la lista").clicked() {
+                            if ui.small_button(fa!(xmark)).on_hover_text("quitar de la lista").clicked() {
                                 remove = Some(i);
                             }
                         });
@@ -634,14 +643,14 @@ impl ImportDialog {
                     }
                     if it.include || it.kind.is_none() {
                         for e in &st.errors {
-                            ui.colored_label(pal.error, format!("✖ {e}"));
+                            ui.colored_label(pal.error, format!(concat!(fa!(xmark), " {e}"), e = e));
                         }
                         for w in &st.warnings {
-                            ui.colored_label(warn, format!("⚠ {w}"));
+                            ui.colored_label(warn, format!(concat!(fa!(triangle_exclamation), " {w}"), w = w));
                         }
                     }
                     if let Some(e) = &it.failed {
-                        ui.colored_label(pal.error, format!("✖ no se pudo importar: {e}"));
+                        ui.colored_label(pal.error, format!(concat!(fa!(xmark), " no se pudo importar: {e}"), e = e));
                     }
                 });
             }
@@ -1044,7 +1053,7 @@ mod tests {
         h.get_by_label("Importar assets");
         h.get_by_label("= 4 frames de 16×16 px");
         h.get_by_label("tira horizontal");
-        h.get_by_label("▣ hero_strip4.png"); // the browser opened the file's folder
+        h.get_by_label(concat!(fa!(image), " hero_strip4.png")); // the browser opened the file's folder
         assert_eq!(h.state().d.ready(&h.state().owners), (true, 2), "{:?}", h.state().d.statuses(&h.state().owners));
         let b = h.get_by_label("Importar 2 ficheros");
         assert!(b.rect().max.y < 800.0, "the dialog fits in the window: {:?}", b.rect());

@@ -274,7 +274,7 @@ impl FontEditor {
                 ui.add(egui::DragValue::new(&mut r[1]).range(0..=0x10FFFF));
                 let show = |c: u32| char::from_u32(c).filter(|c| !c.is_control()).map(|c| c.to_string()).unwrap_or_else(|| "·".into());
                 ui.label(RichText::new(format!("{} … {}", show(r[0]), show(r[1]))).weak());
-                if ui.small_button("🗑").clicked() {
+                if ui.small_button(fa!(trash_can)).clicked() {
                     remove = Some(i);
                 }
             });
@@ -319,7 +319,7 @@ impl FontEditor {
                 files.sort();
                 for n in files {
                     let sel = self.pending.is_none() && self.t.file.as_deref() == Some(n.as_str());
-                    if ui.selectable_label(sel, format!("📁 {n}")).on_hover_text("del proyecto").clicked() {
+                    if ui.selectable_label(sel, format!(concat!(fa!(folder), " {n}"), n = n)).on_hover_text("del proyecto").clicked() {
                         pick_project = Some(n);
                     }
                 }
@@ -327,7 +327,7 @@ impl FontEditor {
             let list: Vec<&PathBuf> = system_fonts().iter().filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains(&f))).take(400).collect();
             for sp in list {
                 let n = sp.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if ui.selectable_label(self.pending.as_ref() == Some(sp), format!("🖥 {n}")).on_hover_text(sp.display().to_string()).clicked() {
+                if ui.selectable_label(self.pending.as_ref() == Some(sp), format!(concat!(fa!(desktop), " {n}"), n = n)).on_hover_text(sp.display().to_string()).clicked() {
                     pick = Some(sp.clone());
                 }
             }

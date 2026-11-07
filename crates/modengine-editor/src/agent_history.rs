@@ -291,7 +291,7 @@ pub fn to_markdown(c: &Conversation) -> String {
                 t += &format!("📎 {}\n\n", names.join(", "));
             }
             Entry::Text(x) => t += &format!("{}\n\n", x.trim()),
-            Entry::Tool(l) => t += &format!("- {} **{}** {}\n", l.icon, l.verb, l.detail),
+            Entry::Tool(l) => t += &format!("- {} **{}** {}\n", export_icon(l.icon), l.verb, l.detail),
             Entry::Notice(n, tone) => {
                 let icon = match tone {
                     Tone::Muted => "ℹ",
@@ -312,6 +312,27 @@ pub fn to_markdown(c: &Conversation) -> String {
         }
     }
     t
+}
+
+/// A tool-line icon for the Markdown export: Font Awesome glyphs (private-use characters) only
+/// render in the editor, so they go back to the Unicode they replaced; old emoji pass through.
+pub fn export_icon(icon: &str) -> &str {
+    match icon {
+        fa!(pen) => "✎",
+        fa!(file) => "📄",
+        fa!(eye) => "👁",
+        fa!(magnifying_glass) => "🔍",
+        fa!(globe) => "🌐",
+        fa!(bars) | fa!(terminal) => "☰",
+        fa!(gear) => "⚙",
+        fa!(trash_can) => "🗑",
+        fa!(folder) => "📁",
+        fa!(image) => "🖼",
+        fa!(link) => "🔗",
+        fa!(vector_square) => "⬚",
+        i if i.chars().any(|c| ('\u{e000}'..='\u{f8ff}').contains(&c)) => "•",
+        i => i,
+    }
 }
 
 /// The transcript as plain text for a new session that must carry on from it (agents that
@@ -442,8 +463,8 @@ mod tests {
             updated,
             entries: vec![
                 Entry::User("haz que el jugador salte más".into()),
-                Entry::Attached(vec![Attachment::file(Path::new("/tmp")), Attachment::url("https://example.com/doc"), Attachment::text("✎", "Nota", "hola")]),
-                Entry::Tool(ToolLine { icon: "✎", verb: "Editar".into(), detail: "objects/player.ms".into() }),
+                Entry::Attached(vec![Attachment::file(Path::new("/tmp")), Attachment::url("https://example.com/doc"), Attachment::text(fa!(pen), "Nota", "hola")]),
+                Entry::Tool(ToolLine { icon: fa!(pen), verb: "Editar".into(), detail: "objects/player.ms".into() }),
                 Entry::Text("He subido `jump_speed` a **12**.".into()),
                 Entry::Changes { turn: 1, files: vec![] },
                 Entry::Divider("Conversación compactada".into()),
@@ -469,7 +490,7 @@ mod tests {
         store.save(&b).unwrap();
         let back = store.load("a1").unwrap();
         assert_eq!(back, a);
-        assert!(matches!(&back.entries[1], Entry::Attached(v) if v[1].kind == AttachKind::Url && v[2].icon == "✎"));
+        assert!(matches!(&back.entries[1], Entry::Attached(v) if v[1].kind == AttachKind::Url && v[2].icon == fa!(pen)));
         let list = store.list();
         assert_eq!(list.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b2", "a1"]);
         assert_eq!((list[0].messages, list[0].cost), (1, 0.12));

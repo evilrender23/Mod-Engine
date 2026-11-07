@@ -49,7 +49,7 @@ impl NoteEditor {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, _cx: &mut Cx) {
         ui.horizontal(|ui| {
-            for (v, label) in [(View::Edit, "✎ Texto"), (View::Split, "◫ Dividido"), (View::Preview, "👁 Vista previa")] {
+            for (v, label) in [(View::Edit, concat!(fa!(pen), " Texto")), (View::Split, concat!(fa!(table_columns), " Dividido")), (View::Preview, concat!(fa!(eye), " Vista previa"))] {
                 ui.selectable_value(&mut self.view, v, label);
             }
             ui.separator();

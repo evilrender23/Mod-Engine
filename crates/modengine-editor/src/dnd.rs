@@ -158,16 +158,16 @@ pub fn insert_line(ui: &Ui, rects: &[Rect], to: usize, vertical: bool, span: egu
 /// Icon used for an asset in ghosts and drop hints.
 pub fn icon(o: &Open) -> &'static str {
     match o {
-        Open::Room(_) => "▦",
-        Open::Object(_) => "◆",
-        Open::Sprite(_) => "▣",
-        Open::Sound(_) => "♪",
-        Open::Script(_) => "✎",
-        Open::Font(_) => "🗛",
-        Open::Note(_) => "🗒",
-        Open::TileSet(_) => "▩",
-        Open::Data(_) => "▤",
-        Open::Settings => "⚙",
+        Open::Room(_) => fa!(map),
+        Open::Object(_) => fa!(cube),
+        Open::Sprite(_) => fa!(image),
+        Open::Sound(_) => fa!(music),
+        Open::Script(_) => fa!(pen),
+        Open::Font(_) => fa!(font),
+        Open::Note(_) => fa!(note_sticky),
+        Open::TileSet(_) => fa!(table_cells),
+        Open::Data(_) => fa!(table),
+        Open::Settings => fa!(gear),
         Open::Anim(k, _) => k.icon(),
         Open::Fx(k, _) => k.icon(),
     }
@@ -177,7 +177,7 @@ pub fn asset_label(o: &Open) -> String {
     match o {
         Open::Room(n) | Open::Object(n) | Open::Sprite(n) | Open::Sound(n) | Open::Script(n) => format!("{} {n}", icon(o)),
         Open::Font(n) | Open::Note(n) | Open::TileSet(n) | Open::Data(n) => format!("{} {n}", icon(o)),
-        Open::Settings => "⚙ Ajustes".into(),
+        Open::Settings => concat!(fa!(gear), " Ajustes").into(),
         Open::Anim(_, n) => format!("{} {n}", icon(o)),
         Open::Fx(_, n) => format!("{} {n}", icon(o)),
     }

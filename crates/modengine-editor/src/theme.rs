@@ -253,18 +253,31 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     });
 }
 
-/// Use Noto Sans (closest metric match to Segoe/SF that Linux usually ships) for the UI
-/// when it's installed; otherwise keep egui's built-in font.
+/// Use Noto Sans (closest metric match to Segoe/SF that Linux usually ships) for the UI when
+/// it's installed, otherwise egui's built-in font; and Font Awesome for the icons
+/// ([`crate::icons`]): solid right after the text font in every family (before egui's own
+/// icon fonts), the outlined style in its own family.
 pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
     let candidates = [
         "/usr/share/fonts/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
     ];
-    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else { return };
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert("ui-sans".into(), egui::FontData::from_owned(bytes).into());
-    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "ui-sans".into());
+    if let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) {
+        fonts.font_data.insert("ui-sans".into(), egui::FontData::from_owned(bytes).into());
+        fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "ui-sans".into());
+    }
+    let fa = |bytes: &'static [u8]| std::sync::Arc::new(egui::FontData::from_static(bytes).tweak(egui::FontTweak { scale: 0.9, ..Default::default() }));
+    fonts.font_data.insert("fa-solid".into(), fa(include_bytes!("../assets/fonts/fa-solid-900.ttf")));
+    fonts.font_data.insert(crate::icons::REGULAR.into(), fa(include_bytes!("../assets/fonts/fa-regular-400.ttf")));
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let list = fonts.families.entry(family).or_default();
+        list.insert(1.min(list.len()), "fa-solid".into());
+    }
+    let mut regular = vec![crate::icons::REGULAR.to_string()];
+    regular.extend(fonts.families[&FontFamily::Proportional].iter().cloned());
+    fonts.families.insert(FontFamily::Name(crate::icons::REGULAR.into()), regular);
     ctx.set_fonts(fonts);
 }
 

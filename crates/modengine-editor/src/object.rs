@@ -171,7 +171,7 @@ impl ObjectEditor {
                             }
                         });
                         if let Some(s) = &sel {
-                            if ui.small_button("✎").on_hover_text("editar sprite").clicked() {
+                            if ui.small_button(fa!(pen)).on_hover_text("editar sprite").clicked() {
                                 cx.open.push(Open::Sprite(s.clone()));
                             }
                         }
@@ -277,7 +277,7 @@ impl ObjectEditor {
         for (i, item) in m.items.iter().enumerate() {
             if let ItemKind::Event { name, arg, .. } = &item.kind {
                 let s = Sel::Event(name.clone(), arg.clone());
-                let label = format!("⚡ {}", event_label(name, arg));
+                let label = format!("{} {}", fa!(bolt), event_label(name, arg));
                 let dragged = crate::dnd::dragging_from(ui.ctx(), ev_list) == Some(ev_rows.len());
                 let r = ui.add(egui::Button::selectable(self.sel.as_ref() == Some(&s) || dragged, label.clone()).sense(Sense::click_and_drag()));
                 crate::dnd::source(&r, || crate::dnd::ListDrag { list: ev_list, from: ev_rows.len(), label });
@@ -324,7 +324,7 @@ impl ObjectEditor {
         for (i, item) in m.items.iter().enumerate() {
             if let ItemKind::Method { name, params, .. } = &item.kind {
                 let s = Sel::Method(name.clone());
-                let label = format!("ƒ {name}({params})");
+                let label = format!("{} {name}({params})", fa!(code));
                 let dragged = crate::dnd::dragging_from(ui.ctx(), fn_list) == Some(fn_rows.len());
                 let r = ui.add(egui::Button::selectable(self.sel.as_ref() == Some(&s) || dragged, label.clone()).sense(Sense::click_and_drag()));
                 crate::dnd::source(&r, || crate::dnd::ListDrag { list: fn_list, from: fn_rows.len(), label });
@@ -349,7 +349,7 @@ impl ObjectEditor {
         }
         ui.separator();
         let vars = m.items.iter().filter(|i| matches!(&i.kind, ItemKind::Prop { name, .. } if !KNOWN.contains(&name.as_str()))).count();
-        if ui.add(egui::Button::selectable(self.sel == Some(Sel::Vars), format!("𝑥 Variables ({vars})"))).clicked() {
+        if ui.add(egui::Button::selectable(self.sel == Some(Sel::Vars), format!("{} Variables ({vars})", fa!(sliders)))).clicked() {
             self.sel = Some(Sel::Vars);
         }
         if let Some(i) = delete {
@@ -482,7 +482,7 @@ impl ObjectEditor {
                         }
                     }
                 });
-                if ui.small_button("🗑").on_hover_text(if parent_decl.is_some() { "quitar la sobrescritura" } else { "eliminar variable" }).clicked() {
+                if ui.small_button(fa!(trash_can)).on_hover_text(if parent_decl.is_some() { "quitar la sobrescritura" } else { "eliminar variable" }).clicked() {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -774,8 +774,8 @@ mod tests {
             st,
         );
         h.run_steps(3);
-        let from = h.get_by_label("⚡ alarm(0)").rect().center();
-        let step = h.get_by_label("⚡ step").rect();
+        let from = h.get_by_label(concat!(fa!(bolt), " alarm(0)")).rect().center();
+        let step = h.get_by_label(concat!(fa!(bolt), " step")).rect();
         crate::room::tests::drag(&mut h, from, step.center() - Vec2::new(0.0, 5.0));
         let p = &h.state().project;
         let o = p.object("Player").unwrap();

@@ -26,24 +26,24 @@ const fn row(label: &'static str, icon: &'static str, key: Option<Key>, new: Opt
 /// The Crear menu, alphabetical like GameMaker's. GameMaker uses Alt+S for both Sound and
 /// Sprite; here Sprite is Alt+I (imagen) so every shortcut is unambiguous.
 pub const CREATE: &[CreateRow] = &[
-    row("Curva de animación", "📈", Some(Key::J), Some(NewKind::Anim(AnimKind::Curve))),
-    row("Extensión", "🧩", Some(Key::E), Some(NewKind::Fx(crate::fx::FxKind::Extension))),
-    row("Fuente", "🗛", Some(Key::F), Some(NewKind::Font)),
-    row("Idioma", "🌐", None, Some(NewKind::Fx(crate::fx::FxKind::Language))),
-    row("Línea de tiempo", "⏱", Some(Key::T), Some(NewKind::Anim(AnimKind::Timeline))),
-    row("Nota", "🗒", Some(Key::N), Some(NewKind::Note)),
-    row("Objeto", "◆", Some(Key::O), Some(NewKind::Object)),
-    row("Room", "▦", Some(Key::R), Some(NewKind::Room)),
-    row("Script", "✎", Some(Key::C), Some(NewKind::Script)),
-    row("Secuencia", "🎞", Some(Key::G), Some(NewKind::Anim(AnimKind::Sequence))),
-    row("Shader", "🌈", Some(Key::A), Some(NewKind::Fx(crate::fx::FxKind::Shader))),
-    row("Sistema de partículas", "✨", Some(Key::K), Some(NewKind::Fx(crate::fx::FxKind::Particles))),
-    row("Sonido", "♪", Some(Key::S), Some(NewKind::Sound)),
-    row("Sprite", "▣", Some(Key::I), Some(NewKind::PixelSprite)),
-    row("Sprite desde un PNG", "▣", None, Some(NewKind::PngSprite)),
-    row("Tabla de datos", "▤", None, Some(NewKind::Data)),
-    row("Tile set", "▩", Some(Key::B), Some(NewKind::TileSet)),
-    row("Trayectoria", "〰", Some(Key::P), Some(NewKind::Anim(AnimKind::Path))),
+    row("Curva de animación", fa!(chart_line), Some(Key::J), Some(NewKind::Anim(AnimKind::Curve))),
+    row("Extensión", fa!(puzzle_piece), Some(Key::E), Some(NewKind::Fx(crate::fx::FxKind::Extension))),
+    row("Fuente", fa!(font), Some(Key::F), Some(NewKind::Font)),
+    row("Idioma", fa!(globe), None, Some(NewKind::Fx(crate::fx::FxKind::Language))),
+    row("Línea de tiempo", fa!(stopwatch), Some(Key::T), Some(NewKind::Anim(AnimKind::Timeline))),
+    row("Nota", fa!(note_sticky), Some(Key::N), Some(NewKind::Note)),
+    row("Objeto", fa!(cube), Some(Key::O), Some(NewKind::Object)),
+    row("Room", fa!(map), Some(Key::R), Some(NewKind::Room)),
+    row("Script", fa!(pen), Some(Key::C), Some(NewKind::Script)),
+    row("Secuencia", fa!(film), Some(Key::G), Some(NewKind::Anim(AnimKind::Sequence))),
+    row("Shader", fa!(circle_half_stroke), Some(Key::A), Some(NewKind::Fx(crate::fx::FxKind::Shader))),
+    row("Sistema de partículas", fa!(wand_magic_sparkles), Some(Key::K), Some(NewKind::Fx(crate::fx::FxKind::Particles))),
+    row("Sonido", fa!(music), Some(Key::S), Some(NewKind::Sound)),
+    row("Sprite", fa!(image), Some(Key::I), Some(NewKind::PixelSprite)),
+    row("Sprite desde un PNG", fa!(image), None, Some(NewKind::PngSprite)),
+    row("Tabla de datos", fa!(table), None, Some(NewKind::Data)),
+    row("Tile set", fa!(table_cells), Some(Key::B), Some(NewKind::TileSet)),
+    row("Trayectoria", fa!(route), Some(Key::P), Some(NewKind::Anim(AnimKind::Path))),
 ];
 
 pub fn shortcut_text(key: Key) -> String {
@@ -243,7 +243,7 @@ fn room_rows(p: &Project) -> Vec<Row> {
     let start = p.game.game.start_room.clone();
     p.room_names()
         .into_iter()
-        .map(|r| Row { label: if start.as_deref() == Some(r.as_str()) { format!("{r}  ★") } else { r.clone() }, ..Row::plain(&r, Open::Room(r.clone())) })
+        .map(|r| Row { label: if start.as_deref() == Some(r.as_str()) { format!("{r}  {}", fa!(star)) } else { r.clone() }, ..Row::plain(&r, Open::Room(r.clone())) })
         .collect()
 }
 

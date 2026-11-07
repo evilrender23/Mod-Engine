@@ -184,18 +184,18 @@ impl Tab {
     /// Title bar text of the editor's workspace window.
     pub fn window_title(&self) -> String {
         match self {
-            Tab::Room(e) => format!("▦ Room: {}", e.name),
-            Tab::Object(e) => format!("◆ Objeto: {}", e.name),
-            Tab::Sprite(e) => format!("▣ Sprite: {}", e.name),
-            Tab::Sound(e) => format!("♪ Sonido: {}", e.name),
-            Tab::Script(e) => format!("✎ Script: {}", e.rel),
-            Tab::Font(e) => format!("🗛 Fuente: {}", e.name),
-            Tab::Note(e) => format!("🗒 Nota: {}", e.name),
-            Tab::TileSet(e) => format!("▩ Tile set: {}", e.name),
-            Tab::Data(e) => format!("▤ Tabla de datos: {}", e.name),
+            Tab::Room(e) => format!(concat!(fa!(map), " Room: {}"), e.name),
+            Tab::Object(e) => format!(concat!(fa!(cube), " Objeto: {}"), e.name),
+            Tab::Sprite(e) => format!(concat!(fa!(image), " Sprite: {}"), e.name),
+            Tab::Sound(e) => format!(concat!(fa!(music), " Sonido: {}"), e.name),
+            Tab::Script(e) => format!(concat!(fa!(pen), " Script: {}"), e.rel),
+            Tab::Font(e) => format!(concat!(fa!(font), " Fuente: {}"), e.name),
+            Tab::Note(e) => format!(concat!(fa!(note_sticky), " Nota: {}"), e.name),
+            Tab::TileSet(e) => format!(concat!(fa!(table_cells), " Tile set: {}"), e.name),
+            Tab::Data(e) => format!(concat!(fa!(table), " Tabla de datos: {}"), e.name),
             Tab::Anim(e) => e.title(),
             Tab::Fx(e) => e.title(),
-            Tab::Settings(_) => "⚙ Ajustes del juego".into(),
+            Tab::Settings(_) => concat!(fa!(gear), " Ajustes del juego").into(),
         }
     }
 
@@ -941,11 +941,11 @@ impl EditorApp {
     fn menu(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("Archivo", |ui| {
-                if ui.button("＋ Nuevo proyecto…    Ctrl+Mayús+N").clicked() {
+                if ui.button(concat!(fa!(plus), " Nuevo proyecto…    Ctrl+Mayús+N")).clicked() {
                     self.start.open_new_dialog();
                     ui.close();
                 }
-                if ui.button("📂 Abrir proyecto…    Ctrl+O").clicked() {
+                if ui.button(concat!(fa!(folder_open), " Abrir proyecto…    Ctrl+O")).clicked() {
                     self.start.open_browser(None);
                     ui.close();
                 }
@@ -955,7 +955,7 @@ impl EditorApp {
                         self.request_switch(Some(p));
                     }
                 });
-                if ui.button("🗁 Mostrar en el gestor de archivos").clicked() {
+                if ui.button(concat!(fa!(folder_open), " Mostrar en el gestor de archivos")).clicked() {
                     if let Some(p) = &self.project {
                         if let Err(e) = crate::projects::show_in_file_manager(&p.dir) {
                             self.info(LogKind::Error, e);
@@ -972,16 +972,16 @@ impl EditorApp {
                     self.open_import(&[], None);
                     ui.close();
                 }
-                if ui.button("🎨 Paletas (Lospec)…").on_hover_text("Descargar o importar paletas y aplicarlas al proyecto").clicked() {
+                if ui.button(concat!(fa!(palette), " Paletas (Lospec)…")).on_hover_text("Descargar o importar paletas y aplicarlas al proyecto").clicked() {
                     crate::palette::open_dialog();
                     ui.close();
                 }
-                if ui.button("🛒 Tienda de assets (OpenGameArt)…").on_hover_text("Buscar e importar sprites, sonidos y fuentes gratuitos, con sus créditos").clicked() {
+                if ui.button(concat!(fa!(cart_shopping), " Tienda de assets (OpenGameArt)…")).on_hover_text("Buscar e importar sprites, sonidos y fuentes gratuitos, con sus créditos").clicked() {
                     crate::store::open_dialog();
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("📦 Exportar…").on_hover_text("Crear el juego para Windows (.exe), Linux o Android (.apk)").clicked() {
+                if ui.button(concat!(fa!(box), " Exportar…")).on_hover_text("Crear el juego para Windows (.exe), Linux o Android (.apk)").clicked() {
                     self.save_all();
                     crate::export::open_dialog();
                     ui.close();
@@ -1003,24 +1003,24 @@ impl EditorApp {
                 }
             });
             ui.menu_button("Juego", |ui| {
-                if ui.button("▶ Ejecutar    F5").clicked() {
+                if ui.button(concat!(fa!(play), " Ejecutar    F5")).clicked() {
                     self.run_game();
                     ui.close();
                 }
-                if ui.button("▶▶ Ejecutar 2 instancias").on_hover_text("multijugador: dos copias del juego, una al lado de la otra (en una pulsa H para ser host y en la otra J para unirte)").clicked() {
+                if ui.button(concat!(fa!(play), fa!(play), " Ejecutar 2 instancias")).on_hover_text("multijugador: dos copias del juego, una al lado de la otra (en una pulsa H para ser host y en la otra J para unirte)").clicked() {
                     self.run_games(2);
                     ui.close();
                 }
-                if ui.button("✔ Comprobar    F6").clicked() {
+                if ui.button(concat!(fa!(check), " Comprobar    F6")).clicked() {
                     self.check(true);
                     ui.close();
                 }
-                if ui.add_enabled(self.runner.is_some(), egui::Button::new("■ Detener")).clicked() {
+                if ui.add_enabled(self.runner.is_some(), egui::Button::new(concat!(fa!(stop), " Detener"))).clicked() {
                     self.stop_game();
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("⚙ Ajustes del juego").clicked() {
+                if ui.button(concat!(fa!(gear), " Ajustes del juego")).clicked() {
                     self.open(Open::Settings);
                     ui.close();
                 }
@@ -1071,7 +1071,7 @@ impl EditorApp {
                 for (i, label) in ["Inspector", "Navegador de assets", "Salida", "Agente"].into_iter().enumerate() {
                     ui.checkbox(&mut self.docks[i], label);
                 }
-                if ui.button("🛒 Tienda de assets").clicked() {
+                if ui.button(concat!(fa!(cart_shopping), " Tienda de assets")).clicked() {
                     crate::store::open_dialog();
                     ui.close();
                 }
@@ -1102,23 +1102,23 @@ impl EditorApp {
             });
             ui.add_space(20.0);
             let running = self.runner.is_some();
-            if ui.add(crate::theme::primary_button(ui, if running { "⟳ Reiniciar" } else { "▶ Ejecutar" })).on_hover_text("F5: guarda todo y lanza el juego").clicked() {
+            if ui.add(crate::theme::primary_button(ui, if running { concat!(fa!(arrows_rotate), " Reiniciar") } else { concat!(fa!(play), " Ejecutar") })).on_hover_text("F5: guarda todo y lanza el juego").clicked() {
                 self.run_game();
             }
-            if running && ui.button("■ Detener").clicked() {
+            if running && ui.button(concat!(fa!(stop), " Detener")).clicked() {
                 self.stop_game();
             }
-            if ui.button("✔ Comprobar").on_hover_text("F6: carga el proyecto y ejecuta 300 pasos sin ventana").clicked() {
+            if ui.button(concat!(fa!(check), " Comprobar")).on_hover_text("F6: carga el proyecto y ejecuta 300 pasos sin ventana").clicked() {
                 self.check(true);
             }
-            if ui.button("📦 Exportar").on_hover_text("Crear el juego para Windows, Linux o Android").clicked() {
+            if ui.button(concat!(fa!(box), " Exportar")).on_hover_text("Crear el juego para Windows, Linux o Android").clicked() {
                 self.save_all();
                 crate::export::open_dialog();
             }
-            if ui.button("🛒 Tienda").on_hover_text("Tienda de assets gratuitos (OpenGameArt.org)").clicked() {
+            if ui.button(concat!(fa!(cart_shopping), " Tienda")).on_hover_text("Tienda de assets gratuitos (OpenGameArt.org)").clicked() {
                 crate::store::open_dialog();
             }
-            ui.toggle_value(&mut self.docks[3], "✦ Agente").on_hover_text("Panel del agente de programación (Claude Code, Antigravity o Codex)");
+            ui.toggle_value(&mut self.docks[3], concat!(fa!(wand_magic_sparkles), " Agente")).on_hover_text("Panel del agente de programación (Claude Code, Antigravity o Codex)");
             if let Some(p) = &self.project {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new(p.dir.display().to_string()).weak());
@@ -1132,7 +1132,7 @@ impl EditorApp {
         let open = *self.folded.get(key).unwrap_or(&true);
         let mut new_open = open;
         ui.horizontal(|ui| {
-            let arrow = if open { "▾" } else { "▸" };
+            let arrow = if open { fa!(caret_down) } else { fa!(caret_right) };
             let head = ui.add(egui::Label::new(RichText::new(format!("{arrow} {title}")).strong()).sense(Sense::click()));
             if head.clicked() {
                 new_open = !open;
@@ -1160,7 +1160,7 @@ impl EditorApp {
                         }
                     }
                     if let Some(k) = import {
-                        if ui.small_button("⬇").on_hover_text(crate::import::menu_label(k)).clicked() {
+                        if ui.small_button(fa!(download)).on_hover_text(crate::import::menu_label(k)).clicked() {
                             self.open_import(&[], Some(k));
                         }
                     }
@@ -1249,7 +1249,7 @@ impl EditorApp {
 
     fn asset_browser(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("🔍");
+            ui.label(fa!(magnifying_glass));
             let r = ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filtrar  (Ctrl+F)").desired_width(f32::INFINITY));
             if std::mem::take(&mut self.focus_filter) {
                 r.request_focus();
@@ -1275,7 +1275,7 @@ impl EditorApp {
                 }
             }
             ui.add_space(6.0);
-            if ui.button("⚙ Ajustes del juego").clicked() {
+            if ui.button(concat!(fa!(gear), " Ajustes del juego")).clicked() {
                 self.open(Open::Settings);
             }
             // right click on the empty space below: the Crear menu
@@ -1389,19 +1389,7 @@ impl EditorApp {
                 if let Some(t) = preview_sprite.as_deref().and_then(|s| self.tex.get(ui.ctx(), p, s)) {
                     t.draw_fit(ui.painter(), 0, r.shrink(4.0));
                 } else {
-                    let icon = match &what {
-                        Open::Room(_) => "▦",
-                        Open::Sound(_) => "♪",
-                        Open::Script(_) => "✎",
-                        Open::Font(_) => "🗛",
-                        Open::Note(_) => "🗒",
-                        Open::TileSet(_) => "▩",
-                        Open::Data(_) => "▤",
-                        Open::Settings => "⚙",
-                        Open::Anim(k, _) => k.icon(),
-                        Open::Fx(k, _) => k.icon(),
-                        _ => "◆",
-                    };
+                    let icon = crate::dnd::icon(&what);
                     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(26.0), ui.visuals().text_color());
                 }
                 ui.vertical(|ui| {
@@ -1480,7 +1468,7 @@ impl EditorApp {
                                 }
                             }
                             let start = p.game.game.start_room.as_deref() == Some(n.as_str());
-                            row("room inicial", if start { "★ sí" } else { "no" }.into());
+                            row("room inicial", if start { concat!(fa!(star), " sí") } else { "no" }.into());
                         }
                     }
                     Open::Sound(n) => {
@@ -2235,7 +2223,7 @@ impl EditorApp {
         egui::Panel::top("update_bar").frame(frame).show(ui, |ui| {
             ui.horizontal(|ui| match &estado {
                 Estado::AlDia => {
-                    ui.colored_label(pal.ok, format!("✔ Mod Engine está al día ({})", crate::update::descripcion_version()));
+                    ui.colored_label(pal.ok, format!(concat!(fa!(check), " Mod Engine está al día ({})"), crate::update::descripcion_version()));
                     if ui.small_button("×").clicked() {
                         self.upd_oculta = true;
                     }

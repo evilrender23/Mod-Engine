@@ -55,10 +55,10 @@ impl AnimKind {
     }
     pub fn icon(self) -> &'static str {
         match self {
-            AnimKind::Path => "〰",
-            AnimKind::Timeline => "⏱",
-            AnimKind::Curve => "📈",
-            AnimKind::Sequence => "🎞",
+            AnimKind::Path => fa!(route),
+            AnimKind::Timeline => fa!(stopwatch),
+            AnimKind::Curve => fa!(chart_line),
+            AnimKind::Sequence => fa!(film),
         }
     }
     /// Asset browser section key (custom order).

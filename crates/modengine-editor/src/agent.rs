@@ -267,11 +267,11 @@ impl Attachment {
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let image = IMAGE_EXTS.contains(&ext.as_str());
         let icon = if path.is_dir() {
-            "📁"
+            fa!(folder)
         } else if image {
-            "🖼"
+            fa!(image)
         } else {
-            "📄"
+            fa!(file)
         };
         Attachment {
             kind: if image { AttachKind::Image } else { AttachKind::File },
@@ -292,7 +292,7 @@ impl Attachment {
     pub fn url(url: &str) -> Attachment {
         let url = url.trim().to_string();
         let label = url.split("://").nth(1).unwrap_or(&url).trim_end_matches('/').to_string();
-        Attachment { kind: AttachKind::Url, icon: "🔗", label: one_line(&label, 48), path: PathBuf::new(), about: String::new(), text: url }
+        Attachment { kind: AttachKind::Url, icon: fa!(link), label: one_line(&label, 48), path: PathBuf::new(), about: String::new(), text: url }
     }
 
     /// Same thing (attaching it again replaces it).
@@ -1108,7 +1108,7 @@ fn generic_tool(name: &str, input: &Value) -> ToolLine {
         verb = f.to_uppercase() + &verb[1..];
     }
     let detail = input.as_object().and_then(|o| o.values().find_map(|v| v.as_str())).map(|s| one_line(s, 120)).unwrap_or_default();
-    tool("⚙", &verb, detail)
+    tool(fa!(gear), &verb, detail)
 }
 
 /// Turns the output lines of one CLI into events; keeps what a run needs to remember.
@@ -1259,18 +1259,18 @@ impl Parser {
                     }
                     let t = |k: &str| one_line(str_of(&input[k]), 120);
                     let line = match name.as_str() {
-                        "Read" => tool("👁", "Leer", display_path(&self.root, file)),
-                        "Write" => self.file_tool("📄", "Escribir", file),
-                        "Edit" | "MultiEdit" | "NotebookEdit" => self.file_tool("✎", "Editar", file),
-                        "Glob" => tool("🔍", "Buscar archivos", t("pattern")),
-                        "Grep" => tool("🔍", "Buscar", t("pattern")),
+                        "Read" => tool(fa!(eye), "Leer", display_path(&self.root, file)),
+                        "Write" => self.file_tool(fa!(file), "Escribir", file),
+                        "Edit" | "MultiEdit" | "NotebookEdit" => self.file_tool(fa!(pen), "Editar", file),
+                        "Glob" => tool(fa!(magnifying_glass), "Buscar archivos", t("pattern")),
+                        "Grep" => tool(fa!(magnifying_glass), "Buscar", t("pattern")),
                         "Bash" | "PowerShell" => tool(">_", "Ejecutar", t("command")),
-                        "WebFetch" => tool("🌐", "Descargar", t("url")),
-                        "WebSearch" => tool("🌐", "Buscar en la web", t("query")),
-                        "TodoWrite" => tool("☰", "Actualizar plan", ""),
-                        "ExitPlanMode" => tool("☰", "Plan listo", "elige «Editar archivos» para aplicarlo"),
+                        "WebFetch" => tool(fa!(globe), "Descargar", t("url")),
+                        "WebSearch" => tool(fa!(globe), "Buscar en la web", t("query")),
+                        "TodoWrite" => tool(fa!(bars), "Actualizar plan", ""),
+                        "ExitPlanMode" => tool(fa!(bars), "Plan listo", "elige «Editar archivos» para aplicarlo"),
                         "Task" | "Agent" => tool("…", "Agente", t("description")),
-                        _ => tool("⚙", &name, ""),
+                        _ => tool(fa!(gear), &name, ""),
                     };
                     self.tool_names.insert(id, name);
                     ev.push(Event::Tool(line));
@@ -1388,9 +1388,9 @@ impl Parser {
                     let path = str_of(&c["path"]);
                     if first {
                         ev.push(Event::Tool(match str_of(&c["kind"]) {
-                            "add" => self.file_tool("📄", "Escribir", path),
-                            "delete" => self.file_tool("🗑", "Borrar", path),
-                            _ => self.file_tool("✎", "Editar", path),
+                            "add" => self.file_tool(fa!(file), "Escribir", path),
+                            "delete" => self.file_tool(fa!(trash_can), "Borrar", path),
+                            _ => self.file_tool(fa!(pen), "Editar", path),
                         }));
                     }
                     if completed && status == "completed" {
@@ -1420,12 +1420,12 @@ impl Parser {
                 if detail.trim().is_empty() && !completed {
                     self.shown.remove(str_of(&item["id"]));
                 } else if first {
-                    ev.push(Event::Tool(tool("🌐", verb, one_line(&detail, 120))));
+                    ev.push(Event::Tool(tool(fa!(globe), verb, one_line(&detail, 120))));
                 }
             }
             "todo_list" => {
                 if first {
-                    ev.push(Event::Tool(tool("☰", "Actualizar plan", "")));
+                    ev.push(Event::Tool(tool(fa!(bars), "Actualizar plan", "")));
                 }
             }
             "error" => ev.push(Event::ToolFailed(str_of(&item["message"]).into())),
@@ -1496,13 +1496,13 @@ impl Parser {
                 let params = &info["parameters"];
                 let path = Self::agy_path(params);
                 let line = match name.as_str() {
-                    "read_file" => tool("👁", "Leer", display_path(&self.root, path)),
-                    "write_file" => self.file_tool("📄", "Escribir", path),
-                    "edit_file" => self.file_tool("✎", "Editar", path),
-                    "list_dir" => tool("📁", "Listar", display_path(&self.root, path)),
+                    "read_file" => tool(fa!(eye), "Leer", display_path(&self.root, path)),
+                    "write_file" => self.file_tool(fa!(file), "Escribir", path),
+                    "edit_file" => self.file_tool(fa!(pen), "Editar", path),
+                    "list_dir" => tool(fa!(folder), "Listar", display_path(&self.root, path)),
                     "run_command" => tool(">_", "Ejecutar", one_line(str_of(&params["CommandLine"]), 120)),
-                    "search_web" => tool("🌐", "Buscar en la web", one_line(Self::agy_param(params, &["query", "Query"]), 120)),
-                    "read_url_content" | "read_url" => tool("🌐", "Descargar", one_line(Self::agy_param(params, &["Url", "url", "URL"]), 120)),
+                    "search_web" => tool(fa!(globe), "Buscar en la web", one_line(Self::agy_param(params, &["query", "Query"]), 120)),
+                    "read_url_content" | "read_url" => tool(fa!(globe), "Descargar", one_line(Self::agy_param(params, &["Url", "url", "URL"]), 120)),
                     _ => generic_tool(&name, params),
                 };
                 if self.shown_steps.insert(index) {
@@ -1673,7 +1673,7 @@ mod tests {
                 Event::Status("Escribiendo…".into()),
                 Event::TextDelta("Hola".into()),
                 Event::Text("Hola".into()),
-                Event::Tool(tool("✎", "Editar", "objects/player.ms")),
+                Event::Tool(tool(fa!(pen), "Editar", "objects/player.ms")),
                 Event::Tool(tool(">_", "Ejecutar", "modengine check .")),
                 Event::FileChanged("/p/game/objects/player.ms".into()),
                 Event::CommandRan,
@@ -1693,7 +1693,7 @@ mod tests {
                 r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"No conversation found with session ID x"}"#,
             ],
         );
-        assert_eq!(ev[0], Event::Tool(tool("📄", "Escribir", "/p/x.ms")));
+        assert_eq!(ev[0], Event::Tool(tool(fa!(file), "Escribir", "/p/x.ms")));
         assert_eq!(ev[1], Event::Blocked("Write".into()));
         assert!(matches!(&ev[2], Event::Failed(m) if m.contains("conversación nueva")));
         assert_eq!(ev[3], Event::Session(String::new()));
@@ -1719,7 +1719,7 @@ mod tests {
                 Event::Session("T1".into()),
                 Event::Tool(tool(">_", "Ejecutar", "ls")),
                 Event::CommandRan,
-                Event::Tool(tool("✎", "Editar", "rooms/a.toml")),
+                Event::Tool(tool(fa!(pen), "Editar", "rooms/a.toml")),
                 Event::FileChanged("/p/game/rooms/a.toml".into()),
                 Event::Text("Listo".into()),
                 Event::Finished,
@@ -1746,7 +1746,7 @@ mod tests {
             vec![
                 Event::Session("C1".into()),
                 Event::Model("gemini".into()),
-                Event::Tool(tool("✎", "Editar", "game.toml")),
+                Event::Tool(tool(fa!(pen), "Editar", "game.toml")),
                 Event::FileChanged("/p/game/game.toml".into()),
                 Event::TextBegin,
                 Event::Status("Escribiendo…".into()),
@@ -1793,7 +1793,7 @@ mod tests {
                 Attachment::file(&other.join("big.txt")),
                 Attachment::file(&other.join("blob.bin")),
                 Attachment::file(&other),
-                Attachment::text("☰", "Salida", "error: x\n".repeat(5000)),
+                Attachment::text(fa!(terminal), "Salida", "error: x\n".repeat(5000)),
             ],
         );
         let p = prompt_with_attachments(&r);
@@ -1830,7 +1830,7 @@ mod tests {
             Attachment::file(&other.join("shot.png")),
             Attachment::file(&other.join("notes.md")),
             Attachment::file(&other),
-            Attachment::text("⬚", "Selección", "x = 1"),
+            Attachment::text(fa!(vector_square), "Selección", "x = 1"),
         ];
         let r = run_with(&game, atts);
         let img = |p: PathBuf| format!("--image={}", p.display());
