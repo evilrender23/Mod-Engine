@@ -322,6 +322,15 @@ pub fn editor_frame(ctx: &egui::Context) -> egui::Frame {
     f
 }
 
+/// The accent colour: Hermes blue in the light theme, the selection colour in the dark one.
+pub fn accent(ui: &egui::Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        ui.visuals().selection.stroke.color
+    } else {
+        ACCENT
+    }
+}
+
 /// Filled accent button (Hermes `--dt-primary` with `--dt-primary-foreground`).
 pub fn primary_button(ui: &egui::Ui, text: &str) -> egui::Button<'static> {
     if ui.visuals().dark_mode {

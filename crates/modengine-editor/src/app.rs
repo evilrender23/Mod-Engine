@@ -2156,8 +2156,10 @@ impl eframe::App for EditorApp {
             }
         }
 
+        crate::chrome::title_bar(ui, self.project.as_ref().map(|p| p.game.game.name.as_str()));
         if self.project.is_none() {
             self.start_screen(ui);
+            crate::chrome::frame_edges(ui);
             return;
         }
         self.shortcuts(&ctx);
@@ -2200,6 +2202,7 @@ impl eframe::App for EditorApp {
             }
         }
         crate::dnd::ghost(&ctx);
+        crate::chrome::frame_edges(ui);
     }
 }
 

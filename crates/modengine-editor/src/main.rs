@@ -16,6 +16,7 @@ mod agent_slash;
 mod agent_snapshot;
 mod agent_workspace;
 mod app;
+mod chrome;
 mod dnd;
 mod export;
 mod extension;
@@ -136,6 +137,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Mod Engine Editor")
+            // the editor draws its own title bar and border (chrome.rs)
+            .with_decorations(false)
             .with_inner_size(if auto.screenshot.is_some() { [1920.0, 1080.0] } else { [1400.0, 860.0] })
             .with_min_inner_size([900.0, 560.0]),
         ..Default::default()

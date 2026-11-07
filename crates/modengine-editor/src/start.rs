@@ -227,7 +227,7 @@ impl StartPage {
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             // header
             ui.horizontal(|ui| {
-                ui.label(RichText::new(fa!(cube)).size(30.0).color(accent(ui)));
+                ui.label(RichText::new(fa!(cube)).size(30.0).color(crate::theme::accent(ui)));
                 ui.vertical(|ui| {
                     ui.label(RichText::new("Mod Engine").size(28.0).strong());
                     ui.label(RichText::new("Editor de juegos 2D: objetos, eventos y rooms").weak());
@@ -361,7 +361,7 @@ impl StartPage {
         let v = ui.visuals().clone();
         let hovered = resp.hovered() && !missing;
         let fill = if v.dark_mode { v.extreme_bg_color } else { crate::theme::CARD };
-        let stroke = if hovered { Stroke::new(1.5, accent(ui)) } else { v.widgets.noninteractive.bg_stroke };
+        let stroke = if hovered { Stroke::new(1.5, crate::theme::accent(ui)) } else { v.widgets.noninteractive.bg_stroke };
         let p = ui.painter();
         p.rect(rect, CornerRadius::same(8), fill, stroke, StrokeKind::Inside);
         // thumbnail
@@ -683,20 +683,12 @@ impl StartPage {
     }
 }
 
-fn accent(ui: &egui::Ui) -> Color32 {
-    if ui.visuals().dark_mode {
-        ui.visuals().selection.stroke.color
-    } else {
-        crate::theme::ACCENT
-    }
-}
-
 /// A big start page button: icon, title and a line of help.
 fn big_button(ui: &mut egui::Ui, icon: &str, title: &str, help: &str, primary: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 62.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let v = ui.visuals();
-    let acc = accent(ui);
+    let acc = crate::theme::accent(ui);
     let (fill, fg, sub) = if primary {
         // white text needs a deep blue in the dark theme too
         let base = if v.dark_mode { Color32::from_rgb(38, 86, 196) } else { acc };

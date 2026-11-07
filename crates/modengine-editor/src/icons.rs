@@ -91,6 +91,7 @@ macro_rules! fa {
     (compress) => { "\u{f066}" };
     (window_restore) => { "\u{f2d2}" };  // regular too
     (window_maximize) => { "\u{f2d0}" };  // regular too
+    (window_minimize) => { "\u{f2d1}" };  // regular too
     (hard_drive) => { "\u{f0a0}" };  // regular too
     (floppy_disk) => { "\u{f0c7}" };  // regular too
     (clock) => { "\u{f017}" };  // regular too
