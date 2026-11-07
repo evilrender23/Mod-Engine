@@ -258,8 +258,12 @@ impl Browser {
             Purpose::OpenProject => "open_project_browser",
             Purpose::PickFolder => "pick_folder_browser",
         };
+        // Opened from a modal dialog (Nuevo proyecto → 📁 Elegir…): it must sit above it, or it
+        // is drawn underneath and the modal blocks its clicks. It has no popups of its own.
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(id));
         egui::Window::new(purpose.title())
-            .id(egui::Id::unique(id))
+            .id(layer.id)
+            .order(egui::Order::Foreground)
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -474,6 +478,7 @@ impl Browser {
                 });
                 }
             });
+        ctx.move_to_top(layer);
         if let Some(d) = go_to {
             self.go(&d);
         }

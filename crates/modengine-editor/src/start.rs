@@ -830,6 +830,28 @@ mod tests {
     }
 
     #[test]
+    fn location_picker_opens_above_the_new_project_dialog() {
+        let d = temp("pick_above");
+        let target = d.join("juegos");
+        std::fs::create_dir_all(&target).unwrap();
+        let mut h = harness(page(&d.join("cfg")));
+        h.run_steps(2);
+        h.get_by_label("Nuevo proyecto").click();
+        h.run_steps(3);
+        h.state_mut().page.new_dialog.as_mut().unwrap().location = target.display().to_string();
+        h.run_steps(2);
+        h.get_by_label("📂 Elegir…").click();
+        h.run_steps(3);
+        // the picker's own button must take the click, not the modal behind it
+        h.get_by_label("Elegir «juegos»").click();
+        h.run_steps(3);
+        let dlg = h.state().page.new_dialog.as_ref().expect("the new project dialog stays open");
+        assert!(!dlg.browser.open, "the picker closed after choosing");
+        assert_eq!(PathBuf::from(&dlg.location), target);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn browser_recognises_projects_and_paths_open() {
         let d = temp("browse");
         let cfg = d.join("cfg");
