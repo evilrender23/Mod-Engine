@@ -345,7 +345,9 @@ impl Actualizador {
             o.process_group(0);
             o
         };
-        orden.stdout(Stdio::null()).stderr(Stdio::null());
+        // Not in app/ (the editor's own folder, its current directory when started from the
+        // menu): Windows refuses to rename a folder some process is in.
+        orden.current_dir(&destino).stdout(Stdio::null()).stderr(Stdio::null());
         let hijo = orden.spawn().map_err(|e| format!("no se pudo lanzar {INSTALADOR}: {e}"))?;
         self.poner(Estado::Compilando { paso: 0, total: 0, texto: "Empezando".into() });
         let a = self.clone();

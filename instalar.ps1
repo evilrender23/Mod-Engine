@@ -280,6 +280,10 @@ function Tomar-Cerrojo {
 
 function Principal {
     New-Item -ItemType Directory -Force $registro | Out-Null
+    # Windows no deja renombrar app\ mientras sea la carpeta actual de un proceso, y quien lanza
+    # la actualización (el editor) suele estar en ella: este proceso se va de ahí.
+    Set-Location -LiteralPath $Destino
+    [Environment]::CurrentDirectory = $Destino
     Tomar-Cerrojo
     [IO.File]::WriteAllText($logCompilacion, '', $utf8)
     [IO.File]::WriteAllText($log, '', $utf8)
