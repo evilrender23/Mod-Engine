@@ -58,6 +58,11 @@ pub fn play(e: Engine, opts: RunOpts) {
     if opts.test.as_ref().is_some_and(|t| t.hidden) {
         crate::test_run::prepare_hidden(&mut conf);
     }
+    if !crate::display::available() {
+        eprintln!("cannot open the game window: no X server or Wayland compositor found (DISPLAY and WAYLAND_DISPLAY are not set)");
+        std::process::exit(1);
+    }
+    crate::display::prepare(&mut conf);
     macroquad::Window::from_config(conf, backend::run(e, opts));
 }
 
@@ -116,8 +121,13 @@ pub fn fatal(msg: &str) -> ! {
 #[cfg(not(windows))]
 fn fatal_window(msg: &str, _log: Option<PathBuf>) -> ! {
     let text = msg.to_string();
+    if !crate::display::available() {
+        std::process::exit(1);
+    }
+    let mut conf = macroquad::window::Conf { window_title: "Mod Engine".into(), window_width: 720, window_height: 240, ..Default::default() };
+    crate::display::prepare(&mut conf);
     macroquad::Window::from_config(
-        macroquad::window::Conf { window_title: "Mod Engine".into(), window_width: 720, window_height: 240, ..Default::default() },
+        conf,
         async move {
             use macroquad::prelude::*;
             loop {

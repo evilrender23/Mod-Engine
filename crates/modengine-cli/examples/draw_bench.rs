@@ -40,6 +40,7 @@ fn main() {
     let e = Engine::load(&dir).expect("load");
     let mut conf = runner::window_conf(&e);
     conf.platform.swap_interval = Some(0);
+    modengine_cli::display::prepare(&mut conf);
     // lockstep: one logic step and one full render per frame, `frames` steps
     let test = modengine_cli::test_run::WindowTest::new(&[], None, None, Some(frames), false);
     let opts = backend::RunOpts { test: Some(test), ..Default::default() };

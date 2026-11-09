@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod canvas;
+pub mod display;
 pub mod fpview;
 pub mod gpu_fx;
 pub mod headless;

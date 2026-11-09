@@ -115,7 +115,7 @@ pub fn main_cli(args: &[String]) {
     }
     o.name = pos.get(1).cloned();
     let title = format!("Shader{}", o.name.as_ref().map(|n| format!(": {n}")).unwrap_or_default());
-    let conf = macroquad::window::Conf {
+    let mut conf = macroquad::window::Conf {
         window_title: title,
         window_width: if o.check { 160 } else { 520 },
         window_height: if o.check { 90 } else { 420 },
@@ -123,6 +123,7 @@ pub fn main_cli(args: &[String]) {
         high_dpi: false,
         ..Default::default()
     };
+    crate::display::prepare(&mut conf);
     macroquad::Window::from_config(conf, run(o));
 }
 
