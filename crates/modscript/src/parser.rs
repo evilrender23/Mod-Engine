@@ -347,6 +347,7 @@ impl Parser {
             "sequence" => no_args(self, VarType::Asset(AssetKind::Sequence)),
             "particles" => no_args(self, VarType::Asset(AssetKind::ParticleSystem)),
             "shader" => no_args(self, VarType::Asset(AssetKind::Shader)),
+            "prefab" => no_args(self, VarType::Asset(AssetKind::Prefab)),
             "list" => {
                 let mut opts = Vec::new();
                 for e in args.unwrap_or_default() {

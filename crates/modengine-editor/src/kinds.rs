@@ -33,6 +33,7 @@ pub const CREATE: &[CreateRow] = &[
     row("Línea de tiempo", fa!(stopwatch), Some(Key::T), Some(NewKind::Anim(AnimKind::Timeline))),
     row("Nota", fa!(note_sticky), Some(Key::N), Some(NewKind::Note)),
     row("Objeto", fa!(cube), Some(Key::O), Some(NewKind::Object)),
+    row("Prefab", fa!(object_group), None, Some(NewKind::Prefab)),
     row("Room", fa!(map), Some(Key::R), Some(NewKind::Room)),
     row("Script", fa!(pen), Some(Key::C), Some(NewKind::Script)),
     row("Secuencia", fa!(film), Some(Key::G), Some(NewKind::Anim(AnimKind::Sequence))),
@@ -87,6 +88,7 @@ pub fn parse_kind(s: &str) -> Option<NewKind> {
         "room" => NewKind::Room,
         "script" => NewKind::Script,
         "data" => NewKind::Data,
+        "prefab" => NewKind::Prefab,
         _ => return None,
     })
 }
@@ -206,6 +208,7 @@ pub const SECTIONS: &[Section] = &[
     Section { key: "sprites", title: "Sprites", new: Some(NewKind::PixelSprite), rows: sprite_rows },
     Section { key: "tilesets", title: "Tile sets", new: Some(NewKind::TileSet), rows: tileset_rows },
     Section { key: "objects", title: "Objetos", new: Some(NewKind::Object), rows: object_rows },
+    Section { key: "prefabs", title: "Prefabs", new: Some(NewKind::Prefab), rows: crate::prefab::rows },
     Section { key: "rooms", title: "Rooms", new: Some(NewKind::Room), rows: room_rows },
     Section { key: "sounds", title: "Sonidos", new: Some(NewKind::Sound), rows: sound_rows },
     Section { key: "fonts", title: "Fuentes", new: Some(NewKind::Font), rows: font_rows },

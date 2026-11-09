@@ -67,6 +67,9 @@ pub struct Spawn {
     pub vars: Vec<(Sym, Value)>,
     /// Map-placed instances get aligned inside their cell once their sprite is known.
     pub cell: Option<[f64; 4]>,
+    /// Member of a placed prefab: (prefab, group number). The members of one group are
+    /// created together (prefab.rs).
+    pub prefab: Option<(u32, u32)>,
 }
 
 pub struct RoomDef {
@@ -136,6 +139,8 @@ pub struct Engine {
     pub timelines: Vec<crate::timeline::TimelineDef>,
     pub curves: Vec<crate::animcurve::AnimCurve>,
     pub sequences: Vec<crate::sequence::SequenceDef>,
+    /// `prefabs/`: groups of instances placed together (prefab.rs).
+    pub prefabs: Vec<crate::prefab::PrefabDef>,
     /// Sequences playing in the current room.
     pub seqs: crate::sequence::SeqRuntime,
     pub objects: Vec<ObjectDef>,
@@ -290,6 +295,9 @@ impl Engine {
         for (i, (name, _, _)) in p.rooms.iter().enumerate() {
             register(name, Value::Asset(AssetKind::Room, i as u32), &mut errors);
         }
+        for (i, (name, _, _)) in p.prefabs.iter().enumerate() {
+            register(name, Value::Asset(AssetKind::Prefab, i as u32), &mut errors);
+        }
         let motion = crate::anim_assets::load(&p.dir, &mut errors);
         for (name, v) in crate::anim_assets::names(&motion) {
             register(&name, v, &mut errors);
@@ -363,6 +371,7 @@ impl Engine {
             timelines: motion.timelines,
             curves: motion.curves,
             sequences: vec![],
+            prefabs: vec![],
             seqs: Default::default(),
             objects,
             rooms: vec![],
@@ -550,6 +559,8 @@ impl Engine {
 
         crate::anim_assets::resolve_sequences(&mut e, motion.sequences, &mut errors);
         e.methods = crate::methods::MethodTable::build(&e.objects);
+        // prefabs need the objects (and their typed variables); rooms need the prefabs
+        crate::prefab::resolve(&mut e, &p.prefabs, &mut errors);
 
         // ---- rooms
         for (name, path, rt) in &p.rooms {
@@ -648,17 +659,49 @@ impl Engine {
         }
     }
 
-    fn object_by_name(&self, n: &str) -> Result<u32, String> {
+    pub(crate) fn object_by_name(&self, n: &str) -> Result<u32, String> {
         match self.assets.get(&intern(n)) {
             Some(Value::Asset(AssetKind::Object, i)) => Ok(*i),
+            Some(Value::Asset(AssetKind::Prefab, _)) => Err(format!("'{n}' is a prefab, not an object")),
             _ => Err(format!("object '{n}' does not exist")),
         }
+    }
+
+    /// Prefab named `n`, if it is one.
+    pub fn prefab_by_name(&self, n: &str) -> Option<u32> {
+        match self.assets.get(&intern(n)) {
+            Some(Value::Asset(AssetKind::Prefab, i)) => Some(*i),
+            _ => None,
+        }
+    }
+
+    /// Variables from a room or prefab file for an instance of `object`: typed variables are
+    /// converted and checked against their declaration.
+    pub(crate) fn inst_vars(&self, object: u32, vars: &toml::Table) -> Result<Vec<(Sym, Value)>, String> {
+        vars.iter()
+            .map(|(k, v)| {
+                let sym = intern(k);
+                let val = match self.var_type(object, sym) {
+                    Some((ty, _)) => self.typed_value(&ty, v).map_err(|m| format!("{k}: {m}"))?,
+                    None => toml_to_value(v)?,
+                };
+                Ok((sym, val))
+            })
+            .collect()
+    }
+
+    /// Room `vars` given to a placed prefab, converted for each member object. Variables a
+    /// member's object declares with a type are checked against it.
+    fn prefab_spawns(&self, pi: u32, x: f64, y: f64, depth: f64, serial: u32, vars: &toml::Table) -> Result<Vec<Spawn>, String> {
+        let name = &self.prefabs[pi as usize].name;
+        crate::prefab::spawns(self, pi, x, y, depth, serial, &|o| self.inst_vars(o, vars).map_err(|m| format!("prefab {name} at {x}, {y}: {m}")))
     }
 
     fn build_room(&self, name: &str, path: &Path, rt: &RoomToml) -> Result<RoomDef, String> {
         let disp: &DisplaySection = &self.config.display;
         let mut layers = Vec::new();
-        let mut spawns = Vec::new();
+        let mut spawns: Vec<Spawn> = Vec::new();
+        let mut serial = 0u32;
         let (mut max_w, mut max_h) = (0.0f64, 0.0f64);
         for (li, l) in rt.layers.iter().enumerate() {
             let lname = if l.name.is_empty() { format!("{}{li}", l.kind) } else { l.name.clone() };
@@ -718,20 +761,14 @@ impl Engine {
                 }
                 "instances" => {
                     for it in &l.instances {
+                        if let Some(pi) = self.prefab_by_name(&it.object) {
+                            serial += 1;
+                            spawns.extend(self.prefab_spawns(pi, it.x, it.y, l.depth, serial, &it.vars)?);
+                            continue;
+                        }
                         let object = self.object_by_name(&it.object)?;
-                        let vars = it
-                            .vars
-                            .iter()
-                            .map(|(k, v)| {
-                                let sym = intern(k);
-                                let val = match self.var_type(object, sym) {
-                                    Some((ty, _)) => self.typed_value(&ty, v).map_err(|m| format!("instance of {} at {}, {}: {k}: {m}", it.object, it.x, it.y))?,
-                                    None => toml_to_value(v)?,
-                                };
-                                Ok((sym, val))
-                            })
-                            .collect::<Result<Vec<_>, String>>()?;
-                        spawns.push(Spawn { object, x: it.x, y: it.y, depth: l.depth, vars, cell: None });
+                        let vars = self.inst_vars(object, &it.vars).map_err(|m| format!("instance of {} at {}, {}: {m}", it.object, it.x, it.y))?;
+                        spawns.push(Spawn { object, x: it.x, y: it.y, depth: l.depth, vars, cell: None, prefab: None });
                     }
                     if let Some(map) = &l.map {
                         let [cw, ch] = l.cell.unwrap_or([16, 16]);
@@ -749,6 +786,12 @@ impl Engine {
                                 };
                                 let (x, y) = (l.x + cx as f64 * cw as f64, l.y + ry as f64 * ch as f64);
                                 for n in names {
+                                    // a prefab in a map: its origin at the cell's top-left corner
+                                    if let Some(pi) = self.prefab_by_name(&n) {
+                                        serial += 1;
+                                        spawns.extend(self.prefab_spawns(pi, x, y, l.depth, serial, &toml::Table::new())?);
+                                        continue;
+                                    }
                                     let object = self.object_by_name(&n)?;
                                     spawns.push(Spawn {
                                         object,
@@ -757,6 +800,7 @@ impl Engine {
                                         depth: l.depth,
                                         vars: vec![],
                                         cell: Some([x, y, cw as f64, ch as f64]),
+                                        prefab: None,
                                     });
                                 }
                             }
@@ -872,9 +916,13 @@ impl Engine {
         } else {
             self.layers = layers;
             let spawns = self.rooms[r].spawns.clone();
-            for s in spawns {
-                let id = self.create_instance(s.object, s.x, s.y, s.depth);
-                self.init_instance(id, &s.vars, s.cell, Scope::Global);
+            // a placed prefab is one batch: all its members exist before their `create` runs
+            let mut i = 0;
+            while i < spawns.len() {
+                let group = spawns[i].prefab.map(|p| p.1);
+                let n = if group.is_some() { spawns[i..].iter().take_while(|s| s.prefab.map(|p| p.1) == group).count() } else { 1 };
+                crate::prefab::spawn_batch(self, &spawns[i..i + n], Scope::Global);
+                i += n;
             }
             if let Some(code) = self.rooms[r].code.clone() {
                 let file = self.rooms[r].file.clone();
@@ -1764,6 +1812,7 @@ impl Engine {
             AssetKind::Path | AssetKind::Timeline | AssetKind::AnimCurve | AssetKind::Sequence => crate::anim_assets::asset_name(self, kind, i),
             AssetKind::ParticleSystem => self.parts.world.assets[i as usize].0.clone(),
             AssetKind::Shader => self.shaders.list[i as usize].name.clone(),
+            AssetKind::Prefab => self.prefabs[i as usize].name.clone(),
         }
     }
 

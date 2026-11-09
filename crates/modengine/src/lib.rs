@@ -41,6 +41,7 @@ pub mod object;
 pub mod pack;
 pub mod pixelart;
 pub mod pixelcheck;
+pub mod prefab;
 pub mod path;
 pub mod palette;
 pub mod project;

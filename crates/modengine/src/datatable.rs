@@ -147,7 +147,7 @@ impl Schema {
     }
 }
 
-pub const ASSET_TYPES: [(&str, AssetKind); 12] = [
+pub const ASSET_TYPES: [(&str, AssetKind); 13] = [
     ("sprite", AssetKind::Sprite),
     ("sound", AssetKind::Sound),
     ("object", AssetKind::Object),
@@ -160,9 +160,10 @@ pub const ASSET_TYPES: [(&str, AssetKind); 12] = [
     ("sequence", AssetKind::Sequence),
     ("particles", AssetKind::ParticleSystem),
     ("shader", AssetKind::Shader),
+    ("prefab", AssetKind::Prefab),
 ];
 
-const TYPE_NAMES: &str = "string, int, number, bool, enum, ref, list, struct, any, asset, sprite, sound, object, room, font, tileset, path, timeline, animcurve, sequence, particles, shader";
+const TYPE_NAMES: &str = "string, int, number, bool, enum, ref, list, struct, any, asset, sprite, sound, object, room, font, tileset, path, timeline, animcurve, sequence, particles, shader, prefab";
 
 /// Parses a schema file.
 pub fn parse_schema(file: &str, text: &str) -> Result<Schema, Vec<Diag>> {

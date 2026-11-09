@@ -48,6 +48,7 @@ pub fn icon(o: &Open) -> &'static str {
         Open::Note(_) => fa!(note_sticky),
         Open::TileSet(_) => fa!(table_cells),
         Open::Data(_) => fa!(table),
+        Open::Prefab(_) => fa!(object_group),
         Open::Settings => fa!(gear),
         Open::Anim(k, _) => k.icon(),
         Open::Fx(k, _) => k.icon(),
@@ -58,7 +59,7 @@ pub fn icon(o: &Open) -> &'static str {
 pub fn asset_label(o: &Open) -> String {
     match o {
         Open::Room(n) | Open::Object(n) | Open::Sprite(n) | Open::Sound(n) | Open::Script(n) => format!("{} {n}", icon(o)),
-        Open::Font(n) | Open::Note(n) | Open::TileSet(n) | Open::Data(n) => format!("{} {n}", icon(o)),
+        Open::Font(n) | Open::Note(n) | Open::TileSet(n) | Open::Data(n) | Open::Prefab(n) => format!("{} {n}", icon(o)),
         Open::Settings => concat!(fa!(gear), " Ajustes").into(),
         Open::Anim(_, n) => format!("{} {n}", icon(o)),
         Open::Fx(_, n) => format!("{} {n}", icon(o)),
@@ -83,6 +84,7 @@ pub fn asset(p: &Project, o: &Open) -> Option<Attachment> {
         Open::Font(n) => (p.fonts.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the font `{n}`")),
         Open::Note(n) => (p.notes.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the note `{n}`")),
         Open::TileSet(n) => (p.tilesets.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the tile set `{n}`")),
+        Open::Prefab(n) => (p.prefabs.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the prefab `{n}` (prefabs/, a group of instances placed together)")),
         Open::Data(n) => (p.data.iter().find(|s| &s.name == n)?.path.clone(), n.clone(), format!("the data table `{n}` (data_get(\"{n}\", id))")),
     };
     let mut a = Attachment::file(&path);

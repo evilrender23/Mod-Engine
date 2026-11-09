@@ -425,6 +425,22 @@ pub(crate) enum Tool {
     Rect,
     Fill,
     Pick,
+    /// Drag a rectangle: what is inside becomes a new prefab (placed back as one instance).
+    Group,
+}
+
+/// A part of the room picked with the Agrupar tool, waiting for a name.
+#[derive(Clone)]
+struct GroupDraft {
+    name: String,
+    /// Instances relative to `origin` (map cells already turned into positions).
+    items: Vec<InstToml>,
+    /// Room position of the prefab's origin (top-left corner of the rectangle).
+    origin: Pos2,
+    layer: usize,
+    cells: Vec<(i32, i32)>,
+    free: Vec<usize>,
+    error: Option<String>,
 }
 
 pub struct RoomEditor {
@@ -457,6 +473,7 @@ pub struct RoomEditor {
     want_select: bool,
     want_layer: Option<String>,
     palette_filter: String,
+    group: Option<GroupDraft>,
     /// Screen rectangle of the canvas in the last frame.
     pub(crate) canvas_rect: Rect,
 }
@@ -506,6 +523,7 @@ impl RoomEditor {
             want_select: false,
             want_layer: None,
             palette_filter: String::new(),
+            group: None,
             canvas_rect: Rect::NOTHING,
         })
     }
@@ -582,6 +600,7 @@ impl RoomEditor {
                 (Tool::Rect, concat!(fa!(square), " Rectángulo"), "arrastra para rellenar un rectángulo"),
                 (Tool::Fill, concat!(fa!(fill_drip), " Rellenar"), "rellena la zona conectada"),
                 (Tool::Pick, concat!(fa!(eye_dropper), " Cuentagotas"), "toma el objeto o tile bajo el cursor"),
+                (Tool::Group, concat!(fa!(object_group), " Agrupar"), "arrastra un rectángulo: lo que hay dentro se convierte en un prefab reutilizable"),
             ] {
                 ui.selectable_value(&mut self.tool, t, label).on_hover_text(tip);
             }
@@ -886,15 +905,49 @@ impl RoomEditor {
                             crate::dnd::source(&r, || Open::Object(n.clone()));
                             if r.clicked() {
                                 self.brush = Some(n.clone());
-                                if matches!(self.tool, Tool::Erase | Tool::Pick | Tool::Select) {
+                                if matches!(self.tool, Tool::Erase | Tool::Pick | Tool::Select | Tool::Group) {
                                     self.tool = Tool::Paint;
                                 }
                             }
                         });
                     }
+                    let prefabs: Vec<String> = cx.project.prefab_names().into_iter().filter(|n| self.palette_filter.is_empty() || n.to_lowercase().contains(&self.palette_filter.to_lowercase())).collect();
+                    if !prefabs.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Prefabs").weak());
+                    }
+                    for n in prefabs {
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
+                            let first = crate::prefab::items(cx.project, &n).into_iter().find_map(|i| cx.project.object_sprite(&i.object));
+                            match first.and_then(|s| cx.tex.get(ui.ctx(), cx.project, &s)) {
+                                Some(t) => t.draw_fit(ui.painter(), 0, r),
+                                None => {
+                                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, fa!(object_group), egui::FontId::proportional(14.0), Color32::GRAY);
+                                }
+                            }
+                            let r = ui
+                                .add(egui::Button::selectable(self.brush.as_deref() == Some(n.as_str()), format!("{} {n}", fa!(object_group))).sense(Sense::click_and_drag()))
+                                .on_hover_text("prefab: un grupo de instancias · clic: pincel · arrastrar a la room: colocarlo");
+                            crate::dnd::source(&r, || Open::Prefab(n.clone()));
+                            if r.clicked() {
+                                self.brush = Some(n.clone());
+                                if matches!(self.tool, Tool::Erase | Tool::Pick | Tool::Select | Tool::Group) {
+                                    self.tool = Tool::Paint;
+                                }
+                            }
+                            if r.double_clicked() {
+                                cx.open.push(Open::Prefab(n.clone()));
+                            }
+                        });
+                    }
                 });
                 ui.separator();
-                self.inspector(ui, cx);
+                if self.group.is_some() {
+                    self.group_panel(ui, cx);
+                } else {
+                    self.inspector(ui, cx);
+                }
             }
             "tiles" => {
                 ui.strong("Tiles");
@@ -989,7 +1042,8 @@ impl RoomEditor {
             ui.label(RichText::new(concat!("Con ", fa!(vector_square), " Mover selecciona una instancia libre para editar su posición y variables.")).weak());
             return;
         };
-        let objs = cx.project.object_names();
+        let mut objs = cx.project.object_names();
+        objs.extend(cx.project.prefab_names());
         let Some(inst) = self.m.layers.get_mut(self.layer).and_then(|l| l.t.instances.get_mut(si)) else {
             self.sel = None;
             return;
@@ -1010,7 +1064,26 @@ impl RoomEditor {
             });
             ui.end_row();
         });
-        if ui.small_button("abrir objeto").clicked() {
+        let is_prefab = cx.project.is_prefab(&inst.object);
+        if is_prefab {
+            let n = crate::prefab::items(cx.project, &inst.object).len();
+            ui.label(RichText::new(format!("{} prefab de {n} instancias; las variables de aquí se aplican a todas", fa!(object_group))).weak());
+            let mut ungroup = false;
+            ui.horizontal(|ui| {
+                if ui.small_button("abrir prefab").clicked() {
+                    cx.open.push(Open::Prefab(inst.object.clone()));
+                }
+                ungroup = ui.small_button(concat!(fa!(object_group), " Desagrupar")).on_hover_text("sustituye el prefab por sus instancias, que ya se pueden editar una a una").clicked();
+            });
+            if ungroup {
+                let parts = crate::prefab::ungroup(cx.project, inst);
+                let l = &mut self.m.layers[self.layer];
+                l.t.instances.remove(si);
+                l.t.instances.extend(parts);
+                self.sel = None;
+                return;
+            }
+        } else if ui.small_button("abrir objeto").clicked() {
             cx.open.push(Open::Object(inst.object.clone()));
         }
         // typed variables declared by the object (and its parents)
@@ -1245,7 +1318,11 @@ impl RoomEditor {
         }
 
         // ---- an object dragged from the asset browser or the palette: place one instance
-        if let Some(Open::Object(name)) = resp.dnd_hover_payload::<Open>().map(|o| (*o).clone()) {
+        let dropped = match resp.dnd_hover_payload::<Open>().map(|o| (*o).clone()) {
+            Some(Open::Object(n) | Open::Prefab(n)) => Some(n),
+            _ => None,
+        };
+        if let Some(name) = dropped {
             let target = match self.m.layers.get(self.layer) {
                 Some(l) if l.kind() == "instances" => Some(self.layer),
                 _ => self.m.layers.iter().position(|l| l.kind() == "instances"),
@@ -1341,7 +1418,7 @@ impl RoomEditor {
             let on_canvas = resp.is_pointer_button_down_on() || resp.dragged();
             if pressed && resp.hovered() && self.stroke.is_none() {
                 self.stroke = Some(self.m.clone());
-                if self.tool == Tool::Rect && primary {
+                if (self.tool == Tool::Rect || (self.tool == Tool::Group && !tiles)) && primary {
                     self.rect_from = Some(cell);
                 }
                 if self.tool == Tool::Select && primary && !tiles {
@@ -1414,6 +1491,11 @@ impl RoomEditor {
                     }
                 }
             }
+            if released && self.tool == Tool::Group && !tiles {
+                if let Some(a) = self.rect_from.take() {
+                    self.start_group(project, a, cell);
+                }
+            }
             if released {
                 if let Some(a) = self.rect_from.take() {
                     let layer = &mut self.m.layers[self.layer];
@@ -1452,6 +1534,101 @@ impl RoomEditor {
                     self.m.layers[self.layer].t.instances.remove(i);
                     self.undo.push(before);
                     self.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// The Agrupar tool's rectangle (cells `a` to `b` of the current layer): what it holds
+    /// becomes a draft prefab that the palette panel asks a name for.
+    fn start_group(&mut self, p: &Project, a: (i32, i32), b: (i32, i32)) {
+        let l = &self.m.layers[self.layer];
+        let (cw, ch) = l.cell_px();
+        let off = Vec2::new(l.t.x as f32, l.t.y as f32);
+        let (c0, c1) = ((a.0.min(b.0).max(0), a.1.min(b.1).max(0)), (a.0.max(b.0), a.1.max(b.1)));
+        let origin = Pos2::ZERO + off + Vec2::new(c0.0 as f32 * cw, c0.1 as f32 * ch);
+        let world = Rect::from_min_max(origin, Pos2::ZERO + off + Vec2::new((c1.0 + 1) as f32 * cw, (c1.1 + 1) as f32 * ch));
+        let mut items = vec![];
+        let mut cells = vec![];
+        for r in c0.1..=c1.1 {
+            for c in c0.0..=c1.0 {
+                let names = l.get_obj(c, r);
+                if names.is_empty() {
+                    continue;
+                }
+                cells.push((c, r));
+                let cell = Rect::from_min_size(Pos2::ZERO + off + Vec2::new(c as f32 * cw, r as f32 * ch), Vec2::new(cw, ch));
+                for n in names {
+                    let at = crate::prefab::cell_anchor(p, n, cell);
+                    items.push(InstToml { object: n.clone(), x: (at.x - origin.x).round() as f64, y: (at.y - origin.y).round() as f64, vars: toml::Table::new() });
+                }
+            }
+        }
+        let mut free = vec![];
+        for (i, inst) in l.t.instances.iter().enumerate() {
+            if world.contains(Pos2::new(inst.x as f32, inst.y as f32)) {
+                free.push(i);
+                items.push(InstToml { object: inst.object.clone(), x: inst.x - origin.x as f64, y: inst.y - origin.y as f64, vars: inst.vars.clone() });
+            }
+        }
+        if items.is_empty() {
+            return;
+        }
+        let taken = p.taken_names();
+        let name = (1..).map(|i| format!("pf_grupo{i}")).find(|n| !taken.contains(n)).unwrap_or_default();
+        self.group = Some(GroupDraft { name, items, origin, layer: self.layer, cells, free, error: None });
+    }
+
+    /// Name and confirm the prefab made with Agrupar.
+    fn group_panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        let Some(g) = &mut self.group else { return };
+        ui.strong(concat!(fa!(object_group), " Nuevo prefab"));
+        ui.label(RichText::new(format!("{} instancias del rectángulo. Se quitan de la room y en su lugar queda el prefab, que puedes colocar en más sitios.", g.items.len())).weak());
+        ui.horizontal(|ui| {
+            ui.label("Nombre");
+            ui.text_edit_singleline(&mut g.name);
+        });
+        if let Some(e) = &g.error {
+            ui.colored_label(crate::theme::colors(ui.ctx()).error, e);
+        }
+        let (mut create, mut cancel) = (false, false);
+        ui.horizontal(|ui| {
+            create = ui.add_enabled(crate::tomlw::valid_name(g.name.trim()), egui::Button::new(concat!(fa!(check), " Crear prefab"))).clicked();
+            cancel = ui.button("Cancelar").clicked();
+        });
+        if cancel {
+            self.group = None;
+            return;
+        }
+        if !create {
+            return;
+        }
+        let g = self.group.clone().unwrap();
+        let name = g.name.trim().to_string();
+        let cell = self.m.layers.get(g.layer).map(|l| l.cell).unwrap_or([16, 16]);
+        match crate::prefab::create(cx.project, &name, g.items.clone(), cell) {
+            Ok(_) => {
+                let l = &mut self.m.layers[g.layer];
+                for &(c, r) in &g.cells {
+                    l.set_obj(c, r, vec![]);
+                }
+                let mut free = g.free.clone();
+                free.sort_unstable();
+                for i in free.into_iter().rev() {
+                    l.t.instances.remove(i);
+                }
+                l.t.instances.push(InstToml { object: name.clone(), x: g.origin.x as f64, y: g.origin.y as f64, vars: toml::Table::new() });
+                l.normalize();
+                self.layer = g.layer;
+                self.sel = Some(l.t.instances.len() - 1);
+                self.brush = Some(name.clone());
+                self.tool = Tool::Select;
+                self.group = None;
+                cx.log.push(crate::app::LogLine { kind: crate::app::LogKind::Ok, text: format!("prefab creado: prefabs/{name}.toml") });
+            }
+            Err(e) => {
+                if let Some(d) = &mut self.group {
+                    d.error = Some(e);
                 }
             }
         }
@@ -1530,15 +1707,8 @@ impl RoomEditor {
     }
 }
 
-fn object_box(p: &Project, name: &str, at: Pos2) -> Rect {
-    match p.object_sprite(name).and_then(|s| p.sprite(&s).map(|s| (s.fw as f32, s.fh as f32, s.origin))) {
-        Some((fw, fh, (ox, oy))) => Rect::from_min_size(at - Vec2::new(ox as f32, oy as f32), Vec2::new(fw, fh)),
-        None => Rect::from_min_size(at, Vec2::splat(16.0)),
-    }
-}
-
 fn hit_free_in(l: &LayerM, p: &Project, w: Pos2) -> Option<usize> {
-    l.t.instances.iter().enumerate().rev().find(|(_, i)| object_box(p, &i.object, Pos2::new(i.x as f32, i.y as f32)).contains(w)).map(|(i, _)| i)
+    l.t.instances.iter().enumerate().rev().find(|(_, i)| crate::prefab::thing_box(p, &i.object, Pos2::new(i.x as f32, i.y as f32)).contains(w)).map(|(i, _)| i)
 }
 
 /// Draws an object either at a free position (`at`) or placed inside `cell`.
@@ -1557,6 +1727,10 @@ fn draw_object(
     z: f32,
     tint: Color32,
 ) -> Rect {
+    if project.is_prefab(name) {
+        // a prefab's origin: the free position, or the cell's top-left corner in a map
+        return crate::prefab::draw_prefab(painter, tex, ctx, project, name, at.unwrap_or(cell.min), to_s, z, tint);
+    }
     let spr = spr_of.get(name).cloned().flatten();
     let t = spr.as_deref().and_then(|s| tex.get(ctx, project, s));
     match t {
@@ -1836,6 +2010,72 @@ pub(crate) mod tests {
             }
             _ => panic!("not a tile layer"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_part_of_a_room_into_a_prefab_and_back() {
+        let (dir, mut h) = room_harness("group");
+        {
+            let s = h.state_mut();
+            s.ed.tool = Tool::Group;
+            let l = &s.ed.m.layers[s.ed.layer];
+            assert_eq!(l.get_obj(3, 8), ["Coin".to_string()]);
+            assert_eq!(l.get_obj(5, 8), ["Coin".to_string()]);
+        }
+        // the two coins of row 8 and the ground under them (cells 3..5, rows 8..9)
+        let a = h.state().ed.screen_of(3.0 * 16.0 + 8.0, 8.0 * 16.0 + 8.0);
+        let b = h.state().ed.screen_of(5.0 * 16.0 + 8.0, 9.0 * 16.0 + 8.0);
+        drag(&mut h, a, b);
+        {
+            let g = h.state().ed.group.as_ref().expect("the rectangle opens the New prefab panel");
+            assert_eq!(g.items.len(), 2 + 3, "two coins and three ground blocks");
+            assert_eq!(g.origin, Pos2::new(48.0, 128.0));
+            assert!(g.items.iter().any(|i| i.object == "Coin" && i.x == 8.0 && i.y == 8.0), "centred coin in the first cell");
+            assert!(g.items.iter().any(|i| i.object == "Ground" && i.x == 32.0 && i.y == 16.0), "top-left ground in the last cell");
+        }
+        h.state_mut().ed.group.as_mut().unwrap().name = "pf_coins".into();
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label(concat!(fa!(check), " Crear prefab")).click();
+        }
+        h.run_steps(3);
+        {
+            let s = h.state();
+            assert!(s.ed.group.is_none());
+            let l = &s.ed.m.layers[s.ed.layer];
+            assert!(l.get_obj(3, 8).is_empty() && l.get_obj(4, 9).is_empty(), "the cells were emptied");
+            let placed = l.t.instances.last().unwrap();
+            assert_eq!((placed.object.as_str(), placed.x, placed.y), ("pf_coins", 48.0, 128.0));
+            assert!(s.project.is_prefab("pf_coins"));
+            assert_eq!(s.ed.undo.len(), 1, "grouping is one undo step");
+        }
+        // saved, the engine builds the same instances at the same places
+        {
+            let s = h.state_mut();
+            let mut cx = Cx { project: &mut s.project, tex: &mut s.tex, log: &mut s.log, open: &mut s.open, active: true };
+            s.ed.save(&mut cx).unwrap();
+        }
+        let mut e = modengine::Engine::load(&dir).unwrap_or_else(|e| panic!("{e}"));
+        e.start();
+        let coins: Vec<(f64, f64)> = e.insts.iter().filter(|i| e.objects[i.object as usize].name == "Coin").map(|i| (i.x, i.ystart)).collect();
+        assert!(coins.contains(&(56.0, 136.0)) && coins.contains(&(88.0, 136.0)), "{coins:?}");
+        // Desagrupar puts the instances back, one by one
+        {
+            let s = h.state_mut();
+            s.ed.tool = Tool::Select;
+            s.ed.sel = Some(s.ed.m.layers[s.ed.layer].t.instances.len() - 1);
+        }
+        h.run_steps(2);
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label(concat!(fa!(object_group), " Desagrupar")).click();
+        }
+        h.run_steps(3);
+        let l = &h.state().ed.m.layers[h.state().ed.layer];
+        assert_eq!(l.t.instances.iter().filter(|i| i.object == "Coin").count(), 2);
+        assert!(l.t.instances.iter().all(|i| i.object != "pf_coins"));
+        assert!(l.t.instances.iter().any(|i| i.object == "Coin" && i.x == 56.0 && i.y == 136.0));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

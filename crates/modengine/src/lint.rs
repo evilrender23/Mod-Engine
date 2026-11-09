@@ -129,7 +129,7 @@ struct Lint<'a> {
 
 impl<'a> Lint<'a> {
     fn new(e: &'a Engine) -> Lint<'a> {
-        let mut specials: HashSet<Sym> = ["argument", "argument_count", "async_load", "mouse_x", "mouse_y", "room", "room_width", "room_height", "inherited"]
+        let mut specials: HashSet<Sym> = ["argument", "argument_count", "async_load", "mouse_x", "mouse_y", "room", "room_width", "room_height", "inherited", "prefab", "prefab_group"]
             .iter()
             .map(|s| intern(s))
             .collect();
@@ -972,6 +972,7 @@ pub fn asset_origin(dir: &std::path::Path, kind: AssetKind, name: &str, scripts:
         AssetKind::Sequence => &[("sequences", &["toml"])],
         AssetKind::ParticleSystem => &[("particles", &["toml"])],
         AssetKind::Shader => &[("shaders", &["toml", "fsh", "frag", "glsl"])],
+        AssetKind::Prefab => &[("prefabs", &["toml"])],
         AssetKind::Object => {
             for (file, src) in scripts {
                 for (i, l) in src.lines().enumerate() {

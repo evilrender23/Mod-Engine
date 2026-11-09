@@ -169,12 +169,35 @@ compila. Lo que se elimina no se borra: se mueve a la carpeta `.trash/` del proy
 | ▭ Rectángulo | rellena un rectángulo de celdas |
 | 🪣 Rellenar | rellena la zona conectada de celdas iguales |
 | 💧 Cuentagotas | toma el objeto o tile que hay bajo el cursor |
+| Agrupar | arrastra un rectángulo: lo que hay dentro (celdas e instancias libres) se convierte en un **prefab** con el nombre que le des, y en la room queda una instancia del prefab en su lugar |
 
 Rueda = zoom alrededor del cursor; botón central o Espacio + arrastrar = desplazar. El rectángulo
 azul es la cámara al empezar la room.
 
 Las instancias en rejilla se guardan como el mapa ASCII de siempre (el editor elige los
 caracteres de la leyenda y reutiliza los que ya había); las libres, en la lista `instances`.
+
+**Prefabs en la room.** La paleta lista los prefabs debajo de los objetos: se pintan, se arrastran
+y se seleccionan igual (un marco discontinuo azul rodea cada uno y una cruz marca su origen). Con
+uno seleccionado, el inspector dice cuántas instancias tiene; sus variables se aplican a todas, y
+**Desagrupar** lo sustituye por sus instancias sueltas para retocarlas una a una. Doble clic en un
+prefab de la paleta lo abre.
+
+## Editor de prefabs
+
+Un prefab (Crear → Prefab, o la herramienta *Agrupar* del editor de rooms) es un grupo de
+instancias reutilizable; el formato está en [proyecto.md](proyecto.md#prefabs-prefabs).
+
+- **Lienzo**: la cruz azul es el **origen**, el punto que cae en la posición donde la room (o
+  `prefab_spawn`) coloca el prefab. Elige un objeto o un prefab en la paleta de la derecha y haz
+  clic para colocarlo; arrastra para mover, clic derecho o Supr para quitar. Con *ajustar a
+  rejilla* cada instancia queda en su celda igual que en un mapa de room.
+- **Izquierda**: descripción, tamaño de la rejilla, la lista de instancias y el inspector de la
+  elegida (objeto, posición, variables con tipo y otras variables). Avisa de objetos que no
+  existen y de prefabs que se contienen a sí mismos, y dice en qué rooms se usa.
+- **Origen al centro / arriba-izquierda** mueve todas las instancias para recolocar el origen.
+- Se pueden anidar prefabs (aparecen en la paleta bajo *Prefabs*); deshacer/rehacer con
+  Ctrl+Z / Ctrl+Y.
 
 ## Editor de objetos
 

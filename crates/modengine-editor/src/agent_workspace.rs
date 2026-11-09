@@ -38,6 +38,9 @@ fn asset_files(p: &Project) -> Vec<(Open, Vec<PathBuf>)> {
     for n in &p.notes {
         v.push((Open::Note(n.name.clone()), vec![n.path.clone()]));
     }
+    for n in &p.prefabs {
+        v.push((Open::Prefab(n.name.clone()), vec![n.path.clone()]));
+    }
     for k in AnimKind::ALL {
         for n in p.motion.names(k) {
             if let Some(path) = p.motion.path(k, &n) {
@@ -112,6 +115,7 @@ fn rank(o: &Open) -> u8 {
     match o {
         Open::Room(_) => 0,
         Open::Object(_) => 1,
+        Open::Prefab(_) => 1,
         Open::Sprite(_) => 2,
         Open::TileSet(_) => 3,
         Open::Anim(..) => 4,

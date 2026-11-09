@@ -21,6 +21,7 @@ mod coroutine;
 pub(crate) mod rng;
 mod save;
 mod pool;
+mod prefab;
 pub(crate) mod ui;
 mod raycast;
 pub(crate) mod navgrid;
@@ -76,6 +77,7 @@ pub fn registry() -> HashMap<Sym, NativeFn> {
     rng::register(&mut r);
     save::register(&mut r);
     pool::register(&mut r);
+    prefab::register(&mut r);
     ui::register(&mut r);
     raycast::register(&mut r);
     navgrid::register(&mut r);

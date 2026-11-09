@@ -23,6 +23,8 @@ pub enum AssetKind {
     Sequence,
     ParticleSystem,
     Shader,
+    /// A group of instances placed together (`prefabs/`).
+    Prefab,
 }
 
 impl AssetKind {
@@ -40,6 +42,7 @@ impl AssetKind {
             AssetKind::Sequence => "sequence",
             AssetKind::ParticleSystem => "particles",
             AssetKind::Shader => "shader",
+            AssetKind::Prefab => "prefab",
         }
     }
 }

@@ -49,6 +49,39 @@ Valores globales de solo lectura: `room`, `room_width`, `room_height`, `mouse_x`
 | `asset_name(asset_o_inst)` | nombre como texto |
 | `distance_to(obj)` | distancia a la instancia más cercana de ese objeto |
 
+### Prefabs
+
+Un prefab (`prefabs/`, ver [proyecto.md](proyecto.md#prefabs-prefabs)) es un grupo de instancias
+que se crea de una vez.
+
+| Función | Hace |
+|---|---|
+| `prefab_spawn(pf, x, y, [depth], [vars])` | crea todas las instancias del prefab con su origen en (x, y); `vars` (un struct) se aplica a todas. Devuelve el array de instancias |
+| `prefab_members([inst])` | instancias vivas del grupo de `inst` (o de quien llama); `[]` si no viene de un prefab |
+| `prefab_of([inst])` | el prefab del que salió la instancia, o `null` |
+| `prefab_destroy([inst], [evento = true])` | destruye todo el grupo de `inst` (o solo ella si no tiene grupo). Devuelve cuántas |
+| `prefab_count(pf)`, `prefab_objects(pf)` | número de instancias y sus objetos (prefabs anidados ya expandidos) |
+| `prefab_description(pf)`, `prefab_exists(v)` | la descripción del fichero; si `v` es un prefab |
+
+Cada instancia de un grupo tiene las variables `prefab` y `prefab_group`, puestas antes de
+cualquier `create`:
+
+```js
+object Turret {
+    on create {
+        // las escoltas del mismo grupo ya existen aquí
+        guards = filter(prefab_members(), function(i) { return is_a(i, Guard) })
+    }
+    on destroy { prefab_destroy() }      // al caer la torreta, cae todo el grupo
+}
+
+object Wave {
+    on alarm(0) { prefab_spawn(pf_torreta, irand(32, room_width - 32), 64, 0, { hp: 5 }) }
+}
+```
+
+Las variables con tipo aceptan prefabs: `oleada: prefab = pf_torreta`.
+
 ### Pools de instancias
 
 Para objetos que se crean y destruyen a cientos (balas), un pool guarda el almacenamiento de las

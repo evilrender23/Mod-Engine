@@ -500,6 +500,52 @@ editor guarda las capas que usan un tile set con `data` (admite cualquier númer
 bits de espejo/volteo/giro) y las que usan un sprite con `legend` + `map`, como antes.
 
 
+## Prefabs (`prefabs/`)
+
+Un prefab es un **grupo de instancias que se coloca de una vez**, como los prefabs de Unity o las
+escenas empaquetadas de Godot: una plataforma con sus monedas, una torreta con dos escoltas, una
+antorcha con su luz. Se define una vez y se reutiliza en cualquier room o desde un script; si
+cambias el prefab, cambian todas las copias.
+
+```toml
+# prefabs/pf_torreta.toml
+description = "Torreta con dos escoltas"
+grid = [16, 16]               # solo para el editor
+
+[[instance]]
+object = "Turret"
+x = 0                         # posiciones relativas al origen del prefab
+y = 0
+vars = { hp = 20 }            # como `vars` en una room: se comprueban los tipos
+
+[[instance]]
+object = "Guard"
+x = -16
+y = 0
+
+[[instance]]
+object = "pf_antorcha"        # otro prefab: se anida en esa posición
+x = 0
+y = -32
+```
+
+- Las rooms colocan un prefab **donde colocan un objeto**: en la leyenda de un mapa
+  (`legend = { "T" = "pf_torreta" }`, con el origen en la esquina de arriba a la izquierda de la
+  celda) o en `instances = [ { object = "pf_torreta", x = 100, y = 50, vars = { hp = 3 } } ]`.
+  Los `vars` de la room se aplican a **todas** las instancias del grupo y ganan a los del prefab.
+- **Anidar**: una instancia cuyo `object` es otro prefab se expande en su posición; sus `vars`
+  ganan a las de dentro. Un prefab que se contiene a sí mismo (`a → b → a`) es un error al cargar.
+- Todas las instancias de un grupo se crean antes de ejecutar ningún `create`, así que en el
+  `create` de cualquiera ya existen las demás. Cada una recibe `prefab` (el asset) y
+  `prefab_group` (array con todas las instancias del grupo); ver
+  [funciones.md](funciones.md#prefabs).
+- Los nombres comparten el espacio de nombres de los assets (una convención útil es `pf_`).
+- Errores al cargar (objeto que no existe, variable fuera de rango, ciclo) dicen el fichero:
+  `prefabs/pf_torreta.toml: hp: 99 is outside 1..50`.
+
+Ejemplo: `examples/platformer/prefabs/pf_plataforma_monedas.toml`, colocado dos veces en el
+mapa de `rooms/level1.toml` con el carácter `P`.
+
 ## Trayectorias, líneas de tiempo, curvas y secuencias
 
 Cuatro carpetas opcionales (un proyecto sin ellas carga igual). Cada fichero es un asset cuyo

@@ -366,6 +366,8 @@ pub struct Project {
     pub tilesets: Vec<TileSetAsset>,
     pub rooms: Vec<(String, PathBuf, RoomToml)>,
     pub scripts: Vec<(String, String)>,
+    /// `prefabs/<name>.toml`, resolved by the engine once objects exist.
+    pub prefabs: Vec<(String, PathBuf, crate::prefab::PrefabToml)>,
 }
 
 fn read_text(p: &Path) -> Result<String, String> {
@@ -485,13 +487,20 @@ impl Project {
             return Err("the project has no rooms (add rooms/<name>.toml)".into());
         }
 
+        let mut prefabs = Vec::new();
+        for (name, path, is_toml) in asset_files(&dir.join("prefabs"), &[]) {
+            if is_toml {
+                prefabs.push((name, path.clone(), read_toml::<crate::prefab::PrefabToml>(&path)?));
+            }
+        }
+
         let mut scripts = Vec::new();
         collect_scripts(dir, dir, &mut scripts)?;
         scripts.sort();
         // extension libraries load first; disabled ones not at all
         crate::extension::order_scripts(&mut scripts, &crate::extension::load_all(dir)?);
 
-        Ok(Project { dir: dir.to_path_buf(), config, sprites, sounds, fonts, tilesets, rooms, scripts })
+        Ok(Project { dir: dir.to_path_buf(), config, sprites, sounds, fonts, tilesets, rooms, scripts, prefabs })
     }
 }
 

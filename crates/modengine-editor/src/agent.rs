@@ -836,6 +836,11 @@ pub fn engine_context_for(name: &str, docs: Option<&Path>, tool: Option<&Path>, 
          - sprites/: a PNG (optionally with a .toml of the same name for frames, origin, fps, mask) or a .toml \
          with pixel art drawn as characters of the palette (`pixels = ['''...''']`, `.` is transparent).\n\
          - rooms/*.toml: size, background, camera and layers (tiles and instances).\n\
+         - prefabs/<name>.toml: a reusable group of instances (`[[instance]]` with object, x, y relative to the \
+         prefab's origin and optional vars; an `object` may name another prefab). Rooms place a prefab like an \
+         object (map legends and `instances`); scripts create one with prefab_spawn(prefab, x, y) and each member \
+         gets `prefab` and `prefab_group`. Repeated arrangements (a platform with coins, a turret with guards) \
+         belong in a prefab.\n\
          - sounds/: .wav/.ogg files or .toml synthesized sounds. fonts/: .ttf/.otf.\n\
          - data/<table>.toml (or .json/.csv): content as data (cards, enemies, items...), `[[card]]` records with a \
          unique `id`, checked by an optional data/<table>.schema.toml; scripts read them with data_get(table, id) \

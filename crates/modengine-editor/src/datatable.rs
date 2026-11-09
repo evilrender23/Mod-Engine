@@ -184,6 +184,7 @@ fn asset_names(p: &Project, k: Option<AssetKind>) -> Vec<String> {
         AssetKind::Sequence => p.motion.names(AnimKind::Sequence),
         AssetKind::ParticleSystem => p.fx.names(FxKind::Particles),
         AssetKind::Shader => p.fx.names(FxKind::Shader),
+        AssetKind::Prefab => p.prefab_names(),
     }
 }
 

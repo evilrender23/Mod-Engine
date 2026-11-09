@@ -534,7 +534,9 @@ pub fn draw_room(painter: &egui::Painter, cx: &mut Cx, ctx: &egui::Context, view
                             };
                             let cell = Rect::from_min_size(Pos2::ZERO + off + Vec2::new(c as f32 * cw as f32, r as f32 * ch as f32), Vec2::new(cw as f32, ch as f32));
                             for n in names {
-                                if let Some(t) = p.object_sprite(&n).and_then(|s| cx.tex.get(ctx, p, &s)) {
+                                if p.is_prefab(&n) {
+                                    crate::prefab::draw_prefab(painter, cx.tex, ctx, p, &n, cell.min, &|v| view.to_s(Pos2::ZERO + v), z, tint);
+                                } else if let Some(t) = p.object_sprite(&n).and_then(|s| cx.tex.get(ctx, p, &s)) {
                                     let fs = t.frame_size();
                                     let min = cell.center() - fs / 2.0;
                                     painter.image(t.id, Rect::from_min_size(view.to_s(min), fs * z), t.uv(0), tint);
@@ -544,7 +546,9 @@ pub fn draw_room(painter: &egui::Painter, cx: &mut Cx, ctx: &egui::Context, view
                     }
                 }
                 for inst in &l.instances {
-                    if let Some(t) = p.object_sprite(&inst.object).and_then(|s| cx.tex.get(ctx, p, &s)) {
+                    if p.is_prefab(&inst.object) {
+                        crate::prefab::draw_prefab(painter, cx.tex, ctx, p, &inst.object, Pos2::new(inst.x as f32, inst.y as f32), &|v| view.to_s(Pos2::ZERO + v), z, tint);
+                    } else if let Some(t) = p.object_sprite(&inst.object).and_then(|s| cx.tex.get(ctx, p, &s)) {
                         t.draw(painter, 0, view.to_s(Pos2::new(inst.x as f32, inst.y as f32)), z, tint);
                     }
                 }

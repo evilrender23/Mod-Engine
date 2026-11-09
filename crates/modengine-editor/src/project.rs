@@ -46,6 +46,13 @@ pub struct TileSetEntry {
     pub gen: u64,
 }
 
+/// A prefab file (`prefabs/<name>.toml`): a group of instances placed together.
+pub struct PrefabEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub data: Result<modengine::prefab::PrefabToml, String>,
+}
+
 pub struct ObjEntry {
     pub name: String,
     pub parent: Option<String>,
@@ -64,6 +71,8 @@ pub struct Project {
     pub notes: Vec<FileEntry>,
     pub tilesets: Vec<TileSetEntry>,
     pub rooms: Vec<FileEntry>,
+    /// `prefabs/*.toml` (prefab.rs).
+    pub prefabs: Vec<PrefabEntry>,
     /// `data/*.toml|json|csv` tables (datatable.rs); schemas are not listed.
     pub data: Vec<FileEntry>,
     /// paths/, timelines/, curves/ and sequences/ (motion.rs).
@@ -92,6 +101,17 @@ fn entries(dir: &Path, exts: &[&str]) -> Vec<FileEntry> {
     asset_files(dir, exts).into_iter().map(|(name, path, is_toml)| FileEntry { name, path, is_toml }).collect()
 }
 
+fn prefab_entries(dir: &Path) -> Vec<PrefabEntry> {
+    asset_files(&dir.join("prefabs"), &[])
+        .into_iter()
+        .filter(|(_, _, is_toml)| *is_toml)
+        .map(|(name, path, _)| {
+            let data = fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| toml::from_str(&t).map_err(|e| e.to_string()));
+            PrefabEntry { name, path, data }
+        })
+        .collect()
+}
+
 fn data_entries(dir: &Path) -> Vec<FileEntry> {
     modengine::datatable::table_files(dir).into_iter().map(|(name, path, f)| FileEntry { name, path, is_toml: f == modengine::datatable::Format::Toml }).collect()
 }
@@ -114,6 +134,7 @@ impl Project {
             notes: entries(&dir.join("notes"), &["md"]).into_iter().filter(|e| !e.is_toml).collect(),
             tilesets: vec![],
             rooms: entries(&dir.join("rooms"), &[]),
+            prefabs: prefab_entries(dir),
             data: data_entries(dir),
             motion: crate::motion::Lists::load(dir),
             fx: crate::fx::Lists::load(dir),
@@ -233,6 +254,7 @@ impl Project {
         self.fonts = entries(&self.dir.join("fonts"), &["ttf", "otf"]);
         self.notes = entries(&self.dir.join("notes"), &["md"]).into_iter().filter(|e| !e.is_toml).collect();
         self.rooms = entries(&self.dir.join("rooms"), &[]);
+        self.prefabs = prefab_entries(&self.dir);
         self.data = data_entries(&self.dir);
         self.motion = crate::motion::Lists::load(&self.dir);
         self.fx = crate::fx::Lists::load(&self.dir);
@@ -312,6 +334,23 @@ impl Project {
         self.rooms.iter().map(|r| r.name.clone()).collect()
     }
 
+    pub fn prefab_names(&self) -> Vec<String> {
+        self.prefabs.iter().map(|r| r.name.clone()).collect()
+    }
+
+    pub fn prefab(&self, name: &str) -> Option<&modengine::prefab::PrefabToml> {
+        self.prefabs.iter().find(|p| p.name == name).and_then(|p| p.data.as_ref().ok())
+    }
+
+    pub fn is_prefab(&self, name: &str) -> bool {
+        self.prefabs.iter().any(|p| p.name == name)
+    }
+
+    /// The plain object instances of a prefab, nested prefabs expanded (relative to its origin).
+    pub fn prefab_items(&self, name: &str) -> Result<Vec<modengine::prefab::FlatItem>, String> {
+        modengine::prefab::flatten(name, &|n| self.prefab(n))
+    }
+
     /// Every name already taken (assets share one namespace).
     pub fn taken_names(&self) -> BTreeSet<String> {
         let mut s = BTreeSet::new();
@@ -321,6 +360,7 @@ impl Project {
         s.extend(self.notes.iter().map(|x| x.name.clone()));
         s.extend(self.tilesets.iter().map(|x| x.name.clone()));
         s.extend(self.rooms.iter().map(|x| x.name.clone()));
+        s.extend(self.prefabs.iter().map(|x| x.name.clone()));
         s.extend(self.objects.iter().map(|x| x.name.clone()));
         s.extend(self.motion.all_names());
         s.extend(self.fx.asset_names());

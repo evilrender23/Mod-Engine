@@ -35,6 +35,7 @@ mod object;
 mod objsrc;
 mod motion;
 mod path;
+mod prefab;
 mod palette;
 mod project;
 mod proc;

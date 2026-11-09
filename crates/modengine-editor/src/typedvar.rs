@@ -191,6 +191,7 @@ pub fn asset_names(p: &Project, k: AssetKind) -> Vec<String> {
         AssetKind::TileSet => p.tilesets.iter().map(|s| s.name.clone()).collect(),
         AssetKind::ParticleSystem => p.fx.names(crate::fx::FxKind::Particles),
         AssetKind::Shader => p.fx.names(crate::fx::FxKind::Shader),
+        AssetKind::Prefab => p.prefab_names(),
     }
 }
 

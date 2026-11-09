@@ -4058,8 +4058,9 @@ echo '{"type":"turn.completed"}'"#,
         let room = proj.rooms[0].name.clone();
         p.input = format!("cambia @{}", &room[..room.len().min(3)]);
         let c = p.mention_candidates(&src);
-        assert!(c.iter().any(|(l, _)| *l == format!(concat!(fa!(map), " {room}"))), "{c:?}");
-        let (_, a) = c.into_iter().find(|(l, _)| *l == format!(concat!(fa!(map), " {room}"))).unwrap();
+        let label = format!("{} {room}", fa!(map));
+        assert!(c.iter().any(|(l, _)| *l == label), "{c:?}");
+        let (_, a) = c.into_iter().find(|(l, _)| *l == label).unwrap();
         p.pick_mention(a);
         assert_eq!(p.input, format!("cambia @{room} "));
         assert_eq!(p.attachments[0].path, project.join(format!("rooms/{room}.toml")));
